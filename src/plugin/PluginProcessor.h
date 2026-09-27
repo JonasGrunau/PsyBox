@@ -51,6 +51,9 @@ public:
     float getMutateAmount() const noexcept { return mutateAmount; }
     void setMutateAmount (float a) { mutateAmount = juce::jlimit (0.f, 1.f, a); }
     uint32_t getSeed() const noexcept { return seed; }
+    // "Arp" next to Generate: new patches come with the category's arp.
+    bool getArpGeneration() const noexcept { return arpGeneration; }
+    void setArpGeneration (bool on);
 
     bool isLocked (psy::P p) const noexcept { return locks.test ((size_t) p); }
     void setLocked (psy::P p, bool shouldLock);
@@ -77,6 +80,11 @@ public:
     juce::String getMacroName (int i) const { return macroNames[(size_t) i]; }
     void setMacroName (int i, const juce::String& name);
 
+    // Renders the current patch offline (one note: the last one played, held,
+    // then released until the tail dies away) to a 24-bit WAV in
+    // ~/Music/PsySynth/Bounces and returns the file. Message thread.
+    juce::File bounceToFile();
+
     // On-screen / computer keyboard (standalone). Merged into the MIDI input.
     juce::MidiKeyboardState keyboardState;
 
@@ -101,7 +109,23 @@ private:
     uint32_t seed = 0;
     psy::LockSet locks;
     float mutateAmount = 0.25f;
+    bool arpGeneration = false;
     juce::String presetName { "Init" };
+    std::atomic<int> lastPlayedNote { 48 };
+
+    // Patch swaps (Generate, Mutate, undo, presets, category switch) bump the
+    // epoch before touching any parameter. The audio thread then fades the
+    // old sound out on the old values, resets the engine (voices, filters, FX
+    // tails) and retriggers the held notes with the new patch.
+    std::atomic<uint32_t> patchEpoch { 0 };
+    uint32_t seenEpoch = 0;
+    enum class Swap { None, FadingOut, Restart };
+    Swap swap = Swap::None;
+    int fadePos = 0;
+    std::array<float, 128> heldVelocity {};   // audio thread: notes currently down
+    void beginPatchChange() noexcept { patchEpoch.fetch_add (1, std::memory_order_release); }
+    static constexpr int kFadeOut = 480, kFadeIn = 128;   // 10 ms, ~3 ms at 48 kHz
+    std::atomic<double> lastBpm { 120.0 };
     std::array<juce::String, kNumMacros> macroNames;
     void resetMacroNames();
     void writeMacroNames (juce::ValueTree&) const;

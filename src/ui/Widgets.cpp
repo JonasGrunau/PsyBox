@@ -205,11 +205,14 @@ void Segmented::mouseMove (const juce::MouseEvent& e)
 // ---------------------------------------------------------------------------
 // ToggleDot
 // ---------------------------------------------------------------------------
-ToggleDot::ToggleDot (PsySynthProcessor& p, P prm, const juce::String& t)
-    : proc (p), param (prm), text (t),
-      attachment (*p.param (prm), [this] (float v) { on = v > 0.5f; repaint(); })
+ToggleDot::ToggleDot (PsySynthProcessor& p, P prm, const juce::String& t) : ToggleDot (t)
 {
-    attachment.sendInitialUpdate();
+    attachment = std::make_unique<juce::ParameterAttachment> (*p.param (prm), [this] (float v) { on = v > 0.5f; repaint(); });
+    attachment->sendInitialUpdate();
+}
+
+ToggleDot::ToggleDot (const juce::String& t) : text (t)
+{
     setMouseCursor (juce::MouseCursor::PointingHandCursor);
 }
 
@@ -264,7 +267,13 @@ void ToggleDot::paint (juce::Graphics& g)
 
 void ToggleDot::mouseDown (const juce::MouseEvent&)
 {
-    attachment.setValueAsCompleteGesture (on ? 0.f : 1.f);
+    if (attachment != nullptr)
+    {
+        attachment->setValueAsCompleteGesture (on ? 0.f : 1.f);
+        return;
+    }
+    setOn (! on);
+    if (onToggle) onToggle (on);
 }
 
 // ---------------------------------------------------------------------------
@@ -345,7 +354,7 @@ std::vector<juce::Rectangle<int>> TabStrip::tabBounds() const
     const auto f = heading (9.5f);
     for (int i = 0; i < names.size(); ++i)
     {
-        const int w = juce::GlyphArrangement::getStringWidthInt (f, names[i].toUpperCase()) + (isLit ? 11 : 0);
+        const int w = juce::GlyphArrangement::getStringWidthInt (f, names[i].toUpperCase()) + (ledOn (i) ? 11 : 0);
         out.push_back ({ x, 0, w, getHeight() });
         x += w + sp::lg;
     }
@@ -378,7 +387,7 @@ void TabStrip::paint (juce::Graphics& g)
             g.fillRect (r.getX(), r.getBottom() - 2, r.getWidth(), 2);
         }
         auto tr = r;
-        if (isLit)
+        if (ledOn (i))
         {
             const bool lit = isLit (i);
             const float cy = (float) r.getCentreY() - 1.f;

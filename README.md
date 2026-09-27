@@ -28,6 +28,10 @@ No drums. This is for the synth side of a track.
   The amount slider sets how far.
 - **Lock** a knob (right-click it, or alt-click) and Generate and Mutate leave
   it alone.
+- Tick **Arp** next to Generate and every new sound comes with an arp in the
+  style of its category: rolling 16ths for basses, tied 303 slides for acid,
+  random blips for bubbles, stepped sweeps for risers. The sound itself is the
+  same with or without it; only the arp settings differ.
 - The same category and seed always give the same sound. Double-click the seed
   in the sidebar to type one in.
 - Each category remembers its patch. Switch from Acid to Zap and back and your
@@ -75,6 +79,13 @@ anti-aliasing.
 
 Amp, filter, mod and pitch envelopes, 3 LFOs (tempo sync, retrigger, S&H,
 smooth random) and an 8-slot mod matrix.
+
+Arpeggiator (Voice panel, Arp tab): Up, Down, Up/Down, Random and played order
+over 1 to 4 octaves, with rate, gate, swing and hold. Rhythm patterns built for
+psy: Straight, Rolling (`-xxx`, the kick keeps the beat), Gallop, Offbeat, Skip,
+3-3-2 and a one-bar Broken line. It locks to the host transport while it plays.
+Gates of 100 % or more tie: the voice slides to the next note without
+retriggering, so 303 slides and long sweeps keep running.
 
 ### Effects
 

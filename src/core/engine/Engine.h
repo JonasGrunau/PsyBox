@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Arpeggiator.h"
 #include "Params.h"
 #include "Voice.h"
 #include "dsp/Effects.h"
@@ -20,6 +21,14 @@ struct MidiEvent
     float value = 0.f;    // velocity 0..1, bend -1..1, CC 0..1, pressure 0..1
 };
 
+// Host transport at the first sample of a block.
+struct Transport
+{
+    double bpm = 120.0;
+    double ppq = 0.0;       // quarter notes since the song start
+    bool playing = false;   // ppq is only meaningful while playing
+};
+
 class Engine
 {
 public:
@@ -31,7 +40,11 @@ public:
     // Target parameter values; smoothed internally.
     void setParams (const ParamState& p) noexcept { target = p; }
 
-    void process (float* left, float* right, int numSamples, const MidiEvent* events, int numEvents, double bpm) noexcept;
+    void process (float* left, float* right, int numSamples, const MidiEvent* events, int numEvents, const Transport& transport) noexcept;
+    void process (float* left, float* right, int numSamples, const MidiEvent* events, int numEvents, double bpm) noexcept
+    {
+        process (left, right, numSamples, events, numEvents, Transport { bpm, 0.0, false });
+    }
 
     int latencySamples() const noexcept { return decimL.latency (osFactor); }
     int activeVoices() const noexcept;
@@ -60,6 +73,9 @@ private:
     int lastNote = -1;
     float lastPitch = -1.f;
 
+    Arpeggiator arp;
+    bool arpActive = false;
+
     std::array<dsp::Lfo, kNumLfos> globalLfos;
     std::array<std::vector<float>, kNumLfos> globalLfoBuf;
 
@@ -81,8 +97,15 @@ private:
     void smoothParams (int numSamples) noexcept;
     void prepareContext (double bpm) noexcept;
     void handleEvent (const MidiEvent& e) noexcept;
-    void noteOn (int note, float velocity) noexcept;
-    void noteOff (int note) noexcept;
+    // Keys from MIDI go through the arp when it is on; the voice-level calls
+    // below take the arp's output (or the keys directly when it is off).
+    void keyOn (int note, float velocity) noexcept;
+    void keyOff (int note) noexcept;
+    void updateArp() noexcept;
+    void fireArp() noexcept;
+    void voiceNoteOn (int note, float velocity) noexcept;
+    void voiceNoteOff (int note) noexcept;
+    void voiceSlide (int from, int to, float velocity) noexcept;
     void allNotesOff() noexcept;
     Voice& allocateVoice (bool& stolen) noexcept;
     void renderVoices (int offset, int n) noexcept;

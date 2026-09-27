@@ -90,14 +90,20 @@ private:
 };
 
 // Output oscilloscope with zero-crossing trigger, plus a peak meter.
-class Scope : public DisplayBase
+// Click and drag out of it to drop the current sound as a WAV file.
+class Scope : public DisplayBase, public juce::SettableTooltipClient
 {
 public:
     explicit Scope (PsySynthProcessor& p);
+    void mouseEnter (const juce::MouseEvent&) override { repaint(); }
+    void mouseExit (const juce::MouseEvent&) override { repaint(); }
+    void mouseDrag (const juce::MouseEvent&) override;
+    void mouseUp (const juce::MouseEvent&) override { dragging = false; repaint(); }
 
 private:
     std::vector<float> buf;
     float peakHold = 0.f;
+    bool dragging = false;
     void timerCallback() override { repaint(); }
     void paintContent (juce::Graphics&, juce::Rectangle<float>) override;
     uint64_t fingerprint() const override { return 0; }

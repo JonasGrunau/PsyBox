@@ -39,6 +39,8 @@ void Engine::prepare (double sampleRate, int maxBlockSize)
         globalLfos[(size_t) i].seed (1000u + (uint64_t) i);
     }
 
+    arp.prepare (fs);
+
     const float f = (float) fs;
     fshift.prepare (f);
     phaser.prepare (f);
@@ -74,6 +76,8 @@ void Engine::reset()
     numHeld = 0;
     sustained.fill (false);
     sustainPedal = false;
+    arp.reset();
+    arpActive = false;
     dist.reset();
     crush.reset();
     fshift.reset();
@@ -172,7 +176,108 @@ Voice& Engine::allocateVoice (bool& stolen) noexcept
     return *best;
 }
 
-void Engine::noteOn (int note, float velocity) noexcept
+void Engine::keyOn (int note, float velocity) noexcept
+{
+    if (arpActive) arp.keyOn (note, velocity);
+    else voiceNoteOn (note, velocity);
+}
+
+void Engine::keyOff (int note) noexcept
+{
+    if (arpActive)
+    {
+        arp.keyOff (note);   // the arp treats the pedal as hold itself
+        return;
+    }
+    if (sustainPedal)
+    {
+        sustained[(size_t) note] = true;
+        return;
+    }
+    voiceNoteOff (note);
+}
+
+// Follows the On switch. Keys held while it flips move across, so turning
+// the arp on (or off) mid-chord keeps the chord going.
+void Engine::updateArp() noexcept
+{
+    const bool want = cur.on (P::ArpOn);
+    arp.setSettings (ArpSettings::from (cur));
+    if (want == arpActive)
+        return;
+
+    if (want)
+    {
+        std::array<int, 32> keys {};
+        std::array<bool, 32> accents {};
+        const int n = numHeld;
+        std::copy (held.begin(), held.begin() + n, keys.begin());
+        std::copy (heldAccent.begin(), heldAccent.begin() + n, accents.begin());
+        allNotesOff();
+        sustained.fill (false);
+        arpActive = true;
+        arp.setSustain (sustainPedal);
+        for (int i = 0; i < n; ++i)
+            arp.keyOn (keys[(size_t) i], accents[(size_t) i] ? 1.f : 0.8f);
+    }
+    else
+    {
+        std::array<int, Arpeggiator::kMaxKeys> keys {};
+        const int n = arp.numPhysicalKeys();
+        for (int i = 0; i < n; ++i)
+            keys[(size_t) i] = arp.physicalKey (i);
+        arp.allOff();
+        fireArp();   // releases the arp's note
+        arpActive = false;
+        for (int i = 0; i < n; ++i)
+            voiceNoteOn (keys[(size_t) i], 0.8f);
+    }
+}
+
+void Engine::fireArp() noexcept
+{
+    arp.fireDue ([this] (const ArpEvent& e) {
+        if (! e.on) voiceNoteOff (e.note);
+        else if (e.slideFrom >= 0) voiceSlide (e.slideFrom, e.note, e.velocity);
+        else voiceNoteOn (e.note, e.velocity);
+    });
+}
+
+// A tied arp step: the voice playing `from` moves to `to` without
+// retriggering, in every voice mode.
+void Engine::voiceSlide (int from, int to, float velocity) noexcept
+{
+    Voice* v = nullptr;
+    if ((VoiceMode) cur.geti (P::VoiceMode) == VoiceMode::Poly)
+    {
+        for (auto& x : voices)
+            if (x.isGateOn() && x.getNote() == from) { v = &x; break; }
+    }
+    else if (voices[0].isGateOn() && voices[0].getNote() == from)
+    {
+        v = &voices[0];
+    }
+    if (v == nullptr)
+    {
+        voiceNoteOff (from);
+        voiceNoteOn (to, velocity);
+        return;
+    }
+
+    const bool accent = velocity >= 100.f / 127.f;
+    for (int i = numHeld - 1; i >= 0; --i)
+        if (held[(size_t) i] == from)
+        {
+            held[(size_t) i] = to;
+            heldAccent[(size_t) i] = accent;
+            break;
+        }
+    v->changeNote (to, accent, cur.get (P::Glide) > 0.5f);
+    lastNote = to;
+    lastPitch = (float) to;
+}
+
+void Engine::voiceNoteOn (int note, float velocity) noexcept
 {
     const auto mode = (VoiceMode) cur.geti (P::VoiceMode);
     const bool accent = velocity >= 100.f / 127.f;
@@ -220,14 +325,8 @@ void Engine::noteOn (int note, float velocity) noexcept
     lastPitch = (float) note;
 }
 
-void Engine::noteOff (int note) noexcept
+void Engine::voiceNoteOff (int note) noexcept
 {
-    if (sustainPedal)
-    {
-        sustained[(size_t) note] = true;
-        return;
-    }
-
     // drop from stack
     int idx = -1;
     for (int i = numHeld - 1; i >= 0; --i)
@@ -276,6 +375,7 @@ void Engine::noteOff (int note) noexcept
 
 void Engine::allNotesOff() noexcept
 {
+    arp.allOff();
     numHeld = 0;
     for (auto& v : voices)
         v.release();
@@ -286,10 +386,10 @@ void Engine::handleEvent (const MidiEvent& e) noexcept
     switch (e.type)
     {
         case MidiEvent::NoteOn:
-            if (e.value <= 0.f) noteOff (e.number);
-            else noteOn (e.number, e.value);
+            if (e.value <= 0.f) keyOff (e.number);
+            else keyOn (e.number, e.value);
             break;
-        case MidiEvent::NoteOff: noteOff (e.number); break;
+        case MidiEvent::NoteOff: keyOff (e.number); break;
         case MidiEvent::PitchBend: ctx.pitchBend = e.value; break;
         case MidiEvent::ChannelPressure: ctx.aftertouch = e.value; break;
         case MidiEvent::AllNotesOff: allNotesOff(); break;
@@ -298,9 +398,10 @@ void Engine::handleEvent (const MidiEvent& e) noexcept
             else if (e.number == 64)
             {
                 sustainPedal = e.value >= 0.5f;
+                arp.setSustain (arpActive && sustainPedal);
                 if (! sustainPedal)
                     for (int n = 0; n < 128; ++n)
-                        if (sustained[(size_t) n]) { sustained[(size_t) n] = false; noteOff (n); }
+                        if (sustained[(size_t) n]) { sustained[(size_t) n] = false; voiceNoteOff (n); }
             }
             else if (e.number == 123 || e.number == 120) allNotesOff();
             break;
@@ -318,9 +419,10 @@ void Engine::renderVoices (int offset, int n) noexcept
             v.render (osL.data(), osR.data(), offset, n, ctx);
 }
 
-void Engine::process (float* left, float* right, int numSamples, const MidiEvent* events, int numEvents, double bpm) noexcept
+void Engine::process (float* left, float* right, int numSamples, const MidiEvent* events, int numEvents, const Transport& transport) noexcept
 {
-    if (bpm <= 0.0) bpm = 120.0;
+    const double bpm = transport.bpm > 0.0 ? transport.bpm : 120.0;
+    arp.sync (transport.ppq, bpm, transport.playing);
 
     const int wantFactor = factorForQuality (target.geti (P::Quality));
     if (wantFactor != osFactor)
@@ -341,12 +443,17 @@ void Engine::process (float* left, float* right, int numSamples, const MidiEvent
         while (pos < blockN)
         {
             // events due now
+            updateArp();
             while (ev < numEvents && events[ev].offset <= done + pos)
                 handleEvent (events[ev++]);
+            if (arpActive)
+                fireArp();
 
             int n = std::min (kChunk, blockN - pos);
             if (ev < numEvents)
                 n = std::min (n, std::max (1, events[ev].offset - (done + pos)));
+            if (arpActive)
+                n = std::min (n, arp.samplesToNextEvent());
 
             smoothParams (n);
             prepareContext (bpm);
@@ -362,6 +469,8 @@ void Engine::process (float* left, float* right, int numSamples, const MidiEvent
             }
 
             renderVoices (pos, n);
+            if (arpActive)
+                arp.advance (n);
             pos += n;
         }
 

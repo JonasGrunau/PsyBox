@@ -12,7 +12,8 @@ Turns a `ParamState` plus MIDI events into stereo audio. `Params` is the single 
 | `Params.h` | `PSY_PARAMS(X)` X-macro listing every parameter (id, name, group, mapping, range, default, skew, unit, choices, modulatable). Generates `enum class P`. Also `ParamDef`, `ParamState`, `ModSrc`/`ModDst`, constants `kNumModSlots=8`, `kNumLfos=3`, `kMaxVoices=16`, index helpers `modSrcParam()`/`lfoParam()` |
 | `Params.cpp` | Choice lists (`choices::…`), `paramDefs()` table, norm↔plain mappings, `format`, `findParam`, `syncDivBeats` |
 | `Voice.h/.cpp` | `VoiceContext` (per-chunk shared state + pre-filtered mod slots) and `Voice`: 2 osc slots (Analog/Supersaw/Wavetable/FM), sub, noise, 2 `FilterSlot`s, amp/filter/mod envs, pitch env, per-voice LFOs, glide |
-| `Engine.h/.cpp` | `MidiEvent`, `Engine`: `prepare`, `setParams` (target, smoothed internally), `process(l, r, n, events, bpm)`, voice allocation/stealing, note stack, sustain, FX chain, `latencySamples()` |
+| `Engine.h/.cpp` | `MidiEvent`, `Transport`, `Engine`: `prepare`, `setParams` (target, smoothed internally), `process(l, r, n, events, transport)` (a `bpm` overload remains), keys → arp or voices, voice allocation/stealing, note stack, sustain, FX chain, `latencySamples()` |
+| `Arpeggiator.h/.cpp` | Tempo-synced arp between MIDI keys and voices: modes, octaves, rhythm masks (`arpRhythmMask` in `Params.cpp`), gate, swing, hold. `sync(ppq)` per block, then `fireDue`/`samplesToNextEvent`/`advance` inside the engine's chunk loop. Gate ≥ 100 % emits slide events (no retrigger) |
 
 ## For AI Agents
 

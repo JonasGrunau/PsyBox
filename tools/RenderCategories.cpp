@@ -1,5 +1,5 @@
 // Renders a few generated patches per category to WAV files for listening
-// checks:  psysynth_render <out-dir> [seeds-per-category]
+// checks:  psysynth_render <out-dir> [seeds-per-category] [arp]
 
 #include "engine/Engine.h"
 #include "generator/Generator.h"
@@ -69,12 +69,30 @@ namespace
         }
         return p;
     }
+
+    // With the arp on, hold keys for four bars and let the arp play them.
+    std::vector<Note> arpPatternFor (Category c)
+    {
+        std::vector<int> keys;
+        switch (c)
+        {
+            case Category::RollingBass: keys = { 36 }; break;
+            case Category::Acid: case Category::Squelch: case Category::Gurgle: keys = { 36, 39, 43 }; break;
+            case Category::Riser: case Category::Downlifter: case Category::NoiseFx:
+            case Category::Drone: case Category::Zap: case Category::Laser: keys = { 48 }; break;
+            default: keys = { 60, 63, 67 }; break;
+        }
+        std::vector<Note> p;
+        for (int k : keys) p.push_back ({ 0.0, 16.0, k, 0.8f });
+        return p;
+    }
 } // namespace
 
 int main (int argc, char** argv)
 {
     const std::string dir = argc > 1 ? argv[1] : ".";
     const int seeds = argc > 2 ? std::atoi (argv[2]) : 3;
+    const bool withArp = argc > 3 && std::string (argv[3]) == "arp";   // generate with an arp, hold keys
     const int fs = 48000;
     const double bpm = 145.0;
     const double spb = fs * 60.0 / bpm;
@@ -83,11 +101,11 @@ int main (int argc, char** argv)
     for (int c = 0; c < kNumCategories; ++c)
         for (int s = 1; s <= seeds; ++s)
         {
-            const ParamState p = g.generate ((Category) c, (uint32_t) s * 1009u, ParamState(), LockSet());
+            const ParamState p = g.generate ((Category) c, (uint32_t) s * 1009u, ParamState(), LockSet(), withArp);
             Engine e;
             e.setParams (p);
             e.prepare (fs, 256);
-            const auto pattern = patternFor ((Category) c);
+            const auto pattern = withArp ? arpPatternFor ((Category) c) : patternFor ((Category) c);
             const int total = (int) (spb * 17);
             std::vector<float> l ((size_t) total), r ((size_t) total);
             std::vector<MidiEvent> all;
@@ -108,11 +126,11 @@ int main (int argc, char** argv)
                     e2.offset -= pos;
                     ev.push_back (e2);
                 }
-                e.process (l.data() + pos, r.data() + pos, n, ev.data(), (int) ev.size(), bpm);
+                e.process (l.data() + pos, r.data() + pos, n, ev.data(), (int) ev.size(), Transport { bpm, pos / spb, true });
             }
             std::string name = categoryInfo()[(size_t) c].name;
             for (auto& ch : name) if (ch == ' ') ch = '_';
-            const std::string path = dir + "/" + name + "_" + std::to_string (s) + ".wav";
+            const std::string path = dir + "/" + name + (withArp ? "_arp_" : "_") + std::to_string (s) + ".wav";
             writeWav (path, l, r, fs);
             std::printf ("%s\n", path.c_str());
         }

@@ -73,12 +73,17 @@ private:
 };
 
 // ---------------------------------------------------------------------------
-// Small dot + label switch for a toggle parameter.
+// Small dot + label switch for a toggle parameter, or for a plain flag
+// (text-only constructor: drive it with setOn, listen with onToggle).
 // ---------------------------------------------------------------------------
-class ToggleDot : public juce::Component
+class ToggleDot : public juce::Component,
+                  public juce::SettableTooltipClient
 {
 public:
     ToggleDot (PsySynthProcessor&, psy::P, const juce::String& text);
+    explicit ToggleDot (const juce::String& text);
+    void setOn (bool shouldBeOn) { if (on != shouldBeOn) { on = shouldBeOn; repaint(); } }
+    std::function<void (bool)> onToggle;
 
     void paint (juce::Graphics&) override;
     void mouseDown (const juce::MouseEvent&) override;
@@ -91,11 +96,9 @@ public:
     void setStacked (bool s) { stacked = s; repaint(); }
 
 private:
-    PsySynthProcessor& proc;
-    psy::P param;
     juce::String text;
     bool on = false, stacked = false;
-    juce::ParameterAttachment attachment;
+    std::unique_ptr<juce::ParameterAttachment> attachment;
 };
 
 // ---------------------------------------------------------------------------
@@ -146,11 +149,13 @@ public:
     int idealWidth() const;
     std::function<void (int)> onChange;
     std::function<bool (int)> isLit;  // draws a state dot before the name
+    std::function<bool (int)> hasLed; // with isLit: which tabs get a dot (all when unset)
 
 private:
     juce::StringArray names;
     int selected = 0, hover = -1;
     std::vector<juce::Rectangle<int>> tabBounds() const;
+    bool ledOn (int i) const { return isLit && (! hasLed || hasLed (i)); }
 };
 
 // ---------------------------------------------------------------------------

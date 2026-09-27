@@ -37,6 +37,8 @@ namespace choices
                                             "Filter Env Amt" };
     const std::vector<std::string> distType { "Soft", "Hard", "Fold", "Tube", "Rectify" };
     const std::vector<std::string> chorusMode { "Chorus", "Flanger" };
+    const std::vector<std::string> arpMode { "Up", "Down", "Up/Down", "Random", "Order" };
+    const std::vector<std::string> arpRhythm { "Straight", "Rolling", "Gallop", "Offbeat", "Skip", "3-3-2", "Broken" };
 } // namespace choices
 
 float syncDivBeats (int index) noexcept
@@ -44,6 +46,20 @@ float syncDivBeats (int index) noexcept
     static constexpr float beats[] = { 16.f, 8.f, 4.f, 2.f, 3.f, 4.f / 3.f, 1.f, 1.5f, 2.f / 3.f,
                                        0.5f, 0.75f, 1.f / 3.f, 0.25f, 0.375f, 1.f / 6.f, 0.125f, 1.f / 12.f, 0.0625f };
     return beats[std::clamp (index, 0, (int) std::size (beats) - 1)];
+}
+
+ArpRhythmMask arpRhythmMask (int index) noexcept
+{
+    static constexpr ArpRhythmMask masks[] = {
+        { "xxxx", 4 },               // Straight
+        { "-xxx", 4 },               // Rolling: the kick owns the beat
+        { "x-xx", 4 },               // Gallop
+        { "--x-", 4 },               // Offbeat
+        { "xx-x", 4 },               // Skip
+        { "x--x--x-", 8 },           // 3-3-2
+        { "x-xx-x-xx-x-xxx-", 16 },  // Broken
+    };
+    return masks[std::clamp (index, 0, (int) std::size (masks) - 1)];
 }
 
 float ParamDef::toPlain (float n) const noexcept

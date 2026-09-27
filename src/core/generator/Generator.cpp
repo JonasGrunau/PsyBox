@@ -123,7 +123,7 @@ void RecipeBuilder::lfoSync (int index, LfoShape shape, std::initializer_list<in
 // Generator
 // ---------------------------------------------------------------------------
 
-ParamState Generator::generate (Category c, uint32_t seed, const ParamState& current, const LockSet& locks)
+ParamState Generator::generate (Category c, uint32_t seed, const ParamState& current, const LockSet& locks, bool withArp)
 {
     ParamState out;  // init patch
     for (int i = 0; i < kNumParams; ++i)
@@ -138,6 +138,12 @@ ParamState Generator::generate (Category c, uint32_t seed, const ParamState& cur
     dsp::Rng rng (((uint64_t) seed << 8) ^ (uint64_t) ((int) c + 1) * 0x9E3779B97F4A7C15ULL);
     RecipeBuilder b (out, locks, rng, ranges);
     recipeFor (c) (b);
+
+    dsp::Rng arpRng (((uint64_t) seed << 8) ^ (uint64_t) ((int) c + 1) * 0xC2B2AE3D27D4EB4FULL ^ 0x41525050ULL);
+    RecipeBuilder arp (out, locks, arpRng, ranges);
+    arp.on (P::ArpOn, withArp);
+    if (withArp)
+        arpRecipeFor (c) (arp);
     return out;
 }
 

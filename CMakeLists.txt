@@ -20,9 +20,11 @@ add_library(psysynth_core STATIC
     src/core/engine/Params.cpp
     src/core/engine/Engine.cpp
     src/core/engine/Voice.cpp
+    src/core/engine/Arpeggiator.cpp
     src/core/dsp/Wavetable.cpp
     src/core/generator/Generator.cpp
     src/core/generator/Recipes.cpp
+    src/core/generator/ArpRecipes.cpp
 )
 target_include_directories(psysynth_core PUBLIC src/core)
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
@@ -128,7 +130,8 @@ if(PSYSYNTH_BUILD_TESTS)
         tests/TestFilters.cpp
         tests/TestShapersAndFx.cpp
         tests/TestEngine.cpp
-        tests/TestGenerator.cpp)
+        tests/TestGenerator.cpp
+        tests/TestArp.cpp)
     target_link_libraries(psysynth_tests PRIVATE psysynth_core Catch2::Catch2WithMain)
 
     add_executable(psysynth_render tools/RenderCategories.cpp)

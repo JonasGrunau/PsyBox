@@ -210,25 +210,112 @@ void FilterPanel::resized()
 // VoicePanel: modes on top, six knobs below.
 // ---------------------------------------------------------------------------
 VoicePanel::VoicePanel (PsySynthProcessor& p)
-    : Section ("Voice"),
-      mode (p, P::VoiceMode), glideMode (p, P::GlideMode, { "Always", "Legato" })
+    : Section ("Voice"), proc (p),
+      mode (p, P::VoiceMode), glideMode (p, P::GlideMode, { "Always", "Legato" }),
+      arpOn (p, P::ArpOn, "On"), arpHold (p, P::ArpHold, "Hold"),
+      arpMode (p, P::ArpMode, "Mode"), arpRhythm (p, P::ArpRhythm, "Rhythm"), pattern (p)
 {
+    addAndMakeVisible (tabs);
+    tabs.hasLed = [] (int i) { return i == 1; };
+    tabs.isLit = [this] (int) { return proc.plain (P::ArpOn) > 0.5f; };
+    tabs.onChange = [this] (int i) { show (i); };
+
     addAndMakeVisible (mode);
     addAndMakeVisible (glideMode);
     knobs = { ks.add (*this, p, P::PolyVoices), ks.add (*this, p, P::Glide), ks.add (*this, p, P::Accent),
               ks.add (*this, p, P::Octave), ks.add (*this, p, P::BendRange), ks.add (*this, p, P::VelSens) };
+
+    arpOn.setStacked (true);
+    arpHold.setStacked (true);
+    arpHold.setTooltip ("Keep the arp running after you let go of the keys");
+    for (juce::Component* c : { (juce::Component*) &arpOn, (juce::Component*) &arpHold, (juce::Component*) &arpMode,
+                                (juce::Component*) &arpRhythm, (juce::Component*) &pattern })
+        addChildComponent (c);
+    arpKnobs = { ks.add (*this, p, P::ArpDiv), ks.add (*this, p, P::ArpOctaves), ks.add (*this, p, P::ArpGate),
+                 ks.add (*this, p, P::ArpSwing) };
+
+    show (0);
+    startTimerHz (10);
+}
+
+void VoicePanel::show (int page)
+{
+    current = page;
+    const bool voice = page == 0;
+    mode.setVisible (voice);
+    glideMode.setVisible (voice);
+    for (auto* k : knobs) k->setVisible (voice);
+    for (juce::Component* c : { (juce::Component*) &arpOn, (juce::Component*) &arpHold, (juce::Component*) &arpMode,
+                                (juce::Component*) &arpRhythm, (juce::Component*) &pattern })
+        c->setVisible (! voice);
+    for (auto* k : arpKnobs) k->setVisible (! voice);
+    resized();
+    repaint();
+}
+
+void VoicePanel::timerCallback()
+{
+    tabs.repaint();
+    if (pattern.isVisible()) pattern.repaint();
 }
 
 void VoicePanel::resized()
 {
+    auto h = header();
+    h.removeFromLeft (titleWidth());
+    tabs.setBounds (h.removeFromRight (tabs.idealWidth()));
+
     const auto gr = grid();
     captions.clear();
     mode.setBounds (gr.control (0, 0, 3));
-    addCaption ("Play Mode", gr.cell (0, 0, 3));
     glideMode.setBounds (gr.control (3, 0, 3));
-    addCaption ("Glide Mode", gr.cell (3, 0, 3));
     for (int i = 0; i < (int) knobs.size(); ++i)
         knobs[(size_t) i]->setBounds (gr.cell (i, 1));
+
+    arpOn.setBounds (gr.cell (0, 0));
+    arpHold.setBounds (gr.cell (1, 0));
+    arpMode.setBounds (gr.captioned (2, 0, 2));
+    arpRhythm.setBounds (gr.captioned (4, 0, 2));
+    for (int i = 0; i < (int) arpKnobs.size(); ++i)
+        arpKnobs[(size_t) i]->setBounds (gr.cell (i, 1));
+    pattern.setBounds (gr.captioned (4, 1, 2).removeFromTop (kKnobD));
+
+    if (current == 0)
+    {
+        addCaption ("Play Mode", gr.cell (0, 0, 3));
+        addCaption ("Glide Mode", gr.cell (3, 0, 3));
+    }
+    else
+    {
+        addCaption ("Pattern", gr.cell (4, 1, 2));
+    }
+}
+
+void ArpPatternView::paint (juce::Graphics& g)
+{
+    const auto mask = psy::arpRhythmMask ((int) proc.plain (P::ArpRhythm));
+    const bool on = proc.plain (P::ArpOn) > 0.5f;
+
+    // 16 steps in four beat groups, centred vertically in the control area
+    constexpr int kSteps = 16, kGap = 2, kBeatGap = 5;
+    const float w = (float) (getWidth() - 12 * kGap - 3 * kBeatGap) / (float) kSteps;
+    const float hgt = 14.f, y = ((float) getHeight() - hgt) * 0.5f;
+    float x = 0.f;
+    for (int i = 0; i < kSteps; ++i)
+    {
+        const juce::Rectangle<float> r (x, y, w, hgt);
+        if (mask.steps[i % mask.length] == 'x')
+        {
+            g.setColour (on ? accent() : col::textFaint);
+            g.fillRoundedRectangle (r, 1.5f);
+        }
+        else
+        {
+            g.setColour (col::lineStrong);
+            g.drawRoundedRectangle (r.reduced (0.5f), 1.5f, 1.f);
+        }
+        x += w + (i % 4 == 3 ? kBeatGap : kGap);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -578,6 +665,8 @@ Sidebar::Sidebar (PsySynthProcessor& p) : proc (p)
     mutateButton.setTooltip ("Vary the current sound within the category");
     mutateButton.onClick = [this] { proc.mutate(); };
     clearLocks.onClick = [this] { proc.clearLocks(); };
+    arpToggle.setTooltip ("Generate adds an arp in the style of the category");
+    arpToggle.onToggle = [this] (bool on) { proc.setArpGeneration (on); };
 
     mutateAmount.setSliderStyle (juce::Slider::LinearHorizontal);
     mutateAmount.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
@@ -600,7 +689,7 @@ Sidebar::Sidebar (PsySynthProcessor& p) : proc (p)
     };
 
     for (juce::Component* c : { (juce::Component*) &generateButton, (juce::Component*) &mutateButton, (juce::Component*) &clearLocks,
-                                (juce::Component*) &mutateAmount, (juce::Component*) &seedLabel })
+                                (juce::Component*) &mutateAmount, (juce::Component*) &seedLabel, (juce::Component*) &arpToggle })
         addAndMakeVisible (c);
     proc.addChangeListener (this);
     refresh();
@@ -613,6 +702,7 @@ void Sidebar::changeListenerCallback (juce::ChangeBroadcaster*) { refresh(); }
 void Sidebar::refresh()
 {
     seedLabel.setText (hexSeed (proc.getSeed()), juce::dontSendNotification);
+    arpToggle.setOn (proc.getArpGeneration());
     clearLocks.setVisible (proc.numLocks() > 0);
     clearLocks.setTooltip ("Unlock all " + juce::String (proc.numLocks()) + " locked parameters");
     repaint();
@@ -717,7 +807,11 @@ void Sidebar::resized()
     mutateAmount.setBounds (r.withTrimmedTop (kLabelH));
     a.removeFromBottom (sp::sm);
 
-    generateButton.setBounds (a.removeFromBottom (44));
+    // Generate, with the arp switch for it on the right
+    auto gen = a.removeFromBottom (44);
+    arpToggle.setBounds (gen.removeFromRight (arpToggle.idealWidth()));
+    gen.removeFromRight (sp::md);
+    generateButton.setBounds (gen);
 
     // Unlock sits on the category name line, right-aligned.
     auto nameLine = infoArea().reduced (kPad, 0).withTrimmedTop (kPad).removeFromTop (24);

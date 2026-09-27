@@ -54,16 +54,22 @@ namespace choices
 {
     extern const std::vector<std::string> voiceMode, glideMode, quality, oscType, wavetable,
         subOct, subShape, noiseType, penvDest, filterType, filterRouting, lfoShape, syncDiv,
-        modSrc, modDst, distType, chorusMode;
+        modSrc, modDst, distType, chorusMode, arpMode, arpRhythm;
 }
 
 // Sync divisions expressed in beats (quarter notes), index-aligned with choices::syncDiv.
 float syncDivBeats (int index) noexcept;
 
+// Arp rhythm masks, index-aligned with choices::arpRhythm. Step 0 is the beat.
+struct ArpRhythmMask { const char* steps; int length; };   // 'x' plays, '-' rests
+ArpRhythmMask arpRhythmMask (int index) noexcept;
+
 enum class VoiceMode : int { Poly, Mono, Legato };
 enum class OscType : int { Analog, Supersaw, Wavetable, FM };
 enum class LfoShape : int { Sine, Triangle, SawUp, SawDown, Square, SampleHold, SmoothRandom };
 enum class DistType : int { Soft, Hard, Fold, Tube, Rectify };
+enum class ArpMode : int { Up, Down, UpDown, Random, Order };
+enum class ArpRhythm : int { Straight, Rolling, Gallop, Offbeat, Skip, ThreeThreeTwo, Broken };
 
 enum class ModSrc : int
 {
@@ -255,7 +261,16 @@ enum class ModDst : int
     X(ReverbDecay, "reverb_decay", "Decay",       "Reverb", Exp, 0.2f, 30.f, 3.f, 1.f, Sec, nullptr, false) \
     X(ReverbDamp,  "reverb_damp",  "Damping",     "Reverb", Linear, 0.f, 1.f, 0.4f, 1.f, Percent, nullptr, false) \
     X(ReverbPre,   "reverb_pre",   "Pre-Delay",   "Reverb", Power, 0.f, 250.f, 10.f, 2.f, Ms, nullptr, false) \
-    X(ReverbMix,   "reverb_mix",   "Mix",         "Reverb", Linear, 0.f, 1.f, 0.2f, 1.f, Percent, nullptr, false)
+    X(ReverbMix,   "reverb_mix",   "Mix",         "Reverb", Linear, 0.f, 1.f, 0.2f, 1.f, Percent, nullptr, false) \
+    \
+    X(ArpOn,       "arp_on",       "On",          "Arp", Toggle, 0, 1, 0, 1.f, None, nullptr, false) \
+    X(ArpMode,     "arp_mode",     "Mode",        "Arp", Choice, 0, 4, 0, 1.f, None, &choices::arpMode, false) \
+    X(ArpDiv,      "arp_div",      "Rate",        "Arp", Choice, 0, 17, 12, 1.f, None, &choices::syncDiv, false) \
+    X(ArpOctaves,  "arp_oct",      "Octaves",     "Arp", Linear, 1, 4, 1, 1.f, Int, nullptr, false) \
+    X(ArpGate,     "arp_gate",     "Gate",        "Arp", Linear, 0.05f, 1.5f, 0.5f, 1.f, Percent, nullptr, false) \
+    X(ArpSwing,    "arp_swing",    "Swing",       "Arp", Linear, 0.f, 0.75f, 0.f, 1.f, Percent, nullptr, false) \
+    X(ArpRhythm,   "arp_rhythm",   "Rhythm",      "Arp", Choice, 0, 6, 0, 1.f, None, &choices::arpRhythm, false) \
+    X(ArpHold,     "arp_hold",     "Hold",        "Arp", Toggle, 0, 1, 0, 1.f, None, nullptr, false)
 
 enum class P : int
 {

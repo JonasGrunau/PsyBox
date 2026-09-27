@@ -389,6 +389,22 @@ Scope::Scope (PsySynthProcessor& p) : DisplayBase (p)
     buf.resize (2048);
     stopTimer();
     startTimerHz (40);
+    setMouseCursor (juce::MouseCursor::DraggingHandCursor);
+    setTooltip ("Drag out to export this sound as a WAV file");
+}
+
+void Scope::mouseDrag (const juce::MouseEvent& e)
+{
+    if (dragging || e.getDistanceFromDragStart() < 6)
+        return;
+    dragging = true;
+    repaint();
+    const auto file = proc.bounceToFile();
+    if (file.existsAsFile())
+        juce::DragAndDropContainer::performExternalDragDropOfFiles ({ file.getFullPathName() }, false, this,
+                                                                     [this] { dragging = false; repaint(); });
+    else
+        dragging = false;
 }
 
 void Scope::paintContent (juce::Graphics& g, juce::Rectangle<float> r)
@@ -430,4 +446,12 @@ void Scope::paintContent (juce::Graphics& g, juce::Rectangle<float> r)
     auto meter = juce::Rectangle<float> (r.getRight() - 5.f, r.getBottom() - h, 3.f, h);
     g.setColour (db > -1.f ? juce::Colour (0xffff5a4a) : col::text.withAlpha (0.7f));
     g.fillRect (meter);
+
+    if (isMouseOver() || dragging)
+    {
+        g.setColour (col::text.withAlpha (dragging ? 0.9f : 0.6f));
+        g.setFont (heading (9.5f));
+        g.drawText (dragging ? "DROP TO EXPORT WAV" : "DRAG TO EXPORT WAV", r.reduced ((float) theme::sp::sm).toNearestInt(),
+                    juce::Justification::topLeft, false);
+    }
 }

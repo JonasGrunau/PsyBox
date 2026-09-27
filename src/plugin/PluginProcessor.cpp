@@ -77,6 +77,9 @@ void PsySynthProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
     engine.prepare (sampleRate, samplesPerBlock);
     reportedLatency = engine.latencySamples();
     setLatencySamples (reportedLatency);
+    swap = Swap::None;
+    seenEpoch = patchEpoch.load();
+    heldVelocity.fill (0.f);
 }
 
 ParamState PsySynthProcessor::currentState() const
@@ -92,9 +95,17 @@ void PsySynthProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
     juce::ScopedNoDenormals noDenormals;
     const int n = buffer.getNumSamples();
 
-    for (size_t i = 0; i < (size_t) kNumParams; ++i)
-        audioParams.v[i] = rawValues[i]->load (std::memory_order_relaxed);
-    engine.setParams (audioParams);
+    if (swap == Swap::None && patchEpoch.load (std::memory_order_acquire) != seenEpoch)
+    {
+        swap = Swap::FadingOut;   // keep the old values for the fade
+        fadePos = 0;
+    }
+    if (swap != Swap::FadingOut)
+    {
+        for (size_t i = 0; i < (size_t) kNumParams; ++i)
+            audioParams.v[i] = rawValues[i]->load (std::memory_order_relaxed);
+        engine.setParams (audioParams);
+    }
 
     keyboardState.processNextMidiBuffer (midi, 0, n, true);
 
@@ -104,28 +115,86 @@ void PsySynthProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
         const auto m = meta.getMessage();
         MidiEvent e;
         e.offset = juce::jlimit (0, n - 1, meta.samplePosition);
-        if (m.isNoteOn()) { e.type = MidiEvent::NoteOn; e.number = m.getNoteNumber(); e.value = m.getFloatVelocity(); }
-        else if (m.isNoteOff()) { e.type = MidiEvent::NoteOff; e.number = m.getNoteNumber(); }
+        if (m.isNoteOn())
+        {
+            e.type = MidiEvent::NoteOn; e.number = m.getNoteNumber(); e.value = m.getFloatVelocity();
+            lastPlayedNote.store (e.number, std::memory_order_relaxed);
+            heldVelocity[(size_t) e.number] = std::max (0.01f, e.value);
+        }
+        else if (m.isNoteOff()) { e.type = MidiEvent::NoteOff; e.number = m.getNoteNumber(); heldVelocity[(size_t) e.number] = 0.f; }
         else if (m.isPitchWheel()) { e.type = MidiEvent::PitchBend; e.value = (float) (m.getPitchWheelValue() - 8192) / 8192.f; }
         else if (m.isController()) { e.type = MidiEvent::Controller; e.number = m.getControllerNumber(); e.value = (float) m.getControllerValue() / 127.f; }
         else if (m.isChannelPressure()) { e.type = MidiEvent::ChannelPressure; e.value = (float) m.getChannelPressureValue() / 127.f; }
         else if (m.isAftertouch()) { e.type = MidiEvent::ChannelPressure; e.value = (float) m.getAfterTouchValue() / 127.f; }
-        else if (m.isAllNotesOff() || m.isAllSoundOff()) { e.type = MidiEvent::AllNotesOff; }
+        else if (m.isAllNotesOff() || m.isAllSoundOff()) { e.type = MidiEvent::AllNotesOff; heldVelocity.fill (0.f); }
         else continue;
         if (midiEvents.size() < midiEvents.capacity())
             midiEvents.push_back (e);
     }
 
-    double bpm = 120.0;
+    Transport transport;
     if (auto* ph = getPlayHead())
         if (const auto pos = ph->getPosition())
+        {
             if (const auto b = pos->getBpm())
-                bpm = *b;
+                transport.bpm = *b;
+            if (const auto ppq = pos->getPpqPosition())
+            {
+                transport.ppq = *ppq;
+                transport.playing = pos->getIsPlaying();
+            }
+        }
+    const double bpm = transport.bpm;
+    lastBpm.store (bpm, std::memory_order_relaxed);
+
+    // First block after a reset: the new patch starts clean, held notes come back.
+    if (swap == Swap::Restart)
+    {
+        for (int note = 0; note < 128; ++note)
+            if (heldVelocity[(size_t) note] > 0.f && midiEvents.size() < midiEvents.capacity())
+            {
+                MidiEvent e;
+                e.type = MidiEvent::NoteOn;
+                e.number = note;
+                e.value = heldVelocity[(size_t) note];
+                midiEvents.insert (midiEvents.begin(), e);
+            }
+    }
 
     buffer.clear();
     float* l = buffer.getWritePointer (0);
     float* r = buffer.getNumChannels() > 1 ? buffer.getWritePointer (1) : l;
-    engine.process (l, r, n, midiEvents.data(), (int) midiEvents.size(), bpm);
+    engine.process (l, r, n, midiEvents.data(), (int) midiEvents.size(), transport);
+
+    if (swap == Swap::FadingOut)
+    {
+        for (int i = 0; i < n; ++i)
+        {
+            const float g = std::max (0.f, 1.f - (float) fadePos / (float) kFadeOut);
+            l[i] *= g;
+            if (r != l) r[i] *= g;
+            ++fadePos;
+        }
+        if (fadePos >= kFadeOut)
+        {
+            engine.reset();   // voices, filter states, delay and reverb tails; params jump, no smoothing
+            seenEpoch = patchEpoch.load (std::memory_order_acquire);
+            swap = Swap::Restart;
+            fadePos = 0;
+        }
+    }
+    else if (swap == Swap::Restart)
+    {
+        const int m = std::min (n, kFadeIn - fadePos);
+        for (int i = 0; i < m; ++i)
+        {
+            const float g = (float) (fadePos + i) / (float) kFadeIn;
+            l[i] *= g;
+            if (r != l) r[i] *= g;
+        }
+        fadePos += m;
+        if (fadePos >= kFadeIn) swap = Swap::None;
+    }
 
     const int lat = engine.latencySamples();
     if (lat != reportedLatency)
@@ -194,6 +263,7 @@ void PsySynthProcessor::saveSlot()
 
 void PsySynthProcessor::switchCategory (Category c)
 {
+    beginPatchChange();
     saveSlot();
     category = c;
     const auto& slot = slots[(size_t) c];
@@ -250,15 +320,23 @@ void PsySynthProcessor::generate()
 
 void PsySynthProcessor::generateWithSeed (uint32_t s)
 {
+    beginPatchChange();
     seed = s;
-    applyState (generator.generate (category, seed, currentState(), locks));
+    applyState (generator.generate (category, seed, currentState(), locks, arpGeneration));
     presetName = juce::String (categoryInfo()[(size_t) category].name) + " #" + juce::String::toHexString ((int) seed).toUpperCase().paddedLeft ('0', 6);
     pushHistory();
     sendChangeMessage();
 }
 
+void PsySynthProcessor::setArpGeneration (bool on)
+{
+    arpGeneration = on;
+    sendChangeMessage();
+}
+
 void PsySynthProcessor::mutate()
 {
+    beginPatchChange();
     applyState (generator.mutate (mutateAmount, (uint32_t) random.nextInt(), currentState(), locks));
     if (! presetName.endsWith ("*"))
         presetName << "*";
@@ -291,6 +369,7 @@ void PsySynthProcessor::pushHistory()
 void PsySynthProcessor::undo()
 {
     if (! canUndo()) return;
+    beginPatchChange();
     // keep manual tweaks made since the last generator action reachable via redo
     history[(size_t) historyIndex].state = currentState();
     --historyIndex;
@@ -307,6 +386,7 @@ void PsySynthProcessor::undo()
 void PsySynthProcessor::redo()
 {
     if (! canRedo()) return;
+    beginPatchChange();
     ++historyIndex;
     const auto& h = history[(size_t) historyIndex];
     if (h.category != category) saveSlot();
@@ -319,11 +399,12 @@ void PsySynthProcessor::redo()
 }
 
 // Mutate needs the recipe's ranges; they are a pure function of category and
-// seed, so re-run the recipe on a scratch patch instead of storing them.
+// seed (plus whether the patch has an arp), so re-run the recipe on a scratch
+// patch instead of storing them.
 void PsySynthProcessor::restoreRanges()
 {
     Generator scratch;
-    scratch.generate (category, seed, ParamState(), LockSet());
+    scratch.generate (category, seed, ParamState(), LockSet(), plain (P::ArpOn) > 0.5f);
     generator.setRanges (scratch.lastRanges());
 }
 
@@ -354,11 +435,96 @@ void PsySynthProcessor::readMacroNames (const juce::ValueTree& t)
 
 void PsySynthProcessor::initPatch()
 {
+    beginPatchChange();
     applyState (ParamState());
     resetMacroNames();
     presetName = "Init";
     pushHistory();
     sendChangeMessage();
+}
+
+// ---------------------------------------------------------------------------
+// Bounce
+// ---------------------------------------------------------------------------
+
+juce::File PsySynthProcessor::bounceToFile()
+{
+    constexpr double fs = 48000.0;
+    constexpr int block = 512;
+    const auto st = currentState();
+    const double bpm = lastBpm.load();
+    const int note = lastPlayedNote.load();
+
+    // Gate: percussive patches (no sustain) only need attack + decay; sustained
+    // ones are held for at least a beat so the body of the sound is there.
+    const double attack = st.get (P::AenvA) / 1000.0, decay = st.get (P::AenvD) / 1000.0;
+    const double beat = 60.0 / bpm;
+    const double gateSec = st.get (P::AenvS) < 0.05f ? juce::jlimit (0.1, 8.0, attack + decay)
+                                                     : juce::jlimit (beat, 8.0, attack + decay + 0.25);
+    const int gate = (int) (gateSec * fs);
+    const int maxLen = (int) (40.0 * fs);
+
+    Engine e;
+    e.prepare (fs, block);
+    e.setParams (st);
+    const int latency = e.latencySamples();
+
+    std::vector<float> L, R;
+    L.reserve ((size_t) (gate + 10 * fs));
+    R.reserve (L.capacity());
+    std::array<float, block> bl {}, br {};
+    int pos = 0, quiet = 0;
+    const int quietNeeded = (int) (0.3 * fs);
+    while (pos < maxLen)
+    {
+        MidiEvent ev[2];
+        int nEv = 0;
+        if (pos == 0) { ev[nEv].type = MidiEvent::NoteOn; ev[nEv].number = note; ev[nEv].value = 0.8f; ++nEv; }
+        if (gate >= pos && gate < pos + block) { ev[nEv].type = MidiEvent::NoteOff; ev[nEv].number = note; ev[nEv].offset = gate - pos; ++nEv; }
+        e.process (bl.data(), br.data(), block, ev, nEv, bpm);
+        float pk = 0.f;
+        for (int i = 0; i < block; ++i)
+        {
+            L.push_back (bl[(size_t) i]);
+            R.push_back (br[(size_t) i]);
+            pk = std::max (pk, std::max (std::abs (bl[(size_t) i]), std::abs (br[(size_t) i])));
+        }
+        pos += block;
+        // after the note is released, stop once the tail stays below -80 dB
+        quiet = (pos > gate && pk < 1e-4f) ? quiet + block : 0;
+        if (quiet >= quietNeeded) break;
+    }
+
+    // drop the decimator latency at the start and the silence at the end
+    int end = (int) L.size();
+    while (end > latency + 1 && std::max (std::abs (L[(size_t) end - 1]), std::abs (R[(size_t) end - 1])) < 1e-4f) --end;
+    const int len = std::max (1, end - latency);
+    juce::AudioBuffer<float> out (2, len);
+    out.copyFrom (0, 0, L.data() + latency, len);
+    out.copyFrom (1, 0, R.data() + latency, len);
+    const int fade = std::min (len, (int) (0.005 * fs));
+    out.applyGainRamp (len - fade, fade, 1.f, 0.f);
+    // normalise to -1 dBFS peak so the sample drops in at a usable level
+    if (const float pk = out.getMagnitude (0, len); pk > 1e-5f)
+        out.applyGain (juce::Decibels::decibelsToGain (-1.f) / pk);
+
+    auto dir = juce::File::getSpecialLocation (juce::File::userMusicDirectory).getChildFile ("PsySynth").getChildFile ("Bounces");
+    dir.createDirectory();
+    const auto noteName = juce::MidiMessage::getMidiNoteName (note, true, true, 4);
+    const auto base = juce::File::createLegalFileName (presetName.trimCharactersAtEnd ("*") + " " + noteName);
+    auto file = dir.getChildFile (base + ".wav");
+    file.deleteFile();
+
+    juce::WavAudioFormat wav;
+    std::unique_ptr<juce::OutputStream> stream (file.createOutputStream());
+    if (stream == nullptr)
+        return {};
+    auto writer = wav.createWriterFor (stream, juce::AudioFormatWriterOptions {}.withSampleRate (fs).withNumChannels (2).withBitsPerSample (24));
+    if (writer == nullptr)
+        return {};
+    writer->writeFromAudioSampleBuffer (out, 0, len);
+    writer.reset();
+    return file;
 }
 
 // ---------------------------------------------------------------------------
@@ -371,6 +537,7 @@ void PsySynthProcessor::getStateInformation (juce::MemoryBlock& destData)
     state.setProperty ("category", (int) category, nullptr);
     state.setProperty ("seed", (int) seed, nullptr);
     state.setProperty ("mutate", mutateAmount, nullptr);
+    state.setProperty ("arpGen", arpGeneration, nullptr);
     state.setProperty ("presetName", presetName, nullptr);
     writeMacroNames (state);
     writeSlots (state);
@@ -389,10 +556,20 @@ void PsySynthProcessor::setStateInformation (const void* data, int sizeInBytes)
     if (xml == nullptr || ! xml->hasTagName (apvts.state.getType()))
         return;
     auto tree = juce::ValueTree::fromXml (*xml);
+    // Sessions saved before a parameter existed (the arp) get its default.
+    for (const auto& d : paramDefs())
+        if (! tree.getChildWithProperty ("id", juce::String (d.id)).isValid())
+        {
+            juce::ValueTree child ("PARAM");
+            child.setProperty ("id", juce::String (d.id), nullptr);
+            child.setProperty ("value", d.def, nullptr);
+            tree.appendChild (child, nullptr);
+        }
     apvts.replaceState (tree);
     category = (Category) juce::jlimit (0, kNumCategories - 1, (int) tree.getProperty ("category", 0));
     seed = (uint32_t) (int) tree.getProperty ("seed", 0);
     mutateAmount = (float) tree.getProperty ("mutate", 0.25f);
+    arpGeneration = (bool) tree.getProperty ("arpGen", false);
     presetName = tree.getProperty ("presetName", "Init").toString();
     readMacroNames (tree);
     readSlots (tree);
@@ -446,6 +623,7 @@ bool PsySynthProcessor::loadPreset (const juce::File& file)
     if (xml == nullptr || ! xml->hasTagName (apvts.state.getType()))
         return false;
     const auto tree = juce::ValueTree::fromXml (*xml);
+    beginPatchChange();
     ParamState s;
     for (int i = 0; i < tree.getNumChildren(); ++i)
     {

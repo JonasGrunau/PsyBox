@@ -118,16 +118,37 @@ private:
     void timerCallback() override;
 };
 
-class VoicePanel : public Section
+// One bar of the arp rhythm at 1/16: lit steps play, the rest are rests.
+class ArpPatternView : public juce::Component
+{
+public:
+    explicit ArpPatternView (PsySynthProcessor& p) : proc (p) {}
+    void paint (juce::Graphics&) override;
+
+private:
+    PsySynthProcessor& proc;
+};
+
+class VoicePanel : public Section, private juce::Timer
 {
 public:
     explicit VoicePanel (PsySynthProcessor&);
     void resized() override;
 
 private:
+    PsySynthProcessor& proc;
+    TabStrip tabs { { "Voice", "Arp" } };
     Segmented mode, glideMode;
     KnobSet ks;
     std::vector<ParamKnob*> knobs;
+
+    ToggleDot arpOn, arpHold;
+    ParamCombo arpMode, arpRhythm;
+    ArpPatternView pattern;
+    std::vector<ParamKnob*> arpKnobs;
+    int current = 0;
+    void show (int page);
+    void timerCallback() override;
 };
 
 class EnvPanel : public Section
@@ -257,6 +278,7 @@ private:
     PsySynthProcessor& proc;
     int hover = -1;
     juce::TextButton generateButton { "Generate" }, mutateButton { "Mutate" }, clearLocks { "Unlock" };
+    ToggleDot arpToggle { "Arp" };
     juce::Slider mutateAmount;
     juce::Label seedLabel;
     juce::Rectangle<int> seedCaption;

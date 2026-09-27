@@ -13,6 +13,7 @@ The "press Generate" feature. Each `Category` has a recipe that describes the *s
 | `Generator.h` | `LockSet` (bitset over params), `RangeMemory`, `RecipeBuilder` (the recipe API: `set`, `uni`, `pick`, `among`, `on`, `chance`, `route`, `lfo`, `lfoSync`), `recipeFor()`, `Generator::generate/mutate` |
 | `Generator.cpp` | `RecipeBuilder` implementation (skips locked params, records ranges) and `Generator` |
 | `Recipes.cpp` | One `static void` recipe per category, plus the `recipeFor()` dispatch table. Largest core file |
+| `ArpRecipes.cpp` | One arp recipe per category and `arpRecipeFor()`. Runs when `generate(..., withArp)` is set, on its own RNG stream, and may only touch `Arp` params, so the sound for a seed never depends on the arp (tested) |
 
 ## For AI Agents
 

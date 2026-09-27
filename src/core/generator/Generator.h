@@ -71,13 +71,16 @@ private:
 
 using Recipe = void (*) (RecipeBuilder&);
 Recipe recipeFor (Category c) noexcept;
+Recipe arpRecipeFor (Category c) noexcept;   // arp params only (ArpRecipes.cpp)
 
 class Generator
 {
 public:
     // A new patch of the category. Locked parameters keep their current value;
     // everything else starts from the init patch, then the recipe runs.
-    ParamState generate (Category c, uint32_t seed, const ParamState& current, const LockSet& locks);
+    // withArp adds the category's arp on a separate random stream, so the
+    // sound itself is the same either way.
+    ParamState generate (Category c, uint32_t seed, const ParamState& current, const LockSet& locks, bool withArp = false);
 
     // Nudges every unlocked parameter the last recipe touched by up to
     // `amount` (0..1) of its allowed range.
