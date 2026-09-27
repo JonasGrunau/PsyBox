@@ -1,0 +1,120 @@
+// Renders a few generated patches per category to WAV files for listening
+// checks:  psysynth_render <out-dir> [seeds-per-category]
+
+#include "engine/Engine.h"
+#include "generator/Generator.h"
+
+#include <algorithm>
+#include <cmath>
+#include <cstdio>
+#include <cstring>
+#include <string>
+#include <vector>
+
+using namespace psy;
+
+namespace
+{
+    void writeWav (const std::string& path, const std::vector<float>& l, const std::vector<float>& r, int fs)
+    {
+        FILE* f = std::fopen (path.c_str(), "wb");
+        if (! f) return;
+        const uint32_t n = (uint32_t) l.size();
+        const uint32_t dataBytes = n * 2 * 2;
+        const auto w32 = [&] (uint32_t v) { std::fwrite (&v, 4, 1, f); };
+        const auto w16 = [&] (uint16_t v) { std::fwrite (&v, 2, 1, f); };
+        std::fwrite ("RIFF", 1, 4, f); w32 (36 + dataBytes); std::fwrite ("WAVE", 1, 4, f);
+        std::fwrite ("fmt ", 1, 4, f); w32 (16); w16 (1); w16 (2); w32 ((uint32_t) fs); w32 ((uint32_t) fs * 4); w16 (4); w16 (16);
+        std::fwrite ("data", 1, 4, f); w32 (dataBytes);
+        for (uint32_t i = 0; i < n; ++i)
+        {
+            const auto s = [] (float x) { return (int16_t) std::lround (std::clamp (x, -1.f, 1.f) * 32767.f); };
+            const int16_t a = s (l[i]), b = s (r[i]);
+            std::fwrite (&a, 2, 1, f);
+            std::fwrite (&b, 2, 1, f);
+        }
+        std::fclose (f);
+    }
+
+    // Pattern per category: basses roll 16ths, FX get one long note, leads a phrase.
+    struct Note { double beat, len; int note; float vel; };
+
+    std::vector<Note> patternFor (Category c)
+    {
+        std::vector<Note> p;
+        switch (c)
+        {
+            case Category::RollingBass:
+                for (int b = 0; b < 16; ++b)
+                    for (int s = 1; s < 4; ++s) p.push_back ({ b + s * 0.25, 0.18, 36, 0.8f });
+                break;
+            case Category::Acid:
+            case Category::Squelch:
+            {
+                static const int line[16] = { 36, 36, 48, 39, 36, 43, 36, 46, 36, 48, 36, 41, 39, 36, 51, 36 };
+                for (int i = 0; i < 64; ++i)
+                    p.push_back ({ i * 0.25, (i % 3 == 0) ? 0.3 : 0.2, line[i % 16], (i % 4 == 2) ? 1.f : 0.7f });
+                break;
+            }
+            case Category::Riser: case Category::Downlifter: case Category::NoiseFx:
+            case Category::Atmos: case Category::Drone:
+                p.push_back ({ 0.0, 12.0, 48, 0.8f });
+                break;
+            default:
+            {
+                static const int mel[8] = { 60, 63, 67, 70, 72, 67, 63, 58 };
+                for (int i = 0; i < 16; ++i) p.push_back ({ i * 1.0, 0.5, mel[i % 8], 0.8f });
+                break;
+            }
+        }
+        return p;
+    }
+} // namespace
+
+int main (int argc, char** argv)
+{
+    const std::string dir = argc > 1 ? argv[1] : ".";
+    const int seeds = argc > 2 ? std::atoi (argv[2]) : 3;
+    const int fs = 48000;
+    const double bpm = 145.0;
+    const double spb = fs * 60.0 / bpm;
+    Generator g;
+
+    for (int c = 0; c < kNumCategories; ++c)
+        for (int s = 1; s <= seeds; ++s)
+        {
+            const ParamState p = g.generate ((Category) c, (uint32_t) s * 1009u, ParamState(), LockSet());
+            Engine e;
+            e.setParams (p);
+            e.prepare (fs, 256);
+            const auto pattern = patternFor ((Category) c);
+            const int total = (int) (spb * 17);
+            std::vector<float> l ((size_t) total), r ((size_t) total);
+            std::vector<MidiEvent> all;
+            for (const auto& n : pattern)
+            {
+                all.push_back ({ (int) (n.beat * spb), MidiEvent::NoteOn, n.note, n.vel });
+                all.push_back ({ (int) ((n.beat + n.len) * spb), MidiEvent::NoteOff, n.note, 0.f });
+            }
+            std::sort (all.begin(), all.end(), [] (auto& a, auto& b) { return a.offset < b.offset; });
+            size_t ei = 0;
+            for (int pos = 0; pos < total; pos += 256)
+            {
+                const int n = std::min (256, total - pos);
+                std::vector<MidiEvent> ev;
+                while (ei < all.size() && all[ei].offset < pos + n)
+                {
+                    auto e2 = all[ei++];
+                    e2.offset -= pos;
+                    ev.push_back (e2);
+                }
+                e.process (l.data() + pos, r.data() + pos, n, ev.data(), (int) ev.size(), bpm);
+            }
+            std::string name = categoryInfo()[(size_t) c].name;
+            for (auto& ch : name) if (ch == ' ') ch = '_';
+            const std::string path = dir + "/" + name + "_" + std::to_string (s) + ".wav";
+            writeWav (path, l, r, fs);
+            std::printf ("%s\n", path.c_str());
+        }
+    return 0;
+}

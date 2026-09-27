@@ -1,0 +1,827 @@
+// Sound-design recipes, one per category.
+//
+// A recipe describes the *space* of a category: which modules are involved
+// and the ranges that keep a sound recognisably "acid" or "zap". Ranges are
+// sampled in each parameter's own curve (log for cutoffs, power for times).
+// Every value set here remains a normal, editable parameter afterwards.
+
+#include "Generator.h"
+
+namespace psy
+{
+
+namespace
+{
+    using B = RecipeBuilder;
+    using S = ModSrc;
+    using D = ModDst;
+
+    constexpr float kSaw = 2.f, kSquare = 3.f, kTri = 1.f, kSine = 0.f;
+
+    // syncDiv indices
+    enum Div { D4_1, D2_1, D1_1, D1_2, D1_2D, D1_2T, D1_4, D1_4D, D1_4T, D1_8, D1_8D, D1_8T,
+               D1_16, D1_16D, D1_16T, D1_32, D1_32T, D1_64 };
+
+    int ft (FilterType t) { return (int) t; }
+
+    // ---- shared building blocks -------------------------------------------
+
+    void monoVoice (B& b, bool legato, float glideLo, float glideHi)
+    {
+        b.set (P::VoiceMode, (float) (legato ? VoiceMode::Legato : VoiceMode::Mono));
+        b.uni (P::Glide, glideLo, glideHi);
+        b.set (P::GlideMode, 1.f);
+    }
+
+    void polyVoice (B& b, int lo, int hi)
+    {
+        b.set (P::VoiceMode, (float) VoiceMode::Poly);
+        b.uni (P::PolyVoices, (float) lo, (float) hi);
+        b.set (P::Glide, 0.f);
+    }
+
+    void ampEnv (B& b, float aLo, float aHi, float dLo, float dHi, float sLo, float sHi, float rLo, float rHi)
+    {
+        b.uni (P::AenvA, aLo, aHi);
+        b.uni (P::AenvD, dLo, dHi);
+        b.uni (P::AenvS, sLo, sHi);
+        b.uni (P::AenvR, rLo, rHi);
+    }
+
+    void filterEnv (B& b, float aLo, float aHi, float dLo, float dHi, float sLo, float sHi, float rLo, float rHi)
+    {
+        b.uni (P::FenvA, aLo, aHi);
+        b.uni (P::FenvD, dLo, dHi);
+        b.uni (P::FenvS, sLo, sHi);
+        b.uni (P::FenvR, rLo, rHi);
+    }
+
+    void modEnv (B& b, float aLo, float aHi, float dLo, float dHi, float sLo, float sHi, float rLo, float rHi)
+    {
+        b.uni (P::MenvA, aLo, aHi);
+        b.uni (P::MenvD, dLo, dHi);
+        b.uni (P::MenvS, sLo, sHi);
+        b.uni (P::MenvR, rLo, rHi);
+    }
+
+    void filter1 (B& b, int type, float cLo, float cHi, float rLo, float rHi, float eLo, float eHi)
+    {
+        b.set (P::F1Type, (float) type);
+        b.uni (P::F1Cutoff, cLo, cHi);
+        b.uni (P::F1Reso, rLo, rHi);
+        b.uni (P::F1Env, eLo, eHi);
+    }
+
+    void analogA (B& b, float shape, float level = 0.8f)
+    {
+        b.on (P::OscAOn, true);
+        b.set (P::OscAType, (float) OscType::Analog);
+        b.set (P::OscAShape, shape);
+        b.set (P::OscALevel, level);
+    }
+
+    void analogB (B& b, float shape, float levelLo, float levelHi)
+    {
+        b.on (P::OscBOn, true);
+        b.set (P::OscBType, (float) OscType::Analog);
+        b.set (P::OscBShape, shape);
+        b.uni (P::OscBLevel, levelLo, levelHi);
+    }
+
+    void supersawA (B& b, float dLo, float dHi)
+    {
+        b.on (P::OscAOn, true);
+        b.set (P::OscAType, (float) OscType::Supersaw);
+        b.uni (P::OscADetune, dLo, dHi);
+        b.set (P::OscALevel, 0.85f);
+    }
+
+    void wavetableA (B& b, std::initializer_list<int> tables, float pLo, float pHi)
+    {
+        b.on (P::OscAOn, true);
+        b.set (P::OscAType, (float) OscType::Wavetable);
+        b.pick (P::OscAWt, tables);
+        b.uni (P::OscAWtPos, pLo, pHi);
+        b.set (P::OscALevel, 0.85f);
+    }
+
+    void fmA (B& b, std::initializer_list<float> ratios, float iLo, float iHi, float fbLo, float fbHi)
+    {
+        b.on (P::OscAOn, true);
+        b.set (P::OscAType, (float) OscType::FM);
+        b.among (P::OscAFmRatio, ratios);
+        b.uni (P::OscAFm, iLo, iHi);
+        b.uni (P::OscAFmFb, fbLo, fbHi);
+        b.set (P::OscALevel, 0.8f);
+    }
+
+    // ---- effects --------------------------------------------------------------
+
+    void fxDelay (B& b, float p, std::initializer_list<int> divs, float fbLo, float fbHi, float mixLo, float mixHi)
+    {
+        if (! b.chance (p)) return;
+        b.on (P::DelayOn, true);
+        b.set (P::DelaySync, 1.f);
+        b.pick (P::DelayDiv, divs);
+        b.uni (P::DelayFb, fbLo, fbHi);
+        b.uni (P::DelayMix, mixLo, mixHi);
+        b.on (P::DelayPing, b.chance (0.7f));
+        b.uni (P::DelayLowCut, 150.f, 500.f);
+        b.uni (P::DelayHighCut, 3500.f, 9000.f);
+    }
+
+    void fxReverb (B& b, float p, float decLo, float decHi, float mixLo, float mixHi)
+    {
+        if (! b.chance (p)) return;
+        b.on (P::ReverbOn, true);
+        b.uni (P::ReverbDecay, decLo, decHi);
+        b.uni (P::ReverbMix, mixLo, mixHi);
+        b.uni (P::ReverbSize, 0.4f, 0.95f);
+        b.uni (P::ReverbDamp, 0.2f, 0.7f);
+        b.uni (P::ReverbPre, 5.f, 60.f);
+    }
+
+    void fxDist (B& b, float p, std::initializer_list<int> types, float dLo, float dHi, float mixLo, float mixHi)
+    {
+        if (! b.chance (p)) return;
+        b.on (P::DistOn, true);
+        b.pick (P::DistType, types);
+        b.uni (P::DistDrive, dLo, dHi);
+        b.uni (P::DistMix, mixLo, mixHi);
+        b.uni (P::DistTone, 4000.f, 16000.f);
+    }
+
+    void fxPhaser (B& b, float p)
+    {
+        if (! b.chance (p)) return;
+        b.on (P::PhaserOn, true);
+        b.uni (P::PhaserRate, 0.05f, 1.5f);
+        b.uni (P::PhaserDepth, 0.4f, 0.9f);
+        b.uni (P::PhaserFb, 0.2f, 0.8f);
+        b.uni (P::PhaserCenter, 300.f, 2500.f);
+        b.uni (P::PhaserMix, 0.35f, 0.6f);
+    }
+
+    void fxChorus (B& b, float p, bool allowFlanger = true)
+    {
+        if (! b.chance (p)) return;
+        b.on (P::ChorusOn, true);
+        if (allowFlanger) b.pick (P::ChorusMode, { 0, 1 }, { 0.65f, 0.35f });
+        b.uni (P::ChorusRate, 0.1f, 1.2f);
+        b.uni (P::ChorusDepth, 0.3f, 0.8f);
+        b.uni (P::ChorusFb, -0.3f, 0.6f);
+        b.uni (P::ChorusMix, 0.25f, 0.5f);
+    }
+
+    void fxShift (B& b, float p, float hzLo, float hzHi, float fbLo, float fbHi)
+    {
+        if (! b.chance (p)) return;
+        b.on (P::FshiftOn, true);
+        const float sign = b.chance (0.5f) ? 1.f : -1.f;
+        b.uni (P::FshiftHz, sign * hzLo, sign * hzHi);
+        b.uni (P::FshiftFb, fbLo, fbHi);
+        b.uni (P::FshiftSpread, 0.f, 1.f);
+        b.uni (P::FshiftMix, 0.3f, 0.6f);
+    }
+
+    // =========================================================================
+    // Recipes
+    // =========================================================================
+
+    void acid (B& b)
+    {
+        monoVoice (b, true, 40.f, 95.f);
+        b.uni (P::Accent, 0.5f, 0.95f);
+        b.pick (P::Octave, { -1, 0 }, { 0.35f, 0.65f });
+        b.set (P::VelSens, 0.25f);
+
+        analogA (b, b.chance (0.65f) ? kSaw : kSquare, 0.85f);
+        if (b.chance (0.2f)) b.uni (P::SubLevel, 0.1f, 0.3f);
+
+        const int type = b.pick (P::F1Type, { ft (FilterType::Diode303), ft (FilterType::Ladder24) }, { 0.8f, 0.2f });
+        (void) type;
+        b.uni (P::F1Cutoff, 180.f, 900.f);
+        b.uni (P::F1Reso, 0.55f, 0.92f);
+        b.uni (P::F1Env, 0.35f, 0.8f);
+        b.uni (P::F1Drive, 0.1f, 0.5f);
+        b.uni (P::F1Key, 0.3f, 0.6f);
+        filterEnv (b, 0.f, 3.f, 120.f, 600.f, 0.f, 0.1f, 30.f, 120.f);
+        ampEnv (b, 0.5f, 3.f, 300.f, 900.f, 0.6f, 1.f, 20.f, 80.f);
+
+        if (b.chance (0.5f))
+        {
+            b.lfoSync (0, b.chance (0.5f) ? LfoShape::Triangle : LfoShape::Sine, { D4_1, D2_1, D1_1 }, false);
+            b.route (S::Lfo1, D::F1Cutoff, 0.04f, 0.2f);
+        }
+        b.route (S::Macro1, D::F1Cutoff, 0.3f, 0.5f);
+        b.route (S::Macro2, D::F1Reso, 0.25f, 0.35f);
+        b.route (S::Macro3, D::FilterEnvAmt, 0.3f, 0.5f);
+
+        fxDist (b, 0.6f, { (int) DistType::Soft, (int) DistType::Tube }, 6.f, 18.f, 0.4f, 0.9f);
+        fxDelay (b, 0.5f, { D1_8D, D1_4, D1_8 }, 0.2f, 0.45f, 0.1f, 0.25f);
+        fxReverb (b, 0.25f, 0.8f, 2.f, 0.06f, 0.14f);
+        fxPhaser (b, 0.15f);
+    }
+
+    void squelch (B& b)
+    {
+        monoVoice (b, b.chance (0.5f), 0.f, 30.f);
+        b.pick (P::Octave, { -1, 0 });
+
+        switch (b.weighted ({ 0.4f, 0.3f, 0.3f }))
+        {
+            case 0: analogA (b, b.rnd (1.9f, 2.6f)); break;
+            case 1: supersawA (b, 0.05f, 0.2f); break;
+            default: wavetableA (b, { 2, 7, 0 }, 0.2f, 0.8f); break;
+        }
+        if (b.chance (0.5f))
+        {
+            analogB (b, kSquare, 0.3f, 0.6f);
+            b.among (P::OscBCoarse, { -12.f, 0.f, 7.f, 12.f });
+            b.uni (P::OscBFine, -12.f, 12.f);
+        }
+
+        const int f = b.weighted ({ 0.4f, 0.3f, 0.3f });
+        if (f == 0)
+        {
+            filter1 (b, ft (FilterType::Formant), 600.f, 1500.f, 0.4f, 0.85f, 0.f, 0.f);
+            b.uni (P::F1Vowel, 0.f, 0.5f);
+            modEnv (b, 0.f, 5.f, 60.f, 250.f, 0.f, 0.2f, 40.f, 120.f);
+            b.route (S::ModEnv, D::F1Vowel, 0.35f, 0.7f);
+        }
+        else
+        {
+            filter1 (b, f == 1 ? ft (FilterType::BP12) : ft (FilterType::LP12), 300.f, 1500.f, 0.6f, 0.9f, 0.3f, 0.7f);
+        }
+        filterEnv (b, 0.f, 2.f, 60.f, 220.f, 0.f, 0.2f, 30.f, 90.f);
+        b.uni (P::F1Drive, 0.1f, 0.5f);
+        ampEnv (b, 0.3f, 2.f, 150.f, 400.f, 0.3f, 0.7f, 30.f, 80.f);
+
+        if (b.chance (0.4f))
+        {
+            b.lfoSync (2, LfoShape::SampleHold, { D1_16, D1_32, D1_16T }, false);
+            b.route (S::Lfo3, D::F1Cutoff, 0.1f, 0.3f);
+        }
+        b.route (S::Velocity, D::F1Cutoff, 0.1f, 0.25f);
+        b.route (S::Macro1, D::F1Cutoff, 0.3f, 0.5f);
+
+        fxDist (b, 0.5f, { 0, 3, 1 }, 6.f, 20.f, 0.4f, 0.8f);
+        fxPhaser (b, 0.3f);
+        fxDelay (b, 0.4f, { D1_16D, D1_8D, D1_16 }, 0.2f, 0.45f, 0.1f, 0.25f);
+        fxChorus (b, 0.2f);
+    }
+
+    void zap (B& b)
+    {
+        if (b.chance (0.6f)) polyVoice (b, 4, 8);
+        else monoVoice (b, false, 0.f, 0.f);
+        b.pick (P::Octave, { 0, 1 }, { 0.6f, 0.4f });
+
+        if (b.chance (0.5f))
+            fmA (b, { 0.5f, 1.f, 2.f, 3.5f, 7.f }, 0.5f, 6.f, 0.f, 0.4f);
+        else
+            analogA (b, b.rnd (0.f, 1.2f));
+
+        b.set (P::PenvAttack, 0.f);
+        if (b.chance (0.9f)) b.uni (P::PenvAmt, 24.f, 60.f);
+        else b.uni (P::PenvAmt, -48.f, -24.f);
+        b.uni (P::PenvDecay, 20.f, 200.f);
+        b.uni (P::PenvCurve, 0.6f, 1.f);
+        b.set (P::PenvDest, 0.f);
+
+        if (b.chance (0.3f)) { b.pick (P::NoiseType, { 0, 2 }); b.uni (P::NoiseLevel, 0.02f, 0.15f); }
+
+        if (b.chance (0.6f)) b.set (P::F1Type, (float) ft (FilterType::Off));
+        else filter1 (b, ft (FilterType::LP12), 3000.f, 16000.f, 0.f, 0.3f, 0.f, 0.f);
+
+        ampEnv (b, 0.f, 0.5f, 60.f, 350.f, 0.f, 0.f, 30.f, 150.f);
+        if (b.chance (0.3f)) b.route (S::PitchEnv, D::FmA, 0.2f, 0.5f);
+        b.route (S::Macro1, D::PitchEnvAmt, 0.2f, 0.4f);
+
+        fxDelay (b, 0.7f, { D1_8, D1_16D, D1_8D }, 0.3f, 0.6f, 0.15f, 0.35f);
+        fxReverb (b, 0.4f, 1.f, 3.f, 0.1f, 0.25f);
+        fxShift (b, 0.2f, 20.f, 300.f, 0.f, 0.5f);
+    }
+
+    void laser (B& b)
+    {
+        polyVoice (b, 3, 6);
+        if (b.chance (0.6f))
+        {
+            analogA (b, kSaw, 0.5f);
+            analogB (b, b.chance (0.7f) ? kSaw : kSquare, 0.7f, 0.9f);
+            b.on (P::OscBSync, true);
+            b.uni (P::OscBCoarse, 12.f, 24.f);
+            b.set (P::PenvDest, 2.f);  // sweep only the synced slave
+            b.uni (P::PenvAmt, 24.f, 48.f);
+            b.uni (P::PenvDecay, 150.f, 700.f);
+            b.uni (P::PenvCurve, 0.3f, 0.7f);
+        }
+        else
+        {
+            fmA (b, { 1.f, 2.f, 3.f }, 1.f, 5.f, 0.1f, 0.5f);
+            b.set (P::PenvDest, 0.f);
+            b.uni (P::PenvAmt, 30.f, 60.f);
+            b.uni (P::PenvDecay, 200.f, 900.f);
+            b.uni (P::PenvCurve, 0.4f, 0.8f);
+        }
+        b.set (P::PenvAttack, 0.f);
+        filter1 (b, b.chance (0.5f) ? ft (FilterType::LP12) : ft (FilterType::BP12), 2000.f, 10000.f, 0.2f, 0.5f, 0.f, 0.2f);
+        filterEnv (b, 0.f, 0.f, 200.f, 800.f, 0.f, 0.2f, 100.f, 300.f);
+        ampEnv (b, 0.f, 1.f, 200.f, 800.f, 0.f, 0.f, 100.f, 300.f);
+        b.route (S::Macro1, D::PitchEnvAmt, 0.2f, 0.4f);
+
+        fxDelay (b, 0.8f, { D1_8D, D1_4, D1_8, D1_16D }, 0.3f, 0.6f, 0.2f, 0.35f);
+        fxReverb (b, 0.5f, 1.5f, 4.f, 0.1f, 0.25f);
+        fxChorus (b, 0.2f);
+    }
+
+    void rollingBass (B& b)
+    {
+        monoVoice (b, false, 0.f, 0.f);
+        b.set (P::Octave, -1.f);
+        b.set (P::VelSens, 0.2f);
+        b.set (P::Accent, 0.2f);
+
+        analogA (b, b.chance (0.7f) ? kSaw : b.rnd (2.4f, 3.f), 0.85f);
+        if (b.chance (0.4f))
+        {
+            analogB (b, kSaw, 0.4f, 0.7f);
+            b.uni (P::OscBFine, -12.f, 12.f);
+        }
+        b.pick (P::SubShape, { 0 });
+        b.uni (P::SubLevel, 0.2f, 0.5f);
+
+        b.pick (P::F1Type, { ft (FilterType::Ladder24), ft (FilterType::LP12), ft (FilterType::Diode303) }, { 0.6f, 0.25f, 0.15f });
+        b.uni (P::F1Cutoff, 90.f, 350.f);
+        b.uni (P::F1Reso, 0.1f, 0.4f);
+        b.uni (P::F1Env, 0.35f, 0.6f);
+        b.uni (P::F1Key, 0.5f, 1.f);
+        b.uni (P::F1Drive, 0.1f, 0.35f);
+        filterEnv (b, 0.f, 0.f, 70.f, 180.f, 0.f, 0.05f, 20.f, 60.f);
+        ampEnv (b, 0.f, 1.f, 130.f, 260.f, 0.f, 0.2f, 15.f, 50.f);
+
+        if (b.chance (0.5f))
+        {
+            b.set (P::PenvAttack, 0.f);
+            b.uni (P::PenvAmt, 5.f, 14.f);
+            b.uni (P::PenvDecay, 5.f, 25.f);
+            b.set (P::PenvCurve, 0.8f);
+        }
+        b.route (S::Macro1, D::F1Cutoff, 0.2f, 0.35f);
+        b.route (S::Macro2, D::FilterEnvAmt, 0.2f, 0.3f);
+        fxDist (b, 0.25f, { 0 }, 3.f, 8.f, 0.2f, 0.4f);
+    }
+
+    void psyLead (B& b)
+    {
+        if (b.chance (0.4f)) monoVoice (b, true, 30.f, 120.f);
+        else polyVoice (b, 6, 8);
+
+        switch (b.weighted ({ 0.5f, 0.3f, 0.2f }))
+        {
+            case 0: supersawA (b, 0.2f, 0.6f); break;
+            case 1:
+                wavetableA (b, { 0, 1, 5, 7 }, 0.2f, 0.8f);
+                b.lfoSync (1, LfoShape::Triangle, { D1_4, D1_2, D1_1 }, false);
+                b.route (S::Lfo2, D::WtPosA, 0.15f, 0.4f);
+                break;
+            default: analogA (b, kSaw); break;
+        }
+        if (b.chance (0.6f))
+        {
+            analogB (b, b.chance (0.6f) ? kSaw : kSquare, 0.4f, 0.7f);
+            b.among (P::OscBCoarse, { 0.f, 7.f, 12.f, -12.f });
+            b.uni (P::OscBFine, 5.f, 15.f);
+        }
+        filter1 (b, b.chance (0.6f) ? ft (FilterType::LP12) : ft (FilterType::Ladder24), 1500.f, 6000.f, 0.15f, 0.45f, 0.1f, 0.35f);
+        filterEnv (b, 0.f, 10.f, 300.f, 1200.f, 0.3f, 0.6f, 150.f, 500.f);
+        ampEnv (b, 2.f, 20.f, 400.f, 1000.f, 0.6f, 0.9f, 150.f, 500.f);
+
+        if (b.chance (0.6f))
+        {
+            b.lfo (0, LfoShape::Sine, 4.5f, 6.5f, false);
+            b.route (S::Lfo1, D::PitchAll, 0.004f, 0.01f);
+        }
+        b.route (S::ModWheel, D::F1Cutoff, 0.2f, 0.4f);
+        b.route (S::Macro1, D::F1Cutoff, 0.25f, 0.45f);
+
+        fxDelay (b, 0.9f, { D1_8D, D1_4D, D1_4 }, 0.35f, 0.55f, 0.2f, 0.35f);
+        fxReverb (b, 0.7f, 2.f, 5.f, 0.15f, 0.3f);
+        fxChorus (b, 0.3f, false);
+        fxDist (b, 0.2f, { 0, 3 }, 4.f, 12.f, 0.3f, 0.6f);
+    }
+
+    void pluck (B& b)
+    {
+        polyVoice (b, 6, 10);
+        switch (b.weighted ({ 0.45f, 0.25f, 0.3f }))
+        {
+            case 0: analogA (b, b.chance (0.6f) ? kSaw : kSquare); break;
+            case 1: wavetableA (b, { 6, 0, 3 }, 0.f, 0.7f); break;
+            default: fmA (b, { 2.f, 3.f, 4.f }, 1.f, 3.f, 0.f, 0.2f); break;
+        }
+        filter1 (b, b.chance (0.5f) ? ft (FilterType::LP12) : ft (FilterType::Ladder24), 300.f, 1500.f, 0.1f, 0.5f, 0.4f, 0.8f);
+        filterEnv (b, 0.f, 0.f, 80.f, 300.f, 0.f, 0.f, 80.f, 250.f);
+        ampEnv (b, 0.f, 0.5f, 150.f, 600.f, 0.f, 0.f, 100.f, 400.f);
+        b.route (S::Velocity, D::F1Cutoff, 0.15f, 0.3f);
+        b.route (S::Macro1, D::FilterEnvAmt, 0.2f, 0.4f);
+
+        fxDelay (b, 0.8f, { D1_8D, D1_8, D1_16D }, 0.3f, 0.5f, 0.15f, 0.3f);
+        fxReverb (b, 0.6f, 1.2f, 3.5f, 0.1f, 0.25f);
+    }
+
+    void stab (B& b)
+    {
+        polyVoice (b, 8, 12);
+        if (b.chance (0.5f)) supersawA (b, 0.15f, 0.45f);
+        else analogA (b, kSaw);
+        analogB (b, kSaw, 0.4f, 0.7f);
+        b.among (P::OscBCoarse, { 12.f, 7.f, 0.f });
+        b.uni (P::OscBFine, -10.f, 10.f);
+
+        filter1 (b, ft (FilterType::LP12), 800.f, 3000.f, 0.1f, 0.4f, 0.3f, 0.6f);
+        filterEnv (b, 0.f, 2.f, 150.f, 400.f, 0.1f, 0.3f, 150.f, 400.f);
+        ampEnv (b, 0.f, 2.f, 200.f, 500.f, 0.f, 0.3f, 150.f, 400.f);
+        b.route (S::Macro1, D::F1Cutoff, 0.2f, 0.4f);
+
+        fxReverb (b, 0.8f, 1.5f, 4.f, 0.15f, 0.3f);
+        fxDelay (b, 0.5f, { D1_8D, D1_4 }, 0.25f, 0.45f, 0.1f, 0.25f);
+        fxChorus (b, 0.4f, false);
+        fxDist (b, 0.3f, { 0, 3 }, 4.f, 10.f, 0.3f, 0.5f);
+    }
+
+    void screech (B& b)
+    {
+        monoVoice (b, true, 20.f, 100.f);
+        analogA (b, b.chance (0.6f) ? kSaw : kSquare, 0.6f);
+        if (b.chance (0.6f))
+        {
+            analogB (b, kSaw, 0.7f, 0.9f);
+            b.on (P::OscBSync, true);
+            b.uni (P::OscBCoarse, 7.f, 19.f);
+            modEnv (b, 0.f, 20.f, 200.f, 900.f, 0.f, 0.4f, 100.f, 300.f);
+            b.route (S::ModEnv, D::PitchB, 0.1f, 0.4f);
+        }
+        filter1 (b, b.chance (0.5f) ? ft (FilterType::BP12) : ft (FilterType::LP12), 1500.f, 5000.f, 0.75f, 0.95f, 0.f, 0.25f);
+        b.uni (P::F1Drive, 0.3f, 0.7f);
+        if (b.chance (0.5f)) b.lfo (0, LfoShape::Sine, 4.f, 10.f, false);
+        else b.lfoSync (0, LfoShape::Triangle, { D1_16, D1_8T, D1_8 }, false);
+        b.route (S::Lfo1, D::F1Cutoff, 0.1f, 0.3f);
+        ampEnv (b, 1.f, 10.f, 300.f, 800.f, 0.8f, 1.f, 100.f, 300.f);
+        b.route (S::Macro1, D::F1Reso, 0.1f, 0.2f);
+
+        fxDist (b, 0.7f, { 1, 2, 3 }, 10.f, 24.f, 0.5f, 0.9f);
+        fxPhaser (b, 0.3f);
+        fxDelay (b, 0.6f, { D1_8D, D1_4, D1_16D }, 0.3f, 0.55f, 0.15f, 0.3f);
+        fxReverb (b, 0.3f, 1.f, 3.f, 0.08f, 0.18f);
+    }
+
+    void alienVoice (B& b)
+    {
+        monoVoice (b, true, 30.f, 150.f);
+        if (b.chance (0.5f)) analogA (b, kSaw);
+        else wavetableA (b, { 2 }, 0.f, 1.f);
+        if (b.chance (0.4f))
+        {
+            analogB (b, kSquare, 0.3f, 0.5f);
+            b.set (P::OscBCoarse, -12.f);
+        }
+        filter1 (b, ft (FilterType::Formant), 700.f, 1400.f, 0.4f, 0.8f, 0.f, 0.f);
+        b.uni (P::F1Vowel, 0.f, 1.f);
+        if (b.chance (0.5f)) b.lfo (0, b.chance (0.5f) ? LfoShape::SmoothRandom : LfoShape::Sine, 0.5f, 4.f, false);
+        else b.lfoSync (0, LfoShape::Triangle, { D1_8, D1_4, D1_8T }, false);
+        b.route (S::Lfo1, D::F1Vowel, 0.3f, 0.7f);
+        if (b.chance (0.5f))
+        {
+            modEnv (b, 0.f, 30.f, 150.f, 600.f, 0.f, 0.3f, 100.f, 300.f);
+            b.route (S::ModEnv, D::F1Vowel, -0.5f, 0.5f);
+        }
+        if (b.chance (0.25f))
+        {
+            b.set (P::F2Type, (float) ft (FilterType::LP12));
+            b.uni (P::F2Cutoff, 3000.f, 8000.f);
+        }
+        ampEnv (b, 5.f, 40.f, 300.f, 800.f, 0.7f, 1.f, 100.f, 400.f);
+        b.route (S::Macro1, D::F1Vowel, 0.3f, 0.6f);
+
+        fxDelay (b, 0.5f, { D1_8D, D1_4, D1_8 }, 0.25f, 0.5f, 0.1f, 0.25f);
+        fxChorus (b, 0.3f);
+        fxShift (b, 0.3f, 5.f, 60.f, 0.f, 0.3f);
+        fxReverb (b, 0.4f, 1.5f, 4.f, 0.1f, 0.25f);
+    }
+
+    void bubble (B& b)
+    {
+        if (b.chance (0.6f)) polyVoice (b, 4, 6);
+        else monoVoice (b, false, 0.f, 0.f);
+        b.pick (P::Octave, { 1, 2 }, { 0.6f, 0.4f });
+        if (b.chance (0.6f)) analogA (b, b.rnd (0.8f, 2.f));
+        else fmA (b, { 1.f, 2.f }, 0.5f, 2.f, 0.f, 0.1f);
+
+        filter1 (b, b.chance (0.4f) ? ft (FilterType::BP12) : ft (FilterType::LP12), 300.f, 1200.f, 0.7f, 0.95f, 0.4f, 0.9f);
+        b.uni (P::F1Key, 0.6f, 1.f);
+        filterEnv (b, 0.f, 0.f, 20.f, 90.f, 0.f, 0.f, 20.f, 60.f);
+        if (b.chance (0.5f))
+        {
+            b.set (P::PenvAttack, 0.f);
+            b.uni (P::PenvAmt, 7.f, 24.f);
+            b.uni (P::PenvDecay, 10.f, 60.f);
+            b.set (P::PenvCurve, 0.8f);
+        }
+        ampEnv (b, 0.f, 0.f, 60.f, 250.f, 0.f, 0.f, 30.f, 120.f);
+        b.route (S::Random, D::F1Cutoff, 0.05f, 0.2f);
+        b.route (S::Macro1, D::F1Cutoff, 0.2f, 0.4f);
+
+        fxDelay (b, 0.8f, { D1_16, D1_8T, D1_16D, D1_8 }, 0.3f, 0.6f, 0.15f, 0.35f);
+        fxReverb (b, 0.4f, 1.f, 3.f, 0.1f, 0.2f);
+        fxShift (b, 0.2f, 10.f, 150.f, 0.f, 0.4f);
+    }
+
+    void gurgle (B& b)
+    {
+        monoVoice (b, true, 0.f, 40.f);
+        analogA (b, b.chance (0.6f) ? kSaw : kTri);
+        if (b.chance (0.4f))
+        {
+            analogB (b, kSaw, 0.3f, 0.6f);
+            b.uni (P::OscBFine, -20.f, 20.f);
+        }
+        if (b.chance (0.5f))
+        {
+            filter1 (b, ft (FilterType::Formant), 500.f, 1400.f, 0.5f, 0.85f, 0.f, 0.f);
+            b.lfo (2, b.chance (0.5f) ? LfoShape::SmoothRandom : LfoShape::SampleHold, 8.f, 20.f, false);
+            b.route (S::Lfo3, D::F1Vowel, 0.3f, 0.6f);
+        }
+        else
+        {
+            filter1 (b, ft (FilterType::BP12), 400.f, 1500.f, 0.7f, 0.92f, 0.f, 0.2f);
+            b.lfo (2, LfoShape::SmoothRandom, 8.f, 20.f, false);
+            b.route (S::Lfo3, D::F1Cutoff, 0.2f, 0.45f);
+        }
+        b.lfo (0, LfoShape::Sine, 0.2f, 1.5f, false);
+        b.route (S::Lfo1, D::F1Reso, 0.05f, 0.15f);
+        if (b.chance (0.3f))
+        {
+            b.set (P::F2Type, (float) ft (FilterType::CombPos));
+            b.uni (P::F2Cutoff, 200.f, 1200.f);
+            b.uni (P::F2Reso, 0.3f, 0.7f);
+        }
+        ampEnv (b, 5.f, 30.f, 400.f, 800.f, 0.6f, 1.f, 200.f, 600.f);
+        b.route (S::Macro1, D::Lfo3Rate, 0.2f, 0.4f);
+
+        fxPhaser (b, 0.5f);
+        fxChorus (b, 0.4f);
+        fxDelay (b, 0.5f, { D1_16D, D1_8D }, 0.3f, 0.5f, 0.1f, 0.25f);
+        fxReverb (b, 0.4f, 1.5f, 4.f, 0.1f, 0.25f);
+    }
+
+    void wobble (B& b)
+    {
+        if (b.chance (0.6f)) monoVoice (b, true, 0.f, 50.f);
+        else polyVoice (b, 4, 6);
+        wavetableA (b, { 0, 1, 2, 4, 5, 7 }, 0.f, 0.3f);
+        if (b.chance (0.4f))
+        {
+            analogB (b, kSaw, 0.3f, 0.6f);
+            b.set (P::OscBCoarse, -12.f);
+        }
+        b.lfoSync (0, b.chance (0.6f) ? LfoShape::Sine : LfoShape::Triangle, { D1_4, D1_8, D1_8T, D1_16 }, true);
+        b.route (S::Lfo1, D::WtPosA, 0.3f, 0.8f);
+        filter1 (b, b.chance (0.5f) ? ft (FilterType::LP12) : ft (FilterType::Ladder24), 400.f, 2000.f, 0.2f, 0.6f, 0.f, 0.2f);
+        b.route (S::Lfo1, D::F1Cutoff, 0.15f, 0.35f);
+        ampEnv (b, 1.f, 5.f, 300.f, 600.f, 0.8f, 1.f, 50.f, 200.f);
+        b.route (S::Macro1, D::Lfo1Rate, 0.0f, 0.25f);
+
+        fxDist (b, 0.5f, { 0, 1, 3 }, 6.f, 18.f, 0.3f, 0.7f);
+        fxDelay (b, 0.4f, { D1_8D, D1_4 }, 0.2f, 0.45f, 0.1f, 0.2f);
+        fxPhaser (b, 0.2f);
+    }
+
+    void metallic (B& b)
+    {
+        polyVoice (b, 6, 10);
+        fmA (b, { 1.41f, 2.76f, 3.5f, 5.19f, 7.13f, 1.5f, 11.f }, 1.5f, 6.f, 0.1f, 0.5f);
+        modEnv (b, 0.f, 2.f, 200.f, 1200.f, 0.f, 0.1f, 200.f, 800.f);
+        b.route (S::ModEnv, D::FmA, 0.2f, 0.5f);
+        if (b.chance (0.4f))
+        {
+            b.on (P::OscBOn, true);
+            if (b.chance (0.5f))
+            {
+                b.set (P::OscBType, (float) OscType::Wavetable);
+                b.pick (P::OscBWt, { 3, 6 });
+                b.uni (P::OscBWtPos, 0.f, 1.f);
+                b.uni (P::OscBLevel, 0.3f, 0.6f);
+            }
+            else
+            {
+                b.set (P::OscBType, (float) OscType::Analog);
+                b.set (P::OscBShape, kSine);
+                b.among (P::OscBCoarse, { 7.f, 11.f, 19.f, 5.f });
+                b.set (P::OscBLevel, 0.f);
+                b.uni (P::RingLevel, 0.3f, 0.6f);
+            }
+        }
+        if (b.chance (0.3f))
+            filter1 (b, ft (FilterType::CombPos), 300.f, 2000.f, 0.5f, 0.85f, 0.f, 0.f);
+        else if (b.chance (0.5f))
+            filter1 (b, ft (FilterType::HP12), 200.f, 600.f, 0.f, 0.3f, 0.f, 0.f);
+        else
+            b.set (P::F1Type, (float) ft (FilterType::Off));
+        ampEnv (b, 0.f, 1.f, 500.f, 2500.f, 0.f, 0.2f, 400.f, 1500.f);
+        b.route (S::Velocity, D::FmA, 0.1f, 0.25f);
+        b.route (S::Macro1, D::FmA, 0.2f, 0.4f);
+
+        fxReverb (b, 0.8f, 2.f, 6.f, 0.15f, 0.35f);
+        fxDelay (b, 0.6f, { D1_8D, D1_4, D1_4D }, 0.3f, 0.5f, 0.1f, 0.25f);
+        fxChorus (b, 0.3f, false);
+    }
+
+    void riser (B& b)
+    {
+        if (b.chance (0.5f)) polyVoice (b, 2, 4);
+        else monoVoice (b, false, 0.f, 0.f);
+        b.pick (P::NoiseType, { 0, 1 });
+        b.uni (P::NoiseLevel, 0.4f, 0.9f);
+        if (b.chance (0.5f)) supersawA (b, 0.3f, 0.7f);
+        else b.on (P::OscAOn, false);
+
+        modEnv (b, 2000.f, 8000.f, 1000.f, 1000.f, 1.f, 1.f, 300.f, 1500.f);
+        b.route (S::ModEnv, D::PitchAll, 0.3f, 1.f);
+        filter1 (b, b.chance (0.5f) ? ft (FilterType::BP12) : ft (FilterType::LP12), 200.f, 600.f, 0.3f, 0.7f, 0.f, 0.f);
+        b.route (S::ModEnv, D::F1Cutoff, 0.5f, 0.9f);
+        if (b.chance (0.4f))
+        {
+            b.lfoSync (1, LfoShape::Triangle, { D1_16, D1_8, D1_16T }, false);
+            b.route (S::Lfo2, D::F1Cutoff, 0.05f, 0.15f);
+        }
+        ampEnv (b, 1000.f, 6000.f, 1000.f, 1000.f, 1.f, 1.f, 500.f, 2000.f);
+        b.route (S::Macro1, D::F1Reso, 0.2f, 0.4f);
+
+        fxReverb (b, 0.9f, 4.f, 10.f, 0.3f, 0.5f);
+        fxDelay (b, 0.7f, { D1_8D, D1_4, D1_8 }, 0.35f, 0.6f, 0.15f, 0.3f);
+        fxPhaser (b, 0.4f);
+        fxShift (b, 0.3f, 5.f, 200.f, 0.2f, 0.6f);
+    }
+
+    void downlifter (B& b)
+    {
+        if (b.chance (0.5f)) polyVoice (b, 2, 4);
+        else monoVoice (b, false, 0.f, 0.f);
+        b.pick (P::NoiseType, { 0, 1 });
+        b.uni (P::NoiseLevel, 0.3f, 0.8f);
+        if (b.chance (0.5f)) supersawA (b, 0.2f, 0.6f);
+        else analogA (b, kSaw);
+
+        b.set (P::PenvAttack, 0.f);
+        b.set (P::PenvDest, 0.f);
+        b.uni (P::PenvAmt, 24.f, 48.f);
+        b.uni (P::PenvDecay, 1500.f, 6000.f);
+        b.uni (P::PenvCurve, 0.3f, 0.7f);
+
+        filter1 (b, ft (FilterType::LP12), 200.f, 800.f, 0.2f, 0.6f, 0.f, 0.f);
+        modEnv (b, 0.f, 0.f, 2000.f, 6000.f, 0.f, 0.f, 500.f, 1500.f);
+        b.route (S::ModEnv, D::F1Cutoff, 0.5f, 0.9f);
+        ampEnv (b, 0.f, 50.f, 2000.f, 6000.f, 0.f, 0.f, 500.f, 2000.f);
+        b.route (S::Macro1, D::PitchEnvAmt, 0.2f, 0.4f);
+
+        fxReverb (b, 0.9f, 3.f, 9.f, 0.25f, 0.45f);
+        fxDelay (b, 0.6f, { D1_8D, D1_4 }, 0.3f, 0.55f, 0.15f, 0.3f);
+        if (b.chance (0.4f))
+        {
+            b.on (P::FshiftOn, true);
+            b.uni (P::FshiftHz, -400.f, -50.f);
+            b.uni (P::FshiftFb, 0.2f, 0.6f);
+            b.uni (P::FshiftMix, 0.3f, 0.6f);
+        }
+    }
+
+    void noiseFx (B& b)
+    {
+        polyVoice (b, 2, 4);
+        b.pick (P::NoiseType, { 0, 1, 2 }, { 0.45f, 0.4f, 0.15f });
+        b.uni (P::NoiseLevel, 0.8f, 1.f);
+        if (b.chance (0.3f)) { analogA (b, kSaw, 0.2f); b.uni (P::OscALevel, 0.05f, 0.25f); }
+        else b.on (P::OscAOn, false);
+
+        const int f = b.pick (P::F1Type, { ft (FilterType::BP12), ft (FilterType::Notch), ft (FilterType::CombPos), ft (FilterType::Formant) },
+                              { 0.4f, 0.2f, 0.2f, 0.2f });
+        (void) f;
+        b.uni (P::F1Cutoff, 300.f, 4000.f);
+        b.uni (P::F1Reso, 0.3f, 0.9f);
+        b.uni (P::F1Vowel, 0.f, 1.f);
+        if (b.chance (0.5f)) b.lfo (0, LfoShape::Sine, 0.1f, 1.f, true);
+        else b.lfoSync (0, LfoShape::Triangle, { D1_2, D1_1, D2_1 }, true);
+        b.route (S::Lfo1, D::F1Cutoff, 0.3f, 0.7f);
+        if (b.chance (0.3f))
+        {
+            b.set (P::F2Type, (float) ft (FilterType::HP12));
+            b.uni (P::F2Cutoff, 200.f, 1000.f);
+        }
+        ampEnv (b, 50.f, 1500.f, 1000.f, 1000.f, 0.6f, 1.f, 300.f, 2000.f);
+        b.route (S::Macro1, D::F1Cutoff, 0.3f, 0.5f);
+
+        fxPhaser (b, 0.5f);
+        fxShift (b, 0.4f, 10.f, 400.f, 0.1f, 0.6f);
+        fxDelay (b, 0.5f, { D1_8D, D1_4 }, 0.3f, 0.55f, 0.15f, 0.3f);
+        fxReverb (b, 0.7f, 2.f, 8.f, 0.2f, 0.4f);
+        if (b.chance (0.2f))
+        {
+            b.on (P::CrushOn, true);
+            b.uni (P::CrushBits, 4.f, 10.f);
+            b.uni (P::CrushRate, 1.f, 12.f);
+            b.uni (P::CrushMix, 0.3f, 0.7f);
+        }
+    }
+
+    void atmos (B& b)
+    {
+        polyVoice (b, 8, 12);
+        if (b.chance (0.5f)) supersawA (b, 0.3f, 0.7f);
+        else wavetableA (b, { 2, 0, 6 }, 0.1f, 0.8f);
+        if (b.chance (0.7f))
+        {
+            b.on (P::OscBOn, true);
+            b.pick (P::OscBType, { (int) OscType::Analog, (int) OscType::Wavetable });
+            b.set (P::OscBShape, kSaw);
+            b.pick (P::OscBWt, { 0, 2, 6 });
+            b.uni (P::OscBWtPos, 0.f, 1.f);
+            b.uni (P::OscBLevel, 0.3f, 0.6f);
+            b.among (P::OscBCoarse, { 12.f, 7.f, 0.f });
+            b.uni (P::OscBFine, 8.f, 20.f);
+        }
+        filter1 (b, b.chance (0.5f) ? ft (FilterType::LP12) : ft (FilterType::Ladder24), 600.f, 3000.f, 0.1f, 0.4f, 0.1f, 0.3f);
+        filterEnv (b, 500.f, 3000.f, 2000.f, 2000.f, 0.5f, 0.5f, 1500.f, 3000.f);
+        ampEnv (b, 400.f, 2500.f, 1000.f, 1000.f, 0.7f, 1.f, 1500.f, 5000.f);
+        b.lfo (1, LfoShape::Sine, 0.05f, 0.3f, false);
+        b.route (S::Lfo2, D::F1Cutoff, 0.1f, 0.2f);
+        b.route (S::Lfo2, D::WtPosA, 0.1f, 0.25f);
+        b.route (S::Macro1, D::F1Cutoff, 0.2f, 0.4f);
+
+        fxReverb (b, 1.f, 5.f, 15.f, 0.35f, 0.6f);
+        fxChorus (b, 0.6f, false);
+        fxDelay (b, 0.6f, { D1_4D, D1_2 }, 0.3f, 0.55f, 0.15f, 0.3f);
+        fxPhaser (b, 0.2f);
+    }
+
+    void drone (B& b)
+    {
+        polyVoice (b, 2, 3);
+        if (b.chance (0.5f)) analogA (b, kSaw);
+        else wavetableA (b, { 0, 3, 5, 7 }, 0.f, 1.f);
+        analogB (b, kSaw, 0.4f, 0.7f);
+        b.among (P::OscBCoarse, { -12.f, 0.f, 7.f });
+        b.uni (P::OscBFine, 3.f, 10.f);
+        b.uni (P::SubLevel, 0.2f, 0.4f);
+        b.uni (P::NoiseLevel, 0.05f, 0.15f);
+
+        filter1 (b, b.chance (0.5f) ? ft (FilterType::Ladder24) : ft (FilterType::LP12), 150.f, 900.f, 0.2f, 0.6f, 0.f, 0.f);
+        b.lfo (0, LfoShape::Sine, 0.02f, 0.1f, false);
+        b.route (S::Lfo1, D::F1Cutoff, 0.2f, 0.4f);
+        b.lfo (1, LfoShape::SmoothRandom, 0.05f, 0.3f, false);
+        b.route (S::Lfo2, D::Pan, 0.2f, 0.4f);
+        if (b.chance (0.4f))
+        {
+            b.set (P::F2Type, (float) ft (FilterType::CombPos));
+            b.uni (P::F2Cutoff, 60.f, 400.f);
+            b.uni (P::F2Reso, 0.4f, 0.8f);
+        }
+        ampEnv (b, 1000.f, 4000.f, 1000.f, 1000.f, 1.f, 1.f, 3000.f, 8000.f);
+        b.route (S::Macro1, D::F1Cutoff, 0.3f, 0.5f);
+
+        fxReverb (b, 0.8f, 6.f, 20.f, 0.3f, 0.5f);
+        fxPhaser (b, 0.4f);
+        fxShift (b, 0.3f, 0.1f, 3.f, 0.f, 0.3f);
+        fxChorus (b, 0.3f, false);
+    }
+} // namespace
+
+Recipe recipeFor (Category c) noexcept
+{
+    switch (c)
+    {
+        case Category::Acid:        return acid;
+        case Category::Squelch:     return squelch;
+        case Category::Zap:         return zap;
+        case Category::Laser:       return laser;
+        case Category::RollingBass: return rollingBass;
+        case Category::PsyLead:     return psyLead;
+        case Category::Pluck:       return pluck;
+        case Category::Stab:        return stab;
+        case Category::Screech:     return screech;
+        case Category::AlienVoice:  return alienVoice;
+        case Category::Bubble:      return bubble;
+        case Category::Gurgle:      return gurgle;
+        case Category::Wobble:      return wobble;
+        case Category::Metallic:    return metallic;
+        case Category::Riser:       return riser;
+        case Category::Downlifter:  return downlifter;
+        case Category::NoiseFx:     return noiseFx;
+        case Category::Atmos:       return atmos;
+        case Category::Drone:       return drone;
+        default:                    return acid;
+    }
+}
+
+} // namespace psy
