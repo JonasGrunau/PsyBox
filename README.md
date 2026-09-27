@@ -1,53 +1,122 @@
 # PsySynth
 
-A synth for psytrance sound design. Pick a category, press **Generate**, and
-then edit every parameter by hand. It builds as VST3, AU and Standalone.
+A synthesizer for psytrance sound design. Pick a category, press **Generate**,
+and you get a new sound of that kind. It could be an acid line, a zap, a rolling
+bass or a riser. Every knob stays live, so a generated patch is a starting point
+you can edit as far as you like.
+
+Builds as **VST3**, **Audio Unit** and **Standalone** (macOS).
+
+![PsySynth](docs/screenshot.png)
 
 ## Categories
 
-Acid, Squelch, Zap, Laser, Rolling Bass, Psy Lead, Pluck, Stab, Screech,
-Alien Voice, Bubble, Gurgle, Wobble, Metallic, Riser, Downlifter, Noise FX,
-Atmos, Drone. Each category has its own accent colour.
+19 kinds of sound, each with its own recipe and accent colour:
 
-## Using it
+Acid · Alien Voice · Atmos · Bubble · Downlifter · Drone · Gurgle · Laser ·
+Metallic · Noise FX · Pluck · Psy Lead · Riser · Rolling Bass · Screech ·
+Squelch · Stab · Wobble · Zap
 
-- **Generate**: rolls a new sound in the selected category. Double-clicking a category does the same.
-- **Mutate**: nudges the current sound, staying inside the category's ranges.
-- **Lock**: right-click a knob (or alt-click it) and Generate/Mutate will leave it alone.
-- **Seed**: double-click the seed and type one to get that exact sound back.
-- **Undo / Redo** step through your Generate and Mutate history.
+No drums. This is for the synth side of a track.
+
+## How it works
+
+- **Generate** runs the category's recipe with a random seed. A recipe is a set
+  of ranges and rules: which oscillator types, which filter, how the envelopes
+  move, which LFOs and effects are routed where.
+- **Mutate** nudges the current sound and stays inside the category's ranges.
+  The amount slider sets how far.
+- **Lock** a knob (right-click it, or alt-click) and Generate and Mutate leave
+  it alone.
+- The same category and seed always give the same sound. Double-click the seed
+  in the sidebar to type one in.
+- Each category remembers its patch. Switch from Acid to Zap and back and your
+  Acid sound is exactly as you left it. The first visit to a category generates
+  a fresh sound.
+- **Undo** and **Redo** in the top bar step through your Generate and Mutate
+  history.
+- Macros can be renamed: double-click the label or use the right-click menu.
 - Presets are saved to `~/Music/PsySynth/Presets/<Category>/`.
 
-## DSP
+The standalone app has a keyboard strip at the bottom. Click the keys or play
+from the computer keyboard (`A W S E D F T G Y H U J K` = C4 up, `Z`/`X` shift
+the octave). A MIDI controller works too: *Options → Audio/MIDI Settings*.
 
-- Oscillators: analog shape morph with 4-point polyBLEP/BLAMP (this includes
-  hard sync), a JP-8000-style supersaw, mip-mapped FFT wavetables with 8
-  procedural tables, and 2-op FM with feedback.
-- Filters: TPT/ZDF state-variable filter, a transistor ladder and a diode
-  ladder. Both ladders solve their nonlinear feedback with Newton-Raphson.
-  There are also formant and comb filters.
-- Voices render at 1x, 2x or 4x and go through linear-phase half-band FIR
-  decimation. Distortion runs before decimation and uses ADAA.
-- FX: distortion, bitcrusher, Hilbert frequency shifter, phaser,
-  chorus/flanger, ping-pong delay and FDN reverb.
+## Sound engine
 
-## Build
+### Oscillators
+
+Two per voice, plus sub, noise and ring mod.
+
+- Analog: continuous saw / pulse / triangle morph with 4-point polyBLEP and
+  polyBLAMP, PWM and hard sync with band-limited corrections
+- Supersaw: 7 voices with the JP-8000 detune and mix curves
+- Wavetable: 8 procedural tables, mip-mapped per octave from FFT spectra
+- FM: 2-operator phase modulation with feedback, plus osc A → B FM
+
+### Filters
+
+Two slots, serial or parallel.
+
+- Low-pass and high-pass at 6, 12, 18 and 24 dB/oct (TPT state-variable
+  sections with Butterworth tunings)
+- Band-pass 12 / 24, notch
+- Transistor ladder in LP 12, LP 24, HP and BP modes, with the saturating
+  feedback solved by Newton-Raphson each sample
+- Diode ladder (303 style), calibrated so the resonant peak sits on the cutoff
+- Formant (vowel morph) and positive/negative comb
+
+### Voices and modulation
+
+16-voice poly, mono and legato with glide, 303-style accent and
+slide. Voices run at 1x, 2x or 4x and come back through linear-phase half-band
+FIR decimators. Drive happens before decimation and uses antiderivative
+anti-aliasing.
+
+Amp, filter, mod and pitch envelopes, 3 LFOs (tempo sync, retrigger, S&H,
+smooth random) and an 8-slot mod matrix.
+
+### Effects
+
+Distortion (5 types), bitcrusher, Hilbert frequency shifter,
+phaser, chorus / flanger, ping-pong delay and an 8-line FDN reverb.
+
+## Building
+
+Requirements: macOS 11+, CMake 3.24+, Ninja, Xcode command line tools.
 
 ```sh
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
-cmake --build build          # installs to ~/Library/Audio/Plug-Ins
+cmake --build build
 ```
 
-JUCE 8 is fetched automatically. To use a local checkout instead, pass
+This installs the VST3 and AU into `~/Library/Audio/Plug-Ins` and builds the
+standalone app at `build/PsySynth_artefacts/Release/Standalone/PsySynth.app`.
+JUCE 8 is downloaded automatically. To use a local checkout instead, pass
 `-DFETCHCONTENT_SOURCE_DIR_JUCE=/path/to/JUCE`.
 
-For the core only (DSP tests and offline renders, no JUCE):
+### Core only
+
+The DSP, engine and generator don't depend on JUCE. They build and test in
+seconds:
 
 ```sh
 cmake -B build-core -G Ninja -DCMAKE_BUILD_TYPE=Release -DPSYSYNTH_BUILD_PLUGIN=OFF
 cmake --build build-core
-./build-core/psysynth_tests
-./build-core/psysynth_render <out-dir> 3   # WAVs per category
+./build-core/psysynth_tests                  # aliasing, filter response, stability, determinism
+./build-core/psysynth_render <out-dir> 3     # 3 WAVs per category
+```
+
+## Project layout
+
+```
+src/core/dsp        oscillators, filters, shapers, oversampling, effects
+src/core/engine     parameters, voices, engine
+src/core/generator  categories, recipes, generate / mutate
+src/plugin          JUCE processor and editor
+src/ui              theme, widgets, panels, displays
+tests/              Catch2 tests for the core
+tools/              WAV renderer, offscreen UI snapshot tool
 ```
 
 ## License

@@ -7,11 +7,13 @@ namespace
     constexpr int kTopH = 52;
     constexpr int kSideW = 196;
     // Rows of the main grid: height and column widths (each row sums to 1084).
+    // Widths follow from content: padding + displays + whole knob cells.
     struct RowSpec { int h; int w[3]; };
-    constexpr RowSpec kRows[4] = { { 190, { 380, 380, 324 } },
-                                   { 190, { 400, 340, 344 } },
-                                   { 200, { 400, 330, 354 } },
-                                   { 188, { 720, 150, 214 } } };
+    constexpr RowSpec kRows[4] = { { kRowH, { 384, 384, 316 } },
+                                   { kRowH, { 366, 366, 352 } },
+                                   { kRowH, { 352, 360, 372 } },
+                                   { kRowH, { 568, 136, 380 } } };
+    static_assert (kTopH + 4 * kRowH == PsySynthEditor::kH);
 } // namespace
 
 PsySynthEditor::Root::Root (PsySynthProcessor& p)
@@ -40,7 +42,7 @@ void PsySynthEditor::Root::paintOverChildren (juce::Graphics& g)
         for (int c = 0; c < 2; ++c)
         {
             x += kRows[r].w[c];
-            g.fillRect (x, y + 12, 1, kRows[r].h - 24);
+            g.fillRect (x, y + kPad, 1, kRows[r].h - 2 * kPad);
         }
         y += kRows[r].h;
     }
@@ -67,24 +69,92 @@ void PsySynthEditor::Root::resized()
 
 // ---------------------------------------------------------------------------
 
+void PsySynthEditor::Keys::drawWhiteNote (int note, juce::Graphics& g, juce::Rectangle<float> r, bool down, bool over,
+                                          juce::Colour, juce::Colour)
+{
+    const auto body = r.withTrimmedRight (1.f);   // 1 px gap between keys shows the background
+    g.setColour (down ? accent() : (over ? juce::Colour (0xff232328) : juce::Colour (0xff1a1a1e)));
+    g.fillRect (body);
+    if (note % 12 == 0)
+    {
+        g.setColour (down ? col::bg : col::textFaint);
+        g.setFont (mono (9.5f));
+        g.drawText (getWhiteNoteText (note), body.withTrimmedBottom (4.f).toNearestInt(), juce::Justification::centredBottom, false);
+    }
+}
+
+void PsySynthEditor::Keys::drawBlackNote (int, juce::Graphics& g, juce::Rectangle<float> r, bool down, bool over, juce::Colour)
+{
+    g.setColour (col::bg);
+    g.fillRect (r.expanded (1.f, 0.f).withTrimmedTop (-1.f).withTrimmedBottom (-1.f));   // outline in the gap colour
+    g.setColour (down ? accent() : (over ? juce::Colour (0xff141418) : juce::Colour (0xff0d0d10)));
+    g.fillRect (r);
+}
+
 PsySynthEditor::PsySynthEditor (PsySynthProcessor& p)
-    : AudioProcessorEditor (p), proc (p), root (p)
+    : AudioProcessorEditor (p), proc (p), root (p),
+      withKeyboard (forceKeyboard || p.wrapperType == juce::AudioProcessor::wrapperType_Standalone),
+      keyboard (p.keyboardState, juce::MidiKeyboardComponent::horizontalKeyboard)
 {
     juce::LookAndFeel::setDefaultLookAndFeel (&lnf);
     setLookAndFeel (&lnf);
-    updateAccent();
     addAndMakeVisible (root);
     root.setBounds (0, 0, kW, kH);
 
+    if (withKeyboard)
+    {
+        // Click the keys, or play from the computer keyboard (A W S E D ... = C4 up).
+        keyboard.setAvailableRange (36, 95);          // C2..B6: five octaves = 35 white keys
+        keyboard.setKeyWidth ((float) kW / 35.f);     // exactly fills the window width
+        keyboard.setScrollButtonsVisible (false);
+        keyboard.setKeyPressBaseOctave (4);
+        keyboard.setOctaveForMiddleC (4);
+        keyboard.setVelocity (0.8f, true);
+        keyboard.setWantsKeyboardFocus (true);
+        keyboard.setColour (juce::MidiKeyboardComponent::keySeparatorLineColourId, col::bg);
+        keyboard.setColour (juce::MidiKeyboardComponent::whiteNoteColourId, col::bg);   // base fill = gap colour
+        keyboard.setColour (juce::MidiKeyboardComponent::shadowColourId, juce::Colours::transparentBlack);
+        addAndMakeVisible (keyboard);
+    }
+    updateAccent();
+
     setResizable (true, true);
-    setResizeLimits (kW * 6 / 10, kH * 6 / 10, kW * 3 / 2, kH * 3 / 2);
-    getConstrainer()->setFixedAspectRatio ((double) kW / (double) kH);
-    setSize (kW, kH);
+    setResizeLimits (kW * 6 / 10, totalH() * 6 / 10, kW * 3 / 2, totalH() * 3 / 2);
+    getConstrainer()->setFixedAspectRatio ((double) kW / (double) totalH());
+    setSize (kW, totalH());
     proc.addChangeListener (this);
+    if (withKeyboard)
+    {
+        std::function<void (juce::Component&)> noFocus = [&] (juce::Component& c) {
+            c.setMouseClickGrabsKeyboardFocus (false);
+            c.setWantsKeyboardFocus (false);
+            for (auto* child : c.getChildren()) noFocus (*child);
+        };
+        noFocus (root);
+        startTimerHz (5);
+    }
+}
+
+void PsySynthEditor::timerCallback()
+{
+    if (! keyboard.isShowing() || keyboard.hasKeyboardFocus (false) || ! juce::Process::isForegroundProcess())
+        return;
+    auto* focused = juce::Component::getCurrentlyFocusedComponent();
+    // leave focus alone while text is being typed (seed, macro names, preset name)
+    if (dynamic_cast<juce::TextEditor*> (focused) != nullptr)
+        return;
+    if (focused == nullptr || focused == this || isParentOf (focused))
+        keyboard.grabKeyboardFocus();
+}
+
+void PsySynthEditor::paint (juce::Graphics& g)
+{
+    g.fillAll (col::bg);
 }
 
 PsySynthEditor::~PsySynthEditor()
 {
+    proc.keyboardState.allNotesOff (0);
     proc.removeChangeListener (this);
     setLookAndFeel (nullptr);
     juce::LookAndFeel::setDefaultLookAndFeel (nullptr);
@@ -94,16 +164,23 @@ void PsySynthEditor::resized()
 {
     const float s = (float) getWidth() / (float) kW;
     root.setTransform (juce::AffineTransform::scale (s));
+    if (withKeyboard)
+    {
+        // same logical layout as the panels: full width, 1 px hairline above
+        keyboard.setBounds (0, kH + 1, kW, kKeysH - 1);
+        keyboard.setTransform (juce::AffineTransform::scale (s));
+    }
 }
 
 void PsySynthEditor::updateAccent()
 {
     const auto c = psy::categoryInfo()[(size_t) proc.getCategory()].colour;
     const auto accent = juce::Colour ((juce::uint32) (0xff000000 | c));
-    if (accent != theme::accent())
+    if (accent != theme::accent() || withKeyboard)
     {
         theme::setAccent (accent);
         root.repaint();
+        keyboard.repaint();
     }
 }
 

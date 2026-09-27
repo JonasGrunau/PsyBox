@@ -19,8 +19,9 @@ namespace choices
     const std::vector<std::string> subShape { "Sine", "Triangle", "Square" };
     const std::vector<std::string> noiseType { "White", "Pink", "Digital" };
     const std::vector<std::string> penvDest { "A + B", "Osc A", "Osc B" };
-    const std::vector<std::string> filterType { "Off", "LP 12", "BP 12", "HP 12", "Notch", "Ladder 24",
-                                                "Diode 303", "Formant", "Comb +", "Comb -" };
+    const std::vector<std::string> filterType { "Off", "LP 6", "LP 12", "LP 18", "LP 24", "HP 6", "HP 12", "HP 18", "HP 24",
+                                                "BP 12", "BP 24", "Notch", "Ladder LP 12", "Ladder LP 24", "Ladder HP",
+                                                "Ladder BP", "Diode 303", "Formant", "Comb +", "Comb -" };
     const std::vector<std::string> filterRouting { "Serial", "Parallel" };
     const std::vector<std::string> lfoShape { "Sine", "Triangle", "Saw Up", "Saw Down", "Square", "S&H", "Smooth" };
     const std::vector<std::string> syncDiv { "4/1", "2/1", "1/1", "1/2", "1/2D", "1/2T", "1/4", "1/4D", "1/4T",

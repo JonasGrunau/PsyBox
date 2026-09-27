@@ -5,6 +5,8 @@
 // builds its JUCE parameters from the same table, so the three can never
 // disagree about a range.
 
+#include "dsp/FilterTypes.h"
+
 #include <array>
 #include <cmath>
 #include <cstdint>
@@ -60,7 +62,6 @@ float syncDivBeats (int index) noexcept;
 
 enum class VoiceMode : int { Poly, Mono, Legato };
 enum class OscType : int { Analog, Supersaw, Wavetable, FM };
-enum class FilterType : int { Off, LP12, BP12, HP12, Notch, Ladder24, Diode303, Formant, CombPos, CombNeg };
 enum class LfoShape : int { Sine, Triangle, SawUp, SawDown, Square, SampleHold, SmoothRandom };
 enum class DistType : int { Soft, Hard, Fold, Tube, Rectify };
 
@@ -137,7 +138,7 @@ enum class ModDst : int
     X(PenvCurve,   "penv_curve",   "Curve",       "Pitch Env", Linear, 0.f, 1.f, 0.7f, 1.f, Percent, nullptr, false) \
     X(PenvDest,    "penv_dest",    "Target",      "Pitch Env", Choice, 0, 2, 0, 1.f, None, &choices::penvDest, false) \
     \
-    X(F1Type,      "f1_type",      "Type",        "Filter 1", Choice, 0, 9, 1, 1.f, None, &choices::filterType, false) \
+    X(F1Type,      "f1_type",      "Type",        "Filter 1", Choice, 0, 19, 2, 1.f, None, &choices::filterType, false) \
     X(F1Cutoff,    "f1_cutoff",    "Cutoff",      "Filter 1", Exp, 20.f, 20000.f, 8000.f, 1.f, Hz, nullptr, true) \
     X(F1Reso,      "f1_reso",      "Reso",        "Filter 1", Linear, 0.f, 1.f, 0.1f, 1.f, Percent, nullptr, true) \
     X(F1Drive,     "f1_drive",     "Drive",       "Filter 1", Linear, 0.f, 1.f, 0.f, 1.f, Percent, nullptr, true) \
@@ -145,7 +146,7 @@ enum class ModDst : int
     X(F1Key,       "f1_key",       "Key",         "Filter 1", Linear, 0.f, 1.f, 0.f, 1.f, Percent, nullptr, false) \
     X(F1Vowel,     "f1_vowel",     "Vowel",       "Filter 1", Linear, 0.f, 1.f, 0.f, 1.f, Percent, nullptr, true) \
     \
-    X(F2Type,      "f2_type",      "Type",        "Filter 2", Choice, 0, 9, 0, 1.f, None, &choices::filterType, false) \
+    X(F2Type,      "f2_type",      "Type",        "Filter 2", Choice, 0, 19, 0, 1.f, None, &choices::filterType, false) \
     X(F2Cutoff,    "f2_cutoff",    "Cutoff",      "Filter 2", Exp, 20.f, 20000.f, 12000.f, 1.f, Hz, nullptr, true) \
     X(F2Reso,      "f2_reso",      "Reso",        "Filter 2", Linear, 0.f, 1.f, 0.1f, 1.f, Percent, nullptr, true) \
     X(F2Drive,     "f2_drive",     "Drive",       "Filter 2", Linear, 0.f, 1.f, 0.f, 1.f, Percent, nullptr, false) \

@@ -6,7 +6,29 @@
 #include <memory>
 #include <vector>
 
-// A titled area of the main grid. Header on top, content below.
+// Cells of the control grid (see theme::kCellW). x0 is the left edge of the
+// first cell, which sits kCellInset left of the first knob.
+struct CellGrid
+{
+    int x0 = 0, y0 = 0;
+    juce::Rectangle<int> cell (int col, int row, int span = 1) const
+    {
+        return { x0 + col * theme::kCellW, y0 + row * (theme::kCellH + theme::kRowGap), span * theme::kCellW, theme::kCellH };
+    }
+    // A selector spanning cells, aligned to the knob edges, centred in the control area.
+    juce::Rectangle<int> control (int col, int row, int span = 1) const
+    {
+        return cell (col, row, span).reduced (theme::kCellInset, 0).removeFromTop (theme::kKnobD)
+            .withSizeKeepingCentre (theme::cellsW (span), theme::kCtrlH);
+    }
+    // Same span, full cell height, for components that draw their own caption.
+    juce::Rectangle<int> captioned (int col, int row, int span = 1) const
+    {
+        return cell (col, row, span).reduced (theme::kCellInset, 0);
+    }
+};
+
+// A titled area of the main grid. Header row on top, a two-row body below.
 class Section : public juce::Component
 {
 public:
@@ -15,12 +37,20 @@ public:
 
 protected:
     juce::String title;
-    juce::Rectangle<int> header() const { return getLocalBounds().reduced (theme::kPad, 0).removeFromTop (theme::kHeaderH + 6).withTrimmedTop (6); }
-    juce::Rectangle<int> body() const { return getLocalBounds().reduced (theme::kPad, 0).withTrimmedTop (theme::kHeaderH + 10).withTrimmedBottom (10); }
-    int titleWidth() const;
+    juce::Rectangle<int> header() const { return { theme::kPad, theme::kPad, getWidth() - 2 * theme::kPad, theme::kHeaderH }; }
+    juce::Rectangle<int> body() const
+    {
+        return { theme::kPad, theme::kPad + theme::kHeaderH + theme::kHeaderGap, getWidth() - 2 * theme::kPad, theme::kBodyH };
+    }
+    int titleWidth() const;   // title plus the gap after it
+    // Grid whose first knob starts at x (defaults to the body's left edge).
+    CellGrid grid (int x = -1) const { return { (x < 0 ? body().getX() : x) - theme::kCellInset, body().getY() }; }
+    static void place (juce::Component* c, juce::Rectangle<int> r) { c->setBounds (r); }
 
-    // Lays out components left to right in equal cells.
-    static void row (juce::Rectangle<int> area, const std::vector<juce::Component*>& items, int cellW = 0);
+    // Captions drawn under selectors that have none of their own.
+    struct Caption { juce::String text; juce::Rectangle<int> area; };
+    std::vector<Caption> captions;
+    void addCaption (const juce::String& t, juce::Rectangle<int> cell) { captions.push_back ({ t, cell.removeFromBottom (theme::kLabelH) }); }
 };
 
 // Helper that owns knobs for a panel.
@@ -49,7 +79,7 @@ private:
     Segmented type;
     WaveDisplay wave;
     KnobSet ks;
-    ParamKnob *shape, *pw, *detune, *wtpos, *ratio, *fm, *fb, *coarse, *fine, *level, *xmod = nullptr;
+    ParamKnob *shape, *pw, *detune, *wtpos, *ratio, *fm, *fb, *coarse, *fine, *xmod = nullptr;
     ParamCombo table;
     ToggleDot retrig;
     std::unique_ptr<ToggleDot> sync;
@@ -62,14 +92,12 @@ class MixerPanel : public Section
 public:
     explicit MixerPanel (PsySynthProcessor&);
     void resized() override;
-    void paint (juce::Graphics&) override;
 
 private:
     KnobSet ks;
-    ParamKnob *sub, *noise, *ring, *pAmt, *pAtk, *pDec, *pCurve;
+    ParamKnob *oscA, *oscB, *sub, *noise, *ring;
     Segmented subOct;
-    ParamCombo subShape, noiseType, penvDest;
-    PitchEnvDisplay penvDisplay;
+    ParamCombo subShape, noiseType;
 };
 
 class FilterPanel : public Section, private juce::Timer
@@ -95,7 +123,6 @@ class VoicePanel : public Section
 public:
     explicit VoicePanel (PsySynthProcessor&);
     void resized() override;
-    void paint (juce::Graphics&) override;
 
 private:
     Segmented mode, glideMode;
@@ -110,10 +137,13 @@ public:
     void resized() override;
 
 private:
-    TabStrip tabs { { "Amp", "Filter", "Mod" } };
+    TabStrip tabs { { "Amp", "Filter", "Mod", "Pitch" } };
     EnvDisplay display;
+    PitchEnvDisplay pitchDisplay;
+    ParamCombo pitchDest;
     KnobSet ks;
-    ParamKnob* knobs[3][4] {};
+    ParamKnob* knobs[4][4] {};
+    int current = 0;
     void show (int env);
 };
 
@@ -130,8 +160,8 @@ private:
     KnobSet ks;
     struct Page
     {
-        std::unique_ptr<ParamCombo> shape, div;
-        ParamKnob *rate = nullptr, *phase = nullptr;
+        std::unique_ptr<ParamCombo> shape;
+        ParamKnob *rate = nullptr, *div = nullptr, *phase = nullptr;
         std::unique_ptr<ToggleDot> sync, retrig;
     };
     Page pages[3];
@@ -173,21 +203,23 @@ private:
     };
     Page pages[7];
     KnobSet ks;
-    ParamKnob* delayTime = nullptr;
-    std::unique_ptr<ParamCombo> delayDiv;
+    ParamKnob *delayTime = nullptr, *delayDiv = nullptr;
     int current = 0;
     bool lastDelaySync = true;
     void show (int page);
     void timerCallback() override;
 };
 
-class MacroPanel : public Section
+class MacroPanel : public Section, public juce::ChangeListener
 {
 public:
     explicit MacroPanel (PsySynthProcessor&);
+    ~MacroPanel() override;
     void resized() override;
+    void changeListenerCallback (juce::ChangeBroadcaster*) override;
 
 private:
+    PsySynthProcessor& proc;
     KnobSet ks;
 };
 
@@ -224,14 +256,13 @@ public:
 private:
     PsySynthProcessor& proc;
     int hover = -1;
-    juce::TextButton generateButton { "Generate" }, mutateButton { "Mutate" }, clearLocks { "Clear" };
+    juce::TextButton generateButton { "Generate" }, mutateButton { "Mutate" }, clearLocks { "Unlock" };
     juce::Slider mutateAmount;
-    IconButton undoButton { IconButton::Icon::Undo, "Undo generate / mutate" };
-    IconButton redoButton { IconButton::Icon::Redo, "Redo" };
     juce::Label seedLabel;
+    juce::Rectangle<int> seedCaption;
 
-    static constexpr int kRowH = 26;
-    static constexpr int kListTop = 40;
+    static constexpr int kItemH = 26;
+    static constexpr int kListTop = theme::kPad + theme::kHeaderH + theme::sp::sm;
     int categoryAt (juce::Point<int>) const;
     juce::Rectangle<int> rowBounds (int i) const;
     juce::Rectangle<int> infoArea() const;
@@ -245,17 +276,19 @@ public:
     ~TopBar() override;
     void paint (juce::Graphics&) override;
     void resized() override;
-    void changeListenerCallback (juce::ChangeBroadcaster*) override { repaint(); }
+    void changeListenerCallback (juce::ChangeBroadcaster*) override;
 
 private:
     PsySynthProcessor& proc;
+    IconButton undoButton { IconButton::Icon::Undo, "Undo" };
+    IconButton redoButton { IconButton::Icon::Redo, "Redo" };
     IconButton prev { IconButton::Icon::Left, "Previous preset" };
     IconButton next { IconButton::Icon::Right, "Next preset" };
     IconButton menu { IconButton::Icon::Menu, "Presets" };
     IconButton save { IconButton::Icon::Save, "Save preset" };
     Segmented quality;
     ParamKnob volume;
-    juce::Rectangle<int> presetArea;
+    juce::Rectangle<int> presetArea, qualityCaption, volumeCaption;
     void showPresetMenu();
     void savePresetDialog();
     std::unique_ptr<juce::AlertWindow> saveWindow;

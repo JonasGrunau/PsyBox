@@ -31,13 +31,19 @@ ParamKnob::ParamKnob (PsySynthProcessor& p, P prm, const juce::String& labelOver
 void ParamKnob::resized()
 {
     auto r = getLocalBounds();
-    r.removeFromBottom (kLabelH);
-    const int d = std::min (r.getWidth(), r.getHeight());
-    slider.setBounds (r.withSizeKeepingCentre (d, d));
+    if (compact)
+    {
+        const int d = std::min (r.getWidth(), r.getHeight());
+        slider.setBounds (r.withSizeKeepingCentre (d, d));
+        return;
+    }
+    const int d = std::min (r.getWidth(), r.getHeight() - kLabelGap - kLabelH);
+    slider.setBounds (r.getCentreX() - d / 2, r.getY(), d, d);
 }
 
 void ParamKnob::paint (juce::Graphics& g)
 {
+    if (compact) return;
     const auto area = getLocalBounds().removeFromBottom (kLabelH);
     const bool hot = slider.isMouseOverOrDragging();
     if (hot)
@@ -50,8 +56,45 @@ void ParamKnob::paint (juce::Graphics& g)
     {
         g.setColour (isEnabled() ? col::textDim : col::textFaint);
         g.setFont (label (10.f));
-        g.drawText (labelText.toUpperCase(), area, juce::Justification::centred, false);
+        g.drawText (labelText.toUpperCase(), area, juce::Justification::centred, true);
     }
+}
+
+void ParamKnob::mouseDoubleClick (const juce::MouseEvent& e)
+{
+    if (onRename && e.eventComponent == this && e.y >= getHeight() - kLabelH - kLabelGap)
+        startRename();
+}
+
+void ParamKnob::startRename()
+{
+    editor = std::make_unique<juce::TextEditor>();
+    editor->setFont (label (10.f));
+    editor->setJustification (juce::Justification::centred);
+    editor->setInputRestrictions (12);
+    editor->setIndents (0, 0);
+    editor->setBorder ({});
+    editor->setColour (juce::TextEditor::backgroundColourId, col::well);
+    editor->setText (labelText, false);
+    editor->selectAll();
+    editor->onReturnKey = [this] { finishRename (true); };
+    editor->onEscapeKey = [this] { finishRename (false); };
+    editor->onFocusLost = [this] { finishRename (true); };
+    addAndMakeVisible (*editor);
+    editor->setBounds (getLocalBounds().removeFromBottom (kLabelH + 2));
+    editor->grabKeyboardFocus();
+}
+
+void ParamKnob::finishRename (bool commit)
+{
+    if (editor == nullptr) return;
+    const auto text = editor->getText();
+    // Defer the delete: this can run from inside the editor's own callback.
+    juce::MessageManager::callAsync ([safe = juce::Component::SafePointer<ParamKnob> (this)] {
+        if (safe != nullptr) safe->editor.reset();
+    });
+    editor->setVisible (false);
+    if (commit && onRename) onRename (text);
 }
 
 void ParamKnob::mouseDown (const juce::MouseEvent& e)
@@ -69,8 +112,10 @@ void ParamKnob::showMenu()
     m.addSectionHeader (juce::String (psy::def (param).group) + " / " + psy::def (param).name);
     m.addItem (1, locked ? "Unlock" : "Lock (keep on Generate)");
     m.addItem (2, "Reset to default");
+    if (onRename) m.addItem (3, "Rename...");
     m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&slider), [this, locked] (int r) {
         if (r == 1) proc.setLocked (param, ! locked);
+        if (r == 3) startRename();
         if (r == 2)
         {
             auto* p = proc.param (param);
@@ -175,6 +220,31 @@ int ToggleDot::idealWidth() const
 
 void ToggleDot::paint (juce::Graphics& g)
 {
+    if (stacked)
+    {
+        // switch: 26 x 14 pill, knob slides right when on
+        const auto top = getLocalBounds().removeFromTop (kKnobD).toFloat();
+        const auto pill = top.withSizeKeepingCentre (26.f, 14.f);
+        const bool hot = isMouseOver();
+        if (on)
+        {
+            g.setColour (accent().withAlpha (0.22f));
+            g.fillRoundedRectangle (pill, 7.f);
+            g.setColour (accent());
+            g.fillEllipse (pill.getRight() - 12.f, pill.getY() + 2.f, 10.f, 10.f);
+        }
+        else
+        {
+            g.setColour (hot ? col::textFaint : col::lineStrong);
+            g.drawRoundedRectangle (pill.reduced (0.5f), 6.5f, 1.f);
+            g.setColour (hot ? col::textDim : col::textFaint);
+            g.fillEllipse (pill.getX() + 3.f, pill.getY() + 3.f, 8.f, 8.f);
+        }
+        g.setColour (on || hot ? col::text : col::textDim);
+        g.setFont (label (10.f));
+        g.drawText (text.toUpperCase(), getLocalBounds().removeFromBottom (kLabelH), juce::Justification::centred, false);
+        return;
+    }
     const float cy = (float) getHeight() * 0.5f;
     const auto dot = juce::Rectangle<float> (1.f, cy - 4.f, 8.f, 8.f);
     if (on)
@@ -203,9 +273,27 @@ void ToggleDot::mouseDown (const juce::MouseEvent&)
 ParamCombo::ParamCombo (PsySynthProcessor& p, P prm, const juce::String& cap) : caption (cap)
 {
     const auto& d = psy::def (prm);
+    // The filter list is long; group it by family in the popup.
+    const bool isFilter = d.choices == &psy::choices::filterType;
+    const auto heading = [] (int index) -> const char* {
+        using T = psy::FilterType;
+        switch ((T) index)
+        {
+            case T::LP6: return "Low-pass";
+            case T::HP6: return "High-pass";
+            case T::BP12: return "Band-pass / Notch";
+            case T::LadderLP12: return "Ladder";
+            case T::Diode303: return "Character";
+            default: return nullptr;
+        }
+    };
     int id = 1;
     for (const auto& c : *d.choices)
+    {
+        if (isFilter)
+            if (const char* h = heading (id - 1)) box.addSectionHeading (h);
         box.addItem (c, id++);
+    }
     addAndMakeVisible (box);
     attachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (p.apvts, d.id, box);
 }
@@ -214,7 +302,7 @@ void ParamCombo::resized()
 {
     auto r = getLocalBounds();
     if (caption.isNotEmpty())
-        r.removeFromTop (ParamKnob::kLabelH - 2);
+        r = r.removeFromTop (kKnobD).withSizeKeepingCentre (r.getWidth(), kCtrlH);
     box.setBounds (r);
 }
 
@@ -224,7 +312,7 @@ void ParamCombo::paint (juce::Graphics& g)
         return;
     g.setColour (col::textDim);
     g.setFont (label (10.f));
-    g.drawText (caption.toUpperCase(), getLocalBounds().removeFromTop (ParamKnob::kLabelH - 2), juce::Justification::centredLeft, false);
+    g.drawText (caption.toUpperCase(), getLocalBounds().removeFromBottom (kLabelH), juce::Justification::centred, false);
 }
 
 // ---------------------------------------------------------------------------
@@ -251,17 +339,23 @@ TabStrip::TabStrip (juce::StringArray n) : names (std::move (n)) {}
 
 std::vector<juce::Rectangle<int>> TabStrip::tabBounds() const
 {
+    // Text runs flush with the strip edges; tabs are sp::lg apart.
     std::vector<juce::Rectangle<int>> out;
     int x = 0;
     const auto f = heading (9.5f);
     for (int i = 0; i < names.size(); ++i)
     {
-        const bool lit = (bool) isLit;
-        const int w = juce::GlyphArrangement::getStringWidthInt (f, names[i].toUpperCase()) + (lit ? 12 : 0) + 16;
+        const int w = juce::GlyphArrangement::getStringWidthInt (f, names[i].toUpperCase()) + (isLit ? 11 : 0);
         out.push_back ({ x, 0, w, getHeight() });
-        x += w;
+        x += w + sp::lg;
     }
     return out;
+}
+
+int TabStrip::idealWidth() const
+{
+    const auto t = tabBounds();
+    return t.empty() ? 0 : t.back().getRight();
 }
 
 void TabStrip::setSelected (int i)
@@ -281,9 +375,9 @@ void TabStrip::paint (juce::Graphics& g)
         if (sel)
         {
             g.setColour (accent());
-            g.fillRect (r.getX() + 8, r.getBottom() - 2, r.getWidth() - 16, 2);
+            g.fillRect (r.getX(), r.getBottom() - 2, r.getWidth(), 2);
         }
-        auto tr = r.reduced (8, 0);
+        auto tr = r;
         if (isLit)
         {
             const bool lit = isLit (i);
@@ -302,7 +396,7 @@ void TabStrip::mouseDown (const juce::MouseEvent& e)
 {
     const auto tabs = tabBounds();
     for (int i = 0; i < (int) tabs.size(); ++i)
-        if (tabs[(size_t) i].contains (e.getPosition()))
+        if (tabs[(size_t) i].expanded (sp::sm, 0).contains (e.getPosition()))
         {
             setSelected (i);
             if (onChange) onChange (i);
@@ -314,7 +408,7 @@ void TabStrip::mouseMove (const juce::MouseEvent& e)
     const auto tabs = tabBounds();
     int h = -1;
     for (int i = 0; i < (int) tabs.size(); ++i)
-        if (tabs[(size_t) i].contains (e.getPosition())) h = i;
+        if (tabs[(size_t) i].expanded (sp::sm, 0).contains (e.getPosition())) h = i;
     if (h != hover) { hover = h; repaint(); }
 }
 
@@ -343,12 +437,17 @@ void IconButton::paintButton (juce::Graphics& g, bool over, bool down)
         case Icon::Undo:
         case Icon::Redo:
         {
-            const float dir = icon == Icon::Undo ? -1.f : 1.f;
-            p.addCentredArc (c.x, c.y + s * 0.2f, s, s, 0.f, dir * -1.9f, dir * 0.9f, true);
-            const auto tip = juce::Point<float> (c.x, c.y + s * 0.2f).getPointOnCircumference (s, dir * -1.9f);
-            p.startNewSubPath (tip.x + dir * 3.2f, tip.y - 2.8f);
-            p.lineTo (tip);
-            p.lineTo (tip.x + dir * 3.8f, tip.y + 2.2f);
+            // U-turn arrow on a 24-unit grid (arrowhead left for undo), mirrored for redo
+            const float u = s / 8.f, dir = icon == Icon::Undo ? 1.f : -1.f;
+            const auto pt = [&] (float x, float y) { return juce::Point<float> (c.x + dir * (x - 12.f) * u, c.y + (y - 12.f) * u); };
+            p.startNewSubPath (pt (9.f, 14.f));
+            p.lineTo (pt (4.f, 9.f));
+            p.lineTo (pt (9.f, 4.f));
+            p.startNewSubPath (pt (4.f, 9.f));
+            p.lineTo (pt (14.5f, 9.f));
+            const auto ac = pt (14.5f, 14.5f);
+            p.addCentredArc (ac.x, ac.y, 5.5f * u, 5.5f * u, 0.f, 0.f, dir * juce::MathConstants<float>::pi, false);
+            p.lineTo (pt (11.f, 20.f));
             break;
         }
         case Icon::Left:

@@ -7,6 +7,7 @@
 // that detune the cutoff and make resonance depend on sample rate.
 
 #include "Common.h"
+#include "FilterTypes.h"
 
 #include <array>
 #include <complex>
@@ -53,13 +54,38 @@ inline float prewarp (float hz, float sampleRate) noexcept
 }
 
 // ---------------------------------------------------------------------------
+// TPT one-pole (6 dB/oct), used alone and to make the odd-order slopes.
+// ---------------------------------------------------------------------------
+struct TptOnePole
+{
+    float s = 0.f, G = 0.f;
+    void reset() noexcept { s = 0.f; }
+    void setG (float g) noexcept { G = g / (1.f + g); }
+    float lp (float x) noexcept
+    {
+        const float v = (x - s) * G;
+        const float y = v + s;
+        s = y + v;
+        return y;
+    }
+    float hp (float x) noexcept { return x - lp (x); }
+};
+
+// ---------------------------------------------------------------------------
 // Four-pole transistor ladder. Cascade of TPT one-poles; the feedback node
 // u = tanh(x - k*y4) is solved implicitly (y4 is affine in u).
+// The stage outputs are kept so other responses can be mixed from them
+// (Oberheim Xpander style) while the resonance always comes from y4:
+//   LP12 = y2, LP24 = y4, HP24 = u - 4y1 + 6y2 - 4y3 + y4, BP = y2 - 2y3 + y4
 // ---------------------------------------------------------------------------
 struct Ladder
 {
-    std::array<float, 4> s {};
-    float G = 0.f, k = 0.f;
+    std::array<float, 4> s {}, y {};
+    float G = 0.f, k = 0.f, u = 0.f;
+
+    float lp12() const noexcept { return y[1]; }
+    float hp24() const noexcept { return u - 4.f * y[0] + 6.f * y[1] - 4.f * y[2] + y[3]; }
+    float bp() const noexcept { return 4.f * (y[1] - 2.f * y[2] + y[3]); }   // x4: unity at the cutoff
 
     void reset() noexcept { s.fill (0.f); }
 
@@ -77,7 +103,7 @@ struct Ladder
         const float b = beta * (G2 * G * s[0] + G2 * s[1] + G * s[2] + s[3]);
 
         // Solve u = tanh(x - k (a u + b)) by Newton, starting from the linear guess.
-        float u = (x - k * b) / (1.f + k * a);
+        u = (x - k * b) / (1.f + k * a);
         for (int it = 0; it < 2; ++it)
         {
             const float t = std::tanh (x - k * (a * u + b));
@@ -87,12 +113,12 @@ struct Ladder
         }
 
         float in = u;
-        for (int i = 0; i < 4; ++i)
+        for (size_t i = 0; i < 4; ++i)
         {
-            const float v = (in - s[(size_t) i]) * G;
-            const float y = v + s[(size_t) i];
-            s[(size_t) i] = y + v;
-            in = y;
+            const float v = (in - s[i]) * G;
+            y[i] = v + s[i];
+            s[i] = y[i] + v;
+            in = y[i];
         }
         return in;
     }
@@ -325,6 +351,13 @@ struct Comb
 
 // ---------------------------------------------------------------------------
 // One filter slot of a voice: any of the types above behind a common API.
+//
+// Slopes are built from Butterworth prototypes so that at zero resonance
+// each one has a clean -3 dB corner at the cutoff:
+//   12 dB: one SVF          18 dB: one-pole + SVF (k = 1)
+//   24 dB: two SVFs (k = 1.848, 0.765)
+// Resonance narrows only the last (highest-Q) section, which keeps the
+// peak on the cutoff and the rest of the curve steep.
 // ---------------------------------------------------------------------------
 class FilterSlot
 {
@@ -346,6 +379,8 @@ public:
     void reset() noexcept
     {
         svf.reset();
+        svf2.reset();
+        pole.reset();
         ladder.reset();
         diode.reset();
         formant.reset();
@@ -354,67 +389,90 @@ public:
 
     void setType (int t) noexcept
     {
-        if (t != type)
+        if (t != (int) type)
         {
-            type = t;
+            type = (FilterType) t;
             reset();
         }
     }
 
-    int getType() const noexcept { return type; }
+    int getType() const noexcept { return (int) type; }
 
     // Call at control rate (every base-rate sample).
     void update (float cutoffHz, float reso, float drive, float vowel) noexcept
     {
+        using T = FilterType;
         cutoffHz = std::clamp (cutoffHz, 16.f, 0.47f * fs);
         reso = clamp01 (reso);
         driveGain = 1.f + drive * drive * 15.f;
+        const float g = prewarp (cutoffHz, fs);
+        const float q = 1.f - 0.985f * reso;   // shrinks the damping of the resonant section
         switch (type)
         {
-            case 1: case 2: case 3: case 4:
-                svf.setG (prewarp (cutoffHz, fs), 2.f * (1.f - 0.985f * reso));
-                break;
-            case 5: ladder.set (prewarp (cutoffHz, fs), reso); break;
-            case 6: diode.set (cutoffHz, fs, reso); break;
-            case 7: formant.set (vowel, std::clamp (std::sqrt (cutoffHz / 1000.f), 0.35f, 2.5f), reso, fs); break;
-            case 8: comb.set (cutoffHz, 0.985f * reso, fs); break;
-            case 9: comb.set (cutoffHz, -0.985f * reso, fs); break;
-            default: break;
+            case T::LP6: case T::HP6: pole.setG (g); break;
+            case T::LP12: case T::HP12: case T::BP12: case T::Notch: svf.setG (g, 2.f * q); break;
+            case T::LP18: case T::HP18: pole.setG (g); svf.setG (g, 1.f * q); break;
+            case T::LP24: case T::HP24: svf2.setG (g, 1.848f); svf.setG (g, 0.765f * q); break;
+            case T::BP24: svf2.setG (g, 1.f); svf.setG (g, 2.f * q); break;
+            case T::LadderLP12: case T::Ladder24: case T::LadderHP: case T::LadderBP: ladder.set (g, reso); break;
+            case T::Diode303: diode.set (cutoffHz, fs, reso); break;
+            case T::Formant: formant.set (vowel, std::clamp (std::sqrt (cutoffHz / 1000.f), 0.35f, 2.5f), reso, fs); break;
+            case T::CombPos: comb.set (cutoffHz, 0.985f * reso, fs); break;
+            case T::CombNeg: comb.set (cutoffHz, -0.985f * reso, fs); break;
+            case T::Off: case T::Count: break;
         }
-        resoCache = reso;
     }
 
     float process (float x) noexcept
     {
+        using T = FilterType;
+        const auto shaped = [this] (float in) {
+            return driveGain > 1.001f ? fastTanh (in * driveGain) / std::sqrt (driveGain) : in;
+        };
         switch (type)
         {
-            case 1: case 2: case 3: case 4:
+            case T::LP6: return pole.lp (shaped (x));
+            case T::HP6: return pole.hp (shaped (x));
+            case T::LP12: return svf.process (shaped (x)).lp;
+            case T::HP12: return svf.process (shaped (x)).hp;
+            case T::BP12: return svf.process (shaped (x)).bp * (0.3f + 0.7f * svf.k);
+            case T::Notch: { const float in = shaped (x); return in - svf.k * svf.process (in).bp; }
+            case T::LP18: return svf.process (pole.lp (shaped (x))).lp;
+            case T::HP18: return svf.process (pole.hp (shaped (x))).hp;
+            case T::LP24: return svf.process (svf2.process (shaped (x)).lp).lp;
+            case T::HP24: return svf.process (svf2.process (shaped (x)).hp).hp;
+            case T::BP24:
             {
-                const float in = driveGain > 1.001f ? fastTanh (x * driveGain) / std::sqrt (driveGain) : x;
-                const auto o = svf.process (in);
-                if (type == 1) return o.lp;
-                if (type == 2) return o.bp * (0.3f + 0.7f * svf.k);
-                if (type == 3) return o.hp;
-                return in - svf.k * o.bp;  // notch
+                const float wide = svf2.process (shaped (x)).bp * svf2.k;
+                return svf.process (wide).bp * (0.3f + 0.7f * svf.k);
             }
-            case 5:
-                return ladder.process (x * 0.8f * driveGain) * (1.f + 0.6f * ladder.k) / (0.8f * std::sqrt (driveGain));
-            case 6:
+            case T::LadderLP12: case T::Ladder24: case T::LadderHP: case T::LadderBP:
+            {
+                const float lp = ladder.process (x * 0.8f * driveGain);
+                const float norm = 1.f / (0.8f * std::sqrt (driveGain));
+                const float comp = 1.f + 0.6f * ladder.k;   // passband loss from the feedback
+                if (type == T::Ladder24) return lp * comp * norm;
+                if (type == T::LadderLP12) return ladder.lp12() * comp * norm;
+                if (type == T::LadderHP) return ladder.hp24() * norm;
+                return ladder.bp() * (1.f + 0.25f * ladder.k) * norm;
+            }
+            case T::Diode303:
                 return diode.process (x * 0.9f * driveGain) * (1.f + 0.35f * diode.k) / (0.9f * std::sqrt (driveGain));
-            case 7:
+            case T::Formant:
                 return formant.process (driveGain > 1.001f ? fastTanh (x * driveGain) : x);
-            case 8: case 9:
+            case T::CombPos: case T::CombNeg:
                 return comb.process (driveGain > 1.001f ? fastTanh (x * driveGain) : x);
-            default:
+            case T::Off: case T::Count:
                 return x;
         }
     }
 
 private:
     float fs = 48000.f;
-    int type = 0;
-    float driveGain = 1.f, resoCache = 0.f;
-    Svf svf;
+    FilterType type = FilterType::Off;
+    float driveGain = 1.f;
+    Svf svf, svf2;
+    TptOnePole pole;
     Ladder ladder;
     DiodeLadder diode;
     Formant formant;

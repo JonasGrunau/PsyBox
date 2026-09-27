@@ -64,9 +64,16 @@ namespace
         b.uni (P::MenvR, rLo, rHi);
     }
 
+    // A plain 12 dB LP or HP request rolls its slope too, so the same recipe
+    // yields soft 12 dB and steep 18/24 dB curves.
     void filter1 (B& b, int type, float cLo, float cHi, float rLo, float rHi, float eLo, float eHi)
     {
-        b.set (P::F1Type, (float) type);
+        if (type == ft (FilterType::LP12))
+            b.pick (P::F1Type, { ft (FilterType::LP12), ft (FilterType::LP18), ft (FilterType::LP24) }, { 0.45f, 0.2f, 0.35f });
+        else if (type == ft (FilterType::HP12))
+            b.pick (P::F1Type, { ft (FilterType::HP12), ft (FilterType::HP18), ft (FilterType::HP24) }, { 0.4f, 0.2f, 0.4f });
+        else
+            b.set (P::F1Type, (float) type);
         b.uni (P::F1Cutoff, cLo, cHi);
         b.uni (P::F1Reso, rLo, rHi);
         b.uni (P::F1Env, eLo, eHi);
@@ -352,7 +359,8 @@ namespace
         b.pick (P::SubShape, { 0 });
         b.uni (P::SubLevel, 0.2f, 0.5f);
 
-        b.pick (P::F1Type, { ft (FilterType::Ladder24), ft (FilterType::LP12), ft (FilterType::Diode303) }, { 0.6f, 0.25f, 0.15f });
+        b.pick (P::F1Type, { ft (FilterType::Ladder24), ft (FilterType::LP24), ft (FilterType::LP12), ft (FilterType::LadderLP12), ft (FilterType::Diode303) },
+               { 0.4f, 0.2f, 0.15f, 0.1f, 0.15f });
         b.uni (P::F1Cutoff, 90.f, 350.f);
         b.uni (P::F1Reso, 0.1f, 0.4f);
         b.uni (P::F1Env, 0.35f, 0.6f);
@@ -705,8 +713,9 @@ namespace
         if (b.chance (0.3f)) { analogA (b, kSaw, 0.2f); b.uni (P::OscALevel, 0.05f, 0.25f); }
         else b.on (P::OscAOn, false);
 
-        const int f = b.pick (P::F1Type, { ft (FilterType::BP12), ft (FilterType::Notch), ft (FilterType::CombPos), ft (FilterType::Formant) },
-                              { 0.4f, 0.2f, 0.2f, 0.2f });
+        const int f = b.pick (P::F1Type, { ft (FilterType::BP12), ft (FilterType::BP24), ft (FilterType::Notch), ft (FilterType::LadderBP),
+                                           ft (FilterType::CombPos), ft (FilterType::Formant) },
+                              { 0.25f, 0.15f, 0.15f, 0.15f, 0.15f, 0.15f });
         (void) f;
         b.uni (P::F1Cutoff, 300.f, 4000.f);
         b.uni (P::F1Reso, 0.3f, 0.9f);

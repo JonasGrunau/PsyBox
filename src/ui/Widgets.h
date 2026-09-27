@@ -25,7 +25,10 @@ public:
 
     psy::P getParam() const noexcept { return param; }
     void setLabel (const juce::String& s) { labelText = s; repaint(); }
-    static constexpr int kLabelH = 15;
+    void setCompact (bool c) { compact = c; resized(); }   // no label, knob fills the bounds
+    // Double-clicking the label edits it in place; called with the new text.
+    std::function<void (const juce::String&)> onRename;
+    void mouseDoubleClick (const juce::MouseEvent&) override;
 
 private:
     PsySynthProcessor& proc;
@@ -33,7 +36,10 @@ private:
     juce::String labelText;
     juce::Slider slider;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> attachment;
-    bool lastLocked = false;
+    bool lastLocked = false, compact = false;
+    std::unique_ptr<juce::TextEditor> editor;
+    void startRename();
+    void finishRename (bool commit);
 
     void timerCallback() override;
     void showMenu();
@@ -80,17 +86,21 @@ public:
     void mouseExit (const juce::MouseEvent&) override { repaint(); }
     bool isOn() const noexcept { return on; }
     int idealWidth() const;
+    // Cell style: a small switch in the control area, the label underneath,
+    // matching knob cells.
+    void setStacked (bool s) { stacked = s; repaint(); }
 
 private:
     PsySynthProcessor& proc;
     psy::P param;
     juce::String text;
-    bool on = false;
+    bool on = false, stacked = false;
     juce::ParameterAttachment attachment;
 };
 
 // ---------------------------------------------------------------------------
-// Compact choice list with an optional caption.
+// Compact choice list. With a caption it lays out like a knob cell: the box
+// centred in the control area, the caption underneath.
 // ---------------------------------------------------------------------------
 class ParamCombo : public juce::Component
 {
@@ -133,6 +143,7 @@ public:
 
     int getSelected() const noexcept { return selected; }
     void setSelected (int i);
+    int idealWidth() const;
     std::function<void (int)> onChange;
     std::function<bool (int)> isLit;  // draws a state dot before the name
 

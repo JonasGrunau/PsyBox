@@ -5,10 +5,6 @@ using psy::P;
 
 namespace
 {
-    constexpr int kKnobW = 58;   // knob cell width
-    constexpr int kKnobH = 60;   // knob cell height (incl. label)
-    constexpr int kSmallKnobH = 54;
-
     juce::String hexSeed (uint32_t s) { return juce::String::toHexString ((int) s).toUpperCase().paddedLeft ('0', 6); }
 } // namespace
 
@@ -18,28 +14,22 @@ namespace
 void Section::paint (juce::Graphics& g)
 {
     drawHeading (g, title, header());
+    g.setColour (col::textDim);
+    g.setFont (label (10.f));
+    for (const auto& c : captions)
+        g.drawText (c.text.toUpperCase(), c.area, juce::Justification::centred, false);
 }
 
 int Section::titleWidth() const
 {
-    return juce::GlyphArrangement::getStringWidthInt (heading(), title.toUpperCase()) + 12;
-}
-
-void Section::row (juce::Rectangle<int> area, const std::vector<juce::Component*>& items, int cellW)
-{
-    if (items.empty()) return;
-    const int n = (int) items.size();
-    const int w = cellW > 0 ? cellW : area.getWidth() / n;
-    int x = area.getX();
-    for (auto* c : items)
-    {
-        c->setBounds (x, area.getY(), w, area.getHeight());
-        x += w;
-    }
+    return juce::GlyphArrangement::getStringWidthInt (heading(), title.toUpperCase()) + sp::md;
 }
 
 // ---------------------------------------------------------------------------
-// OscPanel
+// OscPanel: waveform on the left, a 4 x 2 grid on the right.
+//   row 0: type-specific controls, retrig in the last cell
+//   row 1: coarse, fine (, A>B FM, sync)
+// Levels live in the mixer.
 // ---------------------------------------------------------------------------
 OscPanel::OscPanel (PsySynthProcessor& p, bool b)
     : Section (b ? "Osc B" : "Osc A"), proc (p), isB (b),
@@ -54,20 +44,21 @@ OscPanel::OscPanel (PsySynthProcessor& p, bool b)
     addAndMakeVisible (wave);
     addChildComponent (table);
     addAndMakeVisible (retrig);
+    retrig.setStacked (true);
     shape = ks.add (*this, p, b ? P::OscBShape : P::OscAShape);
     pw = ks.add (*this, p, b ? P::OscBPw : P::OscAPw);
     detune = ks.add (*this, p, b ? P::OscBDetune : P::OscADetune);
-    wtpos = ks.add (*this, p, b ? P::OscBWtPos : P::OscAWtPos);
+    wtpos = ks.add (*this, p, b ? P::OscBWtPos : P::OscAWtPos, "Position");
     ratio = ks.add (*this, p, b ? P::OscBFmRatio : P::OscAFmRatio);
     fm = ks.add (*this, p, b ? P::OscBFm : P::OscAFm, "Index");
     fb = ks.add (*this, p, b ? P::OscBFmFb : P::OscAFmFb);
     coarse = ks.add (*this, p, b ? P::OscBCoarse : P::OscACoarse);
     fine = ks.add (*this, p, b ? P::OscBFine : P::OscAFine);
-    level = ks.add (*this, p, b ? P::OscBLevel : P::OscALevel);
     if (b)
     {
         xmod = ks.add (*this, p, P::OscBXMod);
         sync = std::make_unique<ToggleDot> (p, P::OscBSync, "Sync");
+        sync->setStacked (true);
         addAndMakeVisible (*sync);
     }
     startTimerHz (15);
@@ -92,109 +83,69 @@ void OscPanel::resized()
     auto h = header();
     h.removeFromLeft (titleWidth());
     onToggle.setBounds (h.removeFromLeft (onToggle.idealWidth()));
-    type.setBounds (h.removeFromRight (196).withSizeKeepingCentre (196, 20));
+    type.setBounds (h.removeFromRight (cellsW (4)).withSizeKeepingCentre (cellsW (4), kCtrlH));
 
     auto b = body();
-    auto left = b.removeFromLeft (112);
-    wave.setBounds (left.removeFromTop (78));
-    left.removeFromTop (10);
-    retrig.setBounds (left.removeFromTop (18).withWidth (retrig.idealWidth()));
-    if (sync)
-    {
-        left.removeFromTop (6);
-        sync->setBounds (left.removeFromTop (18).withWidth (sync->idealWidth()));
-    }
-    b.removeFromLeft (10);
+    const int gridX = b.getRight() - cellsW (4);
+    wave.setBounds (b.withRight (gridX - sp::lg));
+    const auto gr = grid (gridX);
 
     for (auto& k : ks.knobs) k->setVisible (false);
     table.setVisible (false);
 
-    const int t = lastType < 0 ? 0 : lastType;
-    std::vector<juce::Component*> top;
-    switch (t)
+    const auto put = [&] (juce::Component* c, int col, int row) { c->setBounds (gr.cell (col, row)); c->setVisible (true); };
+    switch (lastType < 0 ? 0 : lastType)
     {
-        case 1: top = { detune }; break;
-        case 2: top = { &table, wtpos }; break;
-        case 3: top = { ratio, fm, fb }; break;
-        default: top = { shape, pw }; break;
+        case 1: put (detune, 0, 0); break;
+        case 2:
+            table.setBounds (gr.captioned (0, 0, 2));
+            table.setVisible (true);
+            put (wtpos, 2, 0);
+            break;
+        case 3: put (ratio, 0, 0); put (fm, 1, 0); put (fb, 2, 0); break;
+        default: put (shape, 0, 0); put (pw, 1, 0); break;
     }
-    std::vector<juce::Component*> bottom { coarse, fine, level };
-    if (xmod) bottom.push_back (xmod);
-
-    auto rowTop = b.removeFromTop (kKnobH);
-    b.removeFromTop (6);
-    auto rowBottom = b.removeFromTop (kKnobH);
-    int x = rowTop.getX();
-    for (auto* c : top)
-    {
-        const int w = c == &table ? 110 : kKnobW;
-        if (c == &table)
-            c->setBounds (x + 2, rowTop.getY() + 12, w - 16, 32);
-        else
-            c->setBounds (x, rowTop.getY(), w, rowTop.getHeight());
-        c->setVisible (true);
-        x += w;
-    }
-    row (rowBottom, bottom, kKnobW);
-    for (auto* c : bottom) c->setVisible (true);
+    retrig.setBounds (gr.cell (3, 0));
+    put (coarse, 0, 1);
+    put (fine, 1, 1);
+    if (xmod) put (xmod, 2, 1);
+    if (sync) sync->setBounds (gr.cell (3, 1));
 }
 
 // ---------------------------------------------------------------------------
-// MixerPanel: sources on top, the pitch envelope below.
+// MixerPanel: source levels on top, their options below.
 // ---------------------------------------------------------------------------
 MixerPanel::MixerPanel (PsySynthProcessor& p)
     : Section ("Mixer"),
       subOct (p, P::SubOct, { "-1", "-2" }),
-      subShape (p, P::SubShape), noiseType (p, P::NoiseType), penvDest (p, P::PenvDest),
-      penvDisplay (p)
+      subShape (p, P::SubShape, "Sub Wave"), noiseType (p, P::NoiseType, "Noise Type")
 {
+    oscA = ks.add (*this, p, P::OscALevel, "Osc A");
+    oscB = ks.add (*this, p, P::OscBLevel, "Osc B");
     sub = ks.add (*this, p, P::SubLevel);
     noise = ks.add (*this, p, P::NoiseLevel);
     ring = ks.add (*this, p, P::RingLevel);
-    pAmt = ks.add (*this, p, P::PenvAmt, "Amount");
-    pAtk = ks.add (*this, p, P::PenvAttack, "Attack");
-    pDec = ks.add (*this, p, P::PenvDecay, "Decay");
-    pCurve = ks.add (*this, p, P::PenvCurve, "Curve");
-    for (juce::Component* c : { (juce::Component*) &subOct, (juce::Component*) &subShape, (juce::Component*) &noiseType,
-                                (juce::Component*) &penvDest, (juce::Component*) &penvDisplay })
+    for (juce::Component* c : { (juce::Component*) &subOct, (juce::Component*) &subShape, (juce::Component*) &noiseType })
         addAndMakeVisible (c);
-}
-
-void MixerPanel::paint (juce::Graphics& g)
-{
-    Section::paint (g);
-    auto b = body();
-    const int y = b.getY() + kKnobH + 2;
-    g.setColour (col::line);
-    g.fillRect (b.getX(), y, b.getWidth(), 1);
-    drawHeading (g, "Pitch Env", { b.getX(), y + 2, 120, 20 });
 }
 
 void MixerPanel::resized()
 {
-    auto b = body();
-    auto top = b.removeFromTop (kKnobH);
-    row (top.removeFromLeft (kKnobW * 3), { sub, noise, ring }, kKnobW);
-    top.removeFromLeft (8);
-    auto col1 = top;
-    subOct.setBounds (col1.removeFromTop (20).withWidth (64));
-    col1.removeFromTop (6);
-    auto combos = col1.removeFromTop (22);
-    subShape.setBounds (combos.removeFromLeft (combos.getWidth() / 2 - 4));
-    combos.removeFromLeft (8);
-    noiseType.setBounds (combos);
-
-    b.removeFromTop (4);
-    auto hdr = b.removeFromTop (20);
-    penvDest.setBounds (hdr.removeFromRight (78).withSizeKeepingCentre (78, 20));
-    auto bottom = b.removeFromTop (kKnobH);
-    row (bottom.removeFromLeft (kKnobW * 4), { pAmt, pAtk, pDec, pCurve }, kKnobW);
-    bottom.removeFromLeft (6);
-    penvDisplay.setBounds (bottom.withTrimmedBottom (ParamKnob::kLabelH).reduced (0, 4));
+    const auto gr = grid();
+    oscA->setBounds (gr.cell (0, 0));
+    oscB->setBounds (gr.cell (1, 0));
+    sub->setBounds (gr.cell (2, 0));
+    noise->setBounds (gr.cell (3, 0));
+    ring->setBounds (gr.cell (4, 0));
+    captions.clear();
+    subOct.setBounds (gr.control (0, 1));
+    addCaption ("Sub Oct", gr.cell (0, 1));
+    subShape.setBounds (gr.captioned (1, 1, 2));
+    noiseType.setBounds (gr.captioned (3, 1, 2));
 }
 
 // ---------------------------------------------------------------------------
-// FilterPanel
+// FilterPanel: response on the left, a 3 x 2 grid on the right.
 // ---------------------------------------------------------------------------
 FilterPanel::FilterPanel (PsySynthProcessor& p, int s)
     : Section (s == 0 ? "Filter 1" : "Filter 2"), proc (p), slot (s),
@@ -225,7 +176,9 @@ void FilterPanel::timerCallback()
         lastType = t;
         const bool active = t != 0;
         for (auto& k : ks.knobs) k->setEnabled (active);
-        if (vowel) vowel->setEnabled (t == (int) psy::FilterType::Formant);
+        using T = psy::FilterType;
+        reso->setEnabled (active && t != (int) T::LP6 && t != (int) T::HP6);
+        if (vowel) vowel->setEnabled (t == (int) T::Formant);
         resized();
     }
 }
@@ -234,27 +187,27 @@ void FilterPanel::resized()
 {
     auto h = header();
     h.removeFromLeft (titleWidth());
-    type.setBounds (h.removeFromRight (104).withSizeKeepingCentre (104, 22));
+    type.setBounds (h.removeFromRight (cellsW (3)).withSizeKeepingCentre (cellsW (3), kCtrlH));
     if (routing)
     {
-        h.removeFromRight (10);
-        routing->setBounds (h.removeFromRight (104).withSizeKeepingCentre (104, 20));
+        h.removeFromRight (sp::lg);
+        routing->setBounds (h.removeFromRight (cellsW (2)).withSizeKeepingCentre (cellsW (2), kCtrlH));
     }
 
     auto b = body();
-    const int dispW = slot == 0 ? 176 : 120;
-    display.setBounds (b.removeFromLeft (dispW).withTrimmedBottom (4));
-    b.removeFromLeft (8);
-    auto r1 = b.removeFromTop (kKnobH);
-    b.removeFromTop (6);
-    auto r2 = b.removeFromTop (kKnobH);
-    row (r1, { cutoff, reso, drive });
-    if (vowel) row (r2, { env, key, vowel });
-    else row (r2, { env, key }, r2.getWidth() / 3);
+    const int gridX = b.getRight() - cellsW (3);
+    display.setBounds (b.withRight (gridX - sp::lg));
+    const auto gr = grid (gridX);
+    cutoff->setBounds (gr.cell (0, 0));
+    reso->setBounds (gr.cell (1, 0));
+    drive->setBounds (gr.cell (2, 0));
+    env->setBounds (gr.cell (0, 1));
+    key->setBounds (gr.cell (1, 1));
+    if (vowel) vowel->setBounds (gr.cell (2, 1));
 }
 
 // ---------------------------------------------------------------------------
-// VoicePanel
+// VoicePanel: modes on top, six knobs below.
 // ---------------------------------------------------------------------------
 VoicePanel::VoicePanel (PsySynthProcessor& p)
     : Section ("Voice"),
@@ -266,71 +219,81 @@ VoicePanel::VoicePanel (PsySynthProcessor& p)
               ks.add (*this, p, P::Octave), ks.add (*this, p, P::BendRange), ks.add (*this, p, P::VelSens) };
 }
 
-void VoicePanel::paint (juce::Graphics& g)
-{
-    Section::paint (g);
-    auto b = body();
-    g.setColour (col::textDim);
-    g.setFont (label (10.f));
-    g.drawText ("PLAY MODE", b.getX(), b.getY(), 150, 14, juce::Justification::centredLeft);
-    g.drawText ("GLIDE", b.getX() + b.getWidth() - 132, b.getY(), 130, 14, juce::Justification::centredLeft);
-}
-
 void VoicePanel::resized()
 {
-    auto b = body();
-    auto top = b.removeFromTop (40).withTrimmedTop (16);
-    glideMode.setBounds (top.removeFromRight (132).withHeight (22));
-    top.removeFromRight (14);
-    mode.setBounds (top.withHeight (22));
-    b.removeFromTop (14);
-    row (b.removeFromTop (kKnobH), { knobs.begin(), knobs.end() });
+    const auto gr = grid();
+    captions.clear();
+    mode.setBounds (gr.control (0, 0, 3));
+    addCaption ("Play Mode", gr.cell (0, 0, 3));
+    glideMode.setBounds (gr.control (3, 0, 3));
+    addCaption ("Glide Mode", gr.cell (3, 0, 3));
+    for (int i = 0; i < (int) knobs.size(); ++i)
+        knobs[(size_t) i]->setBounds (gr.cell (i, 1));
 }
 
 // ---------------------------------------------------------------------------
-// EnvPanel
+// EnvPanel: curve on the left, 2 x 2 knobs on the right. The pitch envelope
+// shares the panel as a fourth tab.
 // ---------------------------------------------------------------------------
-EnvPanel::EnvPanel (PsySynthProcessor& p) : Section ("Envelopes"), display (p)
+EnvPanel::EnvPanel (PsySynthProcessor& p)
+    : Section ("Envelopes"), display (p), pitchDisplay (p), pitchDest (p, P::PenvDest, "Target")
 {
     addAndMakeVisible (tabs);
     addAndMakeVisible (display);
-    static const P ids[3][4] = { { P::AenvA, P::AenvD, P::AenvS, P::AenvR },
+    addChildComponent (pitchDisplay);
+    addChildComponent (pitchDest);
+    static const P ids[4][4] = { { P::AenvA, P::AenvD, P::AenvS, P::AenvR },
                                  { P::FenvA, P::FenvD, P::FenvS, P::FenvR },
-                                 { P::MenvA, P::MenvD, P::MenvS, P::MenvR } };
-    for (int e = 0; e < 3; ++e)
+                                 { P::MenvA, P::MenvD, P::MenvS, P::MenvR },
+                                 { P::PenvAmt, P::PenvAttack, P::PenvDecay, P::PenvCurve } };
+    static const char* pitchLabels[4] = { "Amount", "Attack", "Decay", "Curve" };
+    for (int e = 0; e < 4; ++e)
         for (int i = 0; i < 4; ++i)
-            knobs[e][i] = ks.add (*this, p, ids[e][i]);
+            knobs[e][i] = ks.add (*this, p, ids[e][i], e == 3 ? juce::String (pitchLabels[i]) : juce::String());
     tabs.onChange = [this] (int i) { show (i); };
     show (0);
 }
 
 void EnvPanel::show (int e)
 {
-    display.setEnvelope (e);
-    for (int k = 0; k < 3; ++k)
+    current = e;
+    const bool pitch = e == 3;
+    if (! pitch) display.setEnvelope (e);
+    display.setVisible (! pitch);
+    pitchDisplay.setVisible (pitch);
+    pitchDest.setVisible (pitch);
+    for (int k = 0; k < 4; ++k)
         for (int i = 0; i < 4; ++i)
             knobs[k][i]->setVisible (k == e);
+    resized();
 }
 
 void EnvPanel::resized()
 {
     auto h = header();
     h.removeFromLeft (titleWidth());
-    tabs.setBounds (h.removeFromRight (190));
+    tabs.setBounds (h.removeFromRight (tabs.idealWidth()));
 
+    // ADSR: 2 x 2 grid. Pitch: 3 x 2 with the target selector spanning two cells.
+    const bool pitch = current == 3;
     auto b = body();
-    auto knobArea = b.removeFromRight (kKnobW * 4);
-    b.removeFromRight (10);
-    display.setBounds (b.withTrimmedBottom (4));
+    const int gridX = b.getRight() - cellsW (pitch ? 3 : 2);
+    const auto disp = b.withRight (gridX - sp::lg);
+    display.setBounds (disp);
+    pitchDisplay.setBounds (disp);
+    const auto gr = grid (gridX);
     for (int e = 0; e < 3; ++e)
-    {
-        auto r = knobArea.withSizeKeepingCentre (knobArea.getWidth(), kKnobH);
-        row (r, { knobs[e][0], knobs[e][1], knobs[e][2], knobs[e][3] }, kKnobW);
-    }
+        for (int i = 0; i < 4; ++i)
+            knobs[e][i]->setBounds (gr.cell (i % 2, i / 2));
+    for (int i = 0; i < 4; ++i)
+        knobs[3][i]->setBounds (gr.cell (i % 3, i / 3));
+    pitchDest.setBounds (gr.captioned (1, 1, 2));
 }
 
 // ---------------------------------------------------------------------------
-// LfoPanel
+// LfoPanel: shape preview on the left, a 3 x 2 grid on the right.
+//   row 0: shape (2 cells), phase
+//   row 1: rate or division, sync, retrig
 // ---------------------------------------------------------------------------
 LfoPanel::LfoPanel (PsySynthProcessor& p) : Section ("LFO"), proc (p), display (p)
 {
@@ -340,13 +303,14 @@ LfoPanel::LfoPanel (PsySynthProcessor& p) : Section ("LFO"), proc (p), display (
     {
         auto& pg = pages[i];
         pg.shape = std::make_unique<ParamCombo> (p, psy::lfoParam (i, 0), "Shape");
-        pg.div = std::make_unique<ParamCombo> (p, psy::lfoParam (i, 3), "Division");
         pg.rate = ks.add (*this, p, psy::lfoParam (i, 1));
+        pg.div = ks.add (*this, p, psy::lfoParam (i, 3), "Division");
         pg.phase = ks.add (*this, p, psy::lfoParam (i, 5));
         pg.sync = std::make_unique<ToggleDot> (p, psy::lfoParam (i, 2), "Sync");
         pg.retrig = std::make_unique<ToggleDot> (p, psy::lfoParam (i, 4), "Retrig");
+        pg.sync->setStacked (true);
+        pg.retrig->setStacked (true);
         addChildComponent (*pg.shape);
-        addChildComponent (*pg.div);
         addChildComponent (*pg.sync);
         addChildComponent (*pg.retrig);
     }
@@ -383,35 +347,25 @@ void LfoPanel::resized()
 {
     auto h = header();
     h.removeFromLeft (titleWidth());
-    tabs.setBounds (h.removeFromRight (100));
+    tabs.setBounds (h.removeFromRight (tabs.idealWidth()));
 
     auto b = body();
-    auto left = b.removeFromLeft (132);
-    display.setBounds (left.removeFromTop (84));
-    left.removeFromTop (10);
-    auto toggles = left.removeFromTop (18);
+    const int gridX = b.getRight() - cellsW (3);
+    display.setBounds (b.withRight (gridX - sp::lg));
+    const auto gr = grid (gridX);
     for (auto& pg : pages)
     {
-        auto t = toggles;
-        pg.sync->setBounds (t.removeFromLeft (pg.sync->idealWidth()));
-        t.removeFromLeft (12);
-        pg.retrig->setBounds (t.removeFromLeft (pg.retrig->idealWidth()));
-    }
-    b.removeFromLeft (12);
-    for (auto& pg : pages)
-    {
-        auto r = b;
-        pg.shape->setBounds (r.removeFromTop (38).withTrimmedBottom (4));
-        r.removeFromTop (6);
-        auto kr = r.removeFromTop (kKnobH);
-        pg.rate->setBounds (kr.removeFromLeft (kKnobW));
-        pg.div->setBounds (juce::Rectangle<int> (kr.getX() - kKnobW, kr.getY() + 10, kKnobW + 18, 36));
-        pg.phase->setBounds (kr.removeFromLeft (kKnobW).translated (18, 0));
+        pg.shape->setBounds (gr.captioned (0, 0, 2));
+        pg.phase->setBounds (gr.cell (2, 0));
+        pg.rate->setBounds (gr.cell (0, 1));
+        pg.div->setBounds (gr.cell (0, 1));
+        pg.sync->setBounds (gr.cell (1, 1));
+        pg.retrig->setBounds (gr.cell (2, 1));
     }
 }
 
 // ---------------------------------------------------------------------------
-// ModMatrixPanel
+// ModMatrixPanel: eight rows filling the body height.
 // ---------------------------------------------------------------------------
 ModMatrixPanel::ModMatrixPanel (PsySynthProcessor& p) : Section ("Mod Matrix")
 {
@@ -428,21 +382,25 @@ ModMatrixPanel::ModMatrixPanel (PsySynthProcessor& p) : Section ("Mod Matrix")
 
 void ModMatrixPanel::resized()
 {
-    auto b = body().withTrimmedTop (-4);
-    const int rh = b.getHeight() / psy::kNumModSlots;
+    auto b = body();
+    const int rh = b.getHeight() / psy::kNumModSlots;   // 16
+    const int srcW = (b.getWidth() - 2 * sp::md) * 3 / 10;
+    const int dstW = (b.getWidth() - 2 * sp::md) * 4 / 10;
     for (int i = 0; i < psy::kNumModSlots; ++i)
     {
-        auto r = b.removeFromTop (rh).reduced (0, 1);
-        rows[i].src->setBounds (r.removeFromLeft (98));
-        r.removeFromLeft (10);
-        rows[i].dst->setBounds (r.removeFromLeft (108));
-        r.removeFromLeft (12);
+        auto r = b.removeFromTop (rh);
+        rows[i].src->setBounds (r.removeFromLeft (srcW));
+        r.removeFromLeft (sp::md);
+        rows[i].dst->setBounds (r.removeFromLeft (dstW));
+        r.removeFromLeft (sp::md);
         rows[i].amt->setBounds (r);
     }
 }
 
 // ---------------------------------------------------------------------------
-// FxPanel
+// FxPanel: one page per effect.
+//   row 0: knobs
+//   row 1: enabled, then the effect's selectors and switches
 // ---------------------------------------------------------------------------
 FxPanel::FxPanel (PsySynthProcessor& p) : Section ("Effects"), proc (p)
 {
@@ -461,9 +419,15 @@ FxPanel::FxPanel (PsySynthProcessor& p) : Section ("Effects"), proc (p)
         pages[page].items.push_back (c.get());
         pages[page].owned.push_back (std::move (c));
     };
+    const auto toggle = [&] (int page, P prm, const juce::String& t) {
+        auto tg = std::make_unique<ToggleDot> (p, prm, t);
+        tg->setStacked (true);
+        own (page, std::move (tg));
+    };
     for (int i = 0; i < 7; ++i)
     {
-        pages[i].on = std::make_unique<ToggleDot> (p, onIds[i], "Enabled");
+        pages[i].on = std::make_unique<ToggleDot> (p, onIds[i], "On");
+        pages[i].on->setStacked (true);
         addAndMakeVisible (*pages[i].on);
     }
 
@@ -479,11 +443,10 @@ FxPanel::FxPanel (PsySynthProcessor& p) : Section ("Effects"), proc (p)
     own (4, std::make_unique<Segmented> (p, P::ChorusMode));
     knob (4, P::ChorusRate); knob (4, P::ChorusDepth); knob (4, P::ChorusFb); knob (4, P::ChorusMix);
 
-    own (5, std::make_unique<ToggleDot> (p, P::DelaySync, "Sync"));
-    own (5, std::make_unique<ToggleDot> (p, P::DelayPing, "Ping-Pong"));
-    delayDiv = std::make_unique<ParamCombo> (p, P::DelayDiv, "Division");
-    addAndMakeVisible (*delayDiv);
+    toggle (5, P::DelaySync, "Sync");
+    toggle (5, P::DelayPing, "Ping-Pong");
     delayTime = knob (5, P::DelayMs);
+    delayDiv = ks.add (*this, p, P::DelayDiv, "Division");
     knob (5, P::DelayFb); knob (5, P::DelayLowCut); knob (5, P::DelayHighCut); knob (5, P::DelayMix);
 
     knob (6, P::ReverbSize); knob (6, P::ReverbDecay); knob (6, P::ReverbDamp); knob (6, P::ReverbPre); knob (6, P::ReverbMix);
@@ -518,60 +481,63 @@ void FxPanel::resized()
 {
     auto h = header();
     h.removeFromLeft (titleWidth());
-    tabs.setBounds (h.withTrimmedLeft (8));
+    tabs.setBounds (h.removeFromRight (tabs.idealWidth()));
 
-    const auto b = body();
+    const auto gr = grid();
     for (int i = 0; i < 7; ++i)
     {
-        auto r = b;
-        auto side = r.removeFromLeft (112);
-        pages[i].on->setBounds (side.removeFromTop (20).withWidth (pages[i].on->idealWidth()));
-        side.removeFromTop (12);
-
-        // A type selector sits above the knobs; otherwise knobs are centred.
-        Segmented* seg = nullptr;
-        for (auto* c : pages[i].items)
-            if ((seg = dynamic_cast<Segmented*> (c)) != nullptr) break;
-        int ky = r.getY() + (r.getHeight() - kKnobH) / 2 - 8;
-        if (seg != nullptr)
-        {
-            seg->setBounds (r.getX(), r.getY(), i == 0 ? 300 : 150, 22);
-            ky = r.getY() + 34;
-        }
-
-        int x = r.getX();
+        pages[i].on->setBounds (gr.cell (0, 1));
+        int knobCol = 0, lowCol = 1;
         for (auto* c : pages[i].items)
         {
-            if (c == seg) continue;
-            if (auto* t = dynamic_cast<ToggleDot*> (c))
+            if (auto* seg = dynamic_cast<Segmented*> (c))
             {
-                t->setBounds (side.removeFromTop (18).withWidth (t->idealWidth()));
-                side.removeFromTop (8);
-                continue;
+                const int span = i == 0 ? 5 : 3;
+                seg->setBounds (gr.control (lowCol, 1, span));
+                lowCol += span;
             }
-            if (c == delayTime)
-                delayDiv->setBounds (x + 4, ky + 12, kKnobW + 16, 36);
-            c->setBounds (x, ky, kKnobW + 6, kKnobH);
-            x += kKnobW + 18;
+            else if (dynamic_cast<ToggleDot*> (c) != nullptr)
+            {
+                c->setBounds (gr.cell (lowCol++, 1));
+            }
+            else
+            {
+                if (c == delayTime) delayDiv->setBounds (gr.cell (knobCol, 0));
+                c->setBounds (gr.cell (knobCol++, 0));
+            }
         }
     }
+    captions.clear();
+    if (current == 0) addCaption ("Type", gr.cell (1, 1, 5));
+    if (current == 4) addCaption ("Mode", gr.cell (1, 1, 3));
+    repaint();
 }
 
 // ---------------------------------------------------------------------------
-MacroPanel::MacroPanel (PsySynthProcessor& p) : Section ("Macros")
+MacroPanel::MacroPanel (PsySynthProcessor& p) : Section ("Macros"), proc (p)
 {
-    ks.add (*this, p, P::Macro1, "M1");
-    ks.add (*this, p, P::Macro2, "M2");
-    ks.add (*this, p, P::Macro3, "M3");
-    ks.add (*this, p, P::Macro4, "M4");
+    const P ids[4] = { P::Macro1, P::Macro2, P::Macro3, P::Macro4 };
+    for (int i = 0; i < 4; ++i)
+    {
+        auto* k = ks.add (*this, p, ids[i], p.getMacroName (i));
+        k->onRename = [this, i] (const juce::String& n) { proc.setMacroName (i, n); };
+    }
+    proc.addChangeListener (this);
+}
+
+MacroPanel::~MacroPanel() { proc.removeChangeListener (this); }
+
+void MacroPanel::changeListenerCallback (juce::ChangeBroadcaster*)
+{
+    for (int i = 0; i < 4; ++i)
+        ks.knobs[(size_t) i]->setLabel (proc.getMacroName (i));
 }
 
 void MacroPanel::resized()
 {
-    auto b = body();
-    auto r1 = b.removeFromTop (b.getHeight() / 2);
-    row (r1, { ks.knobs[0].get(), ks.knobs[1].get() });
-    row (b, { ks.knobs[2].get(), ks.knobs[3].get() });
+    const auto gr = grid();
+    for (int i = 0; i < 4; ++i)
+        ks.knobs[(size_t) i]->setBounds (gr.cell (i % 2, i / 2));
 }
 
 // ---------------------------------------------------------------------------
@@ -611,10 +577,7 @@ Sidebar::Sidebar (PsySynthProcessor& p) : proc (p)
     generateButton.onClick = [this] { proc.generate(); };
     mutateButton.setTooltip ("Vary the current sound within the category");
     mutateButton.onClick = [this] { proc.mutate(); };
-    clearLocks.setTooltip ("Unlock all parameters");
     clearLocks.onClick = [this] { proc.clearLocks(); };
-    undoButton.onClick = [this] { proc.undo(); };
-    redoButton.onClick = [this] { proc.redo(); };
 
     mutateAmount.setSliderStyle (juce::Slider::LinearHorizontal);
     mutateAmount.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
@@ -623,11 +586,12 @@ Sidebar::Sidebar (PsySynthProcessor& p) : proc (p)
     mutateAmount.setTooltip ("Mutation amount");
     mutateAmount.onValueChange = [this] { proc.setMutateAmount ((float) mutateAmount.getValue()); repaint (infoArea()); };
 
-    seedLabel.setFont (mono (11.f));
-    seedLabel.setColour (juce::Label::textColourId, col::textDim);
+    seedLabel.setFont (mono (10.f));
+    seedLabel.setBorderSize ({ 0, 0, 0, 0 });
+    seedLabel.setColour (juce::Label::textColourId, col::textFaint);
     seedLabel.setJustificationType (juce::Justification::centredRight);
     seedLabel.setEditable (false, true);
-    seedLabel.setTooltip ("Seed. Double-click to type one and regenerate that exact sound.");
+    seedLabel.setTooltip ("The seed of the current sound. Same category + same seed = same sound. Double-click to type one.");
     seedLabel.onTextChange = [this] {
         const auto t = seedLabel.getText().trim().removeCharacters ("#");
         if (t.containsOnly ("0123456789abcdefABCDEF") && t.isNotEmpty())
@@ -636,8 +600,7 @@ Sidebar::Sidebar (PsySynthProcessor& p) : proc (p)
     };
 
     for (juce::Component* c : { (juce::Component*) &generateButton, (juce::Component*) &mutateButton, (juce::Component*) &clearLocks,
-                                (juce::Component*) &mutateAmount, (juce::Component*) &undoButton, (juce::Component*) &redoButton,
-                                (juce::Component*) &seedLabel })
+                                (juce::Component*) &mutateAmount, (juce::Component*) &seedLabel })
         addAndMakeVisible (c);
     proc.addChangeListener (this);
     refresh();
@@ -649,27 +612,28 @@ void Sidebar::changeListenerCallback (juce::ChangeBroadcaster*) { refresh(); }
 
 void Sidebar::refresh()
 {
-    seedLabel.setText ("#" + hexSeed (proc.getSeed()), juce::dontSendNotification);
-    undoButton.setEnabled (proc.canUndo());
-    redoButton.setEnabled (proc.canRedo());
+    seedLabel.setText (hexSeed (proc.getSeed()), juce::dontSendNotification);
     clearLocks.setVisible (proc.numLocks() > 0);
+    clearLocks.setTooltip ("Unlock all " + juce::String (proc.numLocks()) + " locked parameters");
     repaint();
 }
 
 juce::Rectangle<int> Sidebar::rowBounds (int i) const
 {
-    return { 0, kListTop + i * kRowH, getWidth(), kRowH };
+    return { 0, kListTop + i * kItemH, getWidth() - 1, kItemH };
 }
 
+// Everything below the category list, starting at the divider.
 juce::Rectangle<int> Sidebar::infoArea() const
 {
-    return getLocalBounds().withTrimmedTop (kListTop + psy::kNumCategories * kRowH + 10);
+    return getLocalBounds().withTrimmedTop (kListTop + psy::kNumCategories * kItemH + sp::lg);
 }
 
+// Returns the category (enum value) under the point; rows are in display order.
 int Sidebar::categoryAt (juce::Point<int> pt) const
 {
     for (int i = 0; i < psy::kNumCategories; ++i)
-        if (rowBounds (i).contains (pt)) return i;
+        if (rowBounds (i).contains (pt)) return (int) psy::categoryDisplayOrder()[(size_t) i];
     return -1;
 }
 
@@ -679,16 +643,18 @@ void Sidebar::paint (juce::Graphics& g)
     g.setColour (col::line);
     g.fillRect (getWidth() - 1, 0, 1, getHeight());
 
-    drawHeading (g, "Sound", { kPad, 12, 100, 20 });
+    const juce::Rectangle<int> head (kPad, kPad, getWidth() - 2 * kPad, kHeaderH);
+    drawHeading (g, "Sound", head);
     g.setColour (col::textFaint);
     g.setFont (mono (10.f));
-    g.drawText (juce::String (psy::kNumCategories), juce::Rectangle<int> (kPad, 12, getWidth() - kPad * 2, 20), juce::Justification::centredRight);
+    g.drawText (juce::String (psy::kNumCategories), head, juce::Justification::centredRight);
 
     const int sel = (int) proc.getCategory();
     const auto& info = psy::categoryInfo();
-    for (int i = 0; i < psy::kNumCategories; ++i)
+    for (int row = 0; row < psy::kNumCategories; ++row)
     {
-        const auto r = rowBounds (i);
+        const int i = (int) psy::categoryDisplayOrder()[(size_t) row];
+        const auto r = rowBounds (row);
         const auto c = juce::Colour ((juce::uint32) (0xff000000 | info[(size_t) i].colour));
         const bool isSel = i == sel;
         if (isSel)
@@ -696,7 +662,7 @@ void Sidebar::paint (juce::Graphics& g)
             g.setColour (c.withAlpha (0.10f));
             g.fillRect (r);
             g.setColour (c);
-            g.fillRect (r.getX(), r.getY() + 4, 2, r.getHeight() - 8);
+            g.fillRect (r.getX(), r.getY(), 2, r.getHeight());
         }
         else if (i == hover)
         {
@@ -704,59 +670,58 @@ void Sidebar::paint (juce::Graphics& g)
             g.fillRect (r);
         }
         const float cy = (float) r.getCentreY();
-        g.setColour (isSel || i == hover ? c : c.withAlpha (0.55f));
-        g.fillEllipse ((float) kPad + 1.f, cy - 3.5f, 7.f, 7.f);
+        g.setColour (isSel || i == hover ? c : c.withAlpha (0.85f));
+        g.fillEllipse ((float) kPad, cy - 3.5f, 7.f, 7.f);
         g.setColour (isSel ? col::text : (i == hover ? col::text.withAlpha (0.85f) : col::textDim));
         g.setFont (isSel ? labelStrong (12.5f) : label (12.5f));
-        g.drawText (info[(size_t) i].name, r.withTrimmedLeft (kPad + 18), juce::Justification::centredLeft, false);
+        g.drawText (info[(size_t) i].name, r.withTrimmedLeft (kPad + 7 + sp::md), juce::Justification::centredLeft, false);
     }
 
     // info block
-    auto a = infoArea().reduced (kPad, 0);
+    auto a = infoArea();
     g.setColour (col::line);
-    g.fillRect (0, a.getY() - 6, getWidth() - 1, 1);
-    const auto acc = accent();
-    g.setColour (acc);
+    g.fillRect (0, a.getY(), getWidth() - 1, 1);
+    a = a.reduced (kPad, 0).withTrimmedTop (kPad);
+    g.setColour (accent());
     g.setFont (title (17.f));
-    g.drawText (info[(size_t) sel].name, a.removeFromTop (30).withTrimmedTop (6), juce::Justification::centredLeft, false);
+    g.drawText (info[(size_t) sel].name, a.removeFromTop (24), juce::Justification::centredLeft, false);
+    a.removeFromTop (sp::xs);
     g.setColour (col::textDim);
     g.setFont (label (11.f));
     g.drawFittedText (info[(size_t) sel].blurb, a.removeFromTop (30), juce::Justification::topLeft, 2, 1.f);
 
-    // mutate amount readout
+    // mutate amount caption and readout, in the label row above the slider
+    const auto cap = mutateAmount.getBounds().withY (mutateButton.getY()).withHeight (kLabelH);
     g.setColour (col::textFaint);
     g.setFont (mono (10.f));
-    g.drawText (juce::String (juce::roundToInt (proc.getMutateAmount() * 100.f)) + "%",
-                mutateAmount.getBounds().translated (0, -12).withHeight (12), juce::Justification::centredRight, false);
+    g.drawText (juce::String (juce::roundToInt (proc.getMutateAmount() * 100.f)) + "%", cap, juce::Justification::centredRight, false);
     g.setFont (label (10.f));
-    g.drawText ("AMOUNT", mutateAmount.getBounds().translated (0, -12).withHeight (12), juce::Justification::centredLeft, false);
+    g.drawText ("AMOUNT", cap, juce::Justification::centredLeft, false);
+    g.drawText ("SEED", seedCaption, juce::Justification::centredLeft, false);
 
-    if (proc.numLocks() > 0)
-    {
-        g.setColour (col::textDim);
-        g.setFont (label (10.f));
-        g.drawText (juce::String (proc.numLocks()) + " LOCKED", clearLocks.getBounds().withX (kPad).withWidth (100),
-                    juce::Justification::centredLeft, false);
-    }
 }
 
 void Sidebar::resized()
 {
-    auto a = infoArea().reduced (kPad, 0);
-    a.removeFromTop (66);
-    generateButton.setBounds (a.removeFromTop (40));
-    a.removeFromTop (10);
-    auto r = a.removeFromTop (28);
-    mutateButton.setBounds (r.removeFromLeft (84));
-    r.removeFromLeft (10);
-    mutateAmount.setBounds (r.withTrimmedTop (12));
-    a.removeFromTop (12);
-    auto bottom = a.removeFromTop (26);
-    undoButton.setBounds (bottom.removeFromLeft (26));
-    redoButton.setBounds (bottom.removeFromLeft (26));
-    seedLabel.setBounds (bottom);
-    a.removeFromTop (6);
-    clearLocks.setBounds (a.removeFromTop (22).removeFromRight (56));
+    // Built from the bottom edge up so the buttons sit on the window's padding.
+    auto a = getLocalBounds().reduced (kPad);
+    // "SEED" caption left, value right: same pattern as AMOUNT / 25% above
+    auto bottom = a.removeFromBottom (kLabelH);
+    seedCaption = bottom;
+    seedLabel.setBounds (bottom.removeFromRight (100));
+    a.removeFromBottom (sp::sm);
+
+    auto r = a.removeFromBottom (32);   // mutate + amount
+    mutateButton.setBounds (r.removeFromLeft ((r.getWidth() - sp::md) / 2));
+    r.removeFromLeft (sp::md);
+    mutateAmount.setBounds (r.withTrimmedTop (kLabelH));
+    a.removeFromBottom (sp::sm);
+
+    generateButton.setBounds (a.removeFromBottom (44));
+
+    // Unlock sits on the category name line, right-aligned.
+    auto nameLine = infoArea().reduced (kPad, 0).withTrimmedTop (kPad).removeFromTop (24);
+    clearLocks.setBounds (nameLine.removeFromRight (64).withSizeKeepingCentre (64, kCtrlH));
 }
 
 void Sidebar::mouseDown (const juce::MouseEvent& e)
@@ -783,18 +748,29 @@ void Sidebar::mouseMove (const juce::MouseEvent& e)
 TopBar::TopBar (PsySynthProcessor& p)
     : proc (p), quality (p, P::Quality, { "Eco", "2x", "4x" }), volume (p, P::MasterVol, "Vol")
 {
-    for (juce::Component* c : { (juce::Component*) &prev, (juce::Component*) &next, (juce::Component*) &menu,
+    for (juce::Component* c : { (juce::Component*) &undoButton, (juce::Component*) &redoButton,
+                                (juce::Component*) &prev, (juce::Component*) &next, (juce::Component*) &menu,
                                 (juce::Component*) &save, (juce::Component*) &quality, (juce::Component*) &volume })
         addAndMakeVisible (c);
     prev.onClick = [this] { proc.stepPreset (-1); };
     next.onClick = [this] { proc.stepPreset (1); };
     menu.onClick = [this] { showPresetMenu(); };
     save.onClick = [this] { savePresetDialog(); };
+    undoButton.onClick = [this] { proc.undo(); };
+    redoButton.onClick = [this] { proc.redo(); };
     quality.setTooltip ("Oscillator oversampling: Eco 1x, 2x (default), 4x");
     proc.addChangeListener (this);
+    changeListenerCallback (nullptr);
 }
 
 TopBar::~TopBar() { proc.removeChangeListener (this); }
+
+void TopBar::changeListenerCallback (juce::ChangeBroadcaster*)
+{
+    undoButton.setEnabled (proc.canUndo());
+    redoButton.setEnabled (proc.canRedo());
+    repaint();
+}
 
 void TopBar::paint (juce::Graphics& g)
 {
@@ -805,9 +781,7 @@ void TopBar::paint (juce::Graphics& g)
     // wordmark
     g.setColour (col::text);
     g.setFont (juce::Font (juce::FontOptions (heading (15.f).getTypefacePtr()).withHeight (15.f).withKerningFactor (0.32f)));
-    g.drawText ("PSYSYNTH", juce::Rectangle<int> (kPad + 16, 0, 140, getHeight()), juce::Justification::centredLeft, false);
-    g.setColour (accent());
-    g.fillEllipse ((float) kPad, (float) getHeight() * 0.5f - 4.f, 8.f, 8.f);
+    g.drawText ("PSYSYNTH", juce::Rectangle<int> (kPad, 0, 160, getHeight()), juce::Justification::centredLeft, false);
 
     // preset display
     auto r = presetArea;
@@ -815,12 +789,12 @@ void TopBar::paint (juce::Graphics& g)
     g.fillRoundedRectangle (r.toFloat(), 4.f);
     g.setColour (col::line);
     g.drawRoundedRectangle (r.toFloat().reduced (0.5f), 4.f, 1.f);
-    auto text = r.reduced (40, 0);
+    auto text = r.withTrimmedLeft (prev.getRight() - r.getX() + sp::sm).withTrimmedRight (r.getRight() - next.getX() + sp::sm);
     const auto& info = psy::categoryInfo()[(size_t) proc.getCategory()];
     g.setColour (accent());
     g.setFont (heading (9.5f));
     const auto catName = juce::String (info.shortName).toUpperCase();
-    const int cw = juce::GlyphArrangement::getStringWidthInt (heading (9.5f), catName) + 12;
+    const int cw = juce::GlyphArrangement::getStringWidthInt (heading (9.5f), catName) + sp::md;
     g.drawText (catName, text.removeFromLeft (cw), juce::Justification::centredLeft, false);
     g.setColour (col::text);
     g.setFont (label (12.5f));
@@ -828,22 +802,33 @@ void TopBar::paint (juce::Graphics& g)
 
     g.setColour (col::textFaint);
     g.setFont (label (10.f));
-    g.drawText ("QUALITY", quality.getBounds().withX (quality.getX() - 58).withWidth (54), juce::Justification::centredRight, false);
+    g.drawText ("QUALITY", qualityCaption, juce::Justification::centredRight, false);
+    g.drawText ("VOL", volumeCaption, juce::Justification::centredRight, false);
 }
 
 void TopBar::resized()
 {
     auto r = getLocalBounds();
-    presetArea = r.withSizeKeepingCentre (380, 32).translated (60, 0);
-    prev.setBounds (presetArea.getX() + 4, presetArea.getY() + 4, 24, 24);
-    next.setBounds (presetArea.getRight() - 28, presetArea.getY() + 4, 24, 24);
-    menu.setBounds (presetArea.getRight() + 8, presetArea.getY() + 4, 24, 24);
-    save.setBounds (presetArea.getRight() + 36, presetArea.getY() + 4, 24, 24);
+    // preset box centred in the window, its icons to the right
+    presetArea = r.withSizeKeepingCentre (352, 32);
+    const int iconY = presetArea.getY() + sp::xs;
+    prev.setBounds (presetArea.getX() + sp::xs, iconY, 24, 24);
+    next.setBounds (presetArea.getRight() - sp::xs - 24, iconY, 24, 24);
+    menu.setBounds (presetArea.getRight() + sp::sm, iconY, 24, 24);
+    save.setBounds (menu.getRight() + sp::xs, iconY, 24, 24);
+    // history mirrors the preset icons on the left of the box
+    redoButton.setBounds (presetArea.getX() - sp::sm - 24, iconY, 24, 24);
+    undoButton.setBounds (redoButton.getX() - sp::xs - 24, iconY, 24, 24);
 
     auto right = r.reduced (kPad, 0);
-    volume.setBounds (right.removeFromRight (46).withSizeKeepingCentre (46, 44));
-    right.removeFromRight (18);
-    quality.setBounds (right.removeFromRight (120).withSizeKeepingCentre (120, 22));
+    volume.setCompact (true);
+    volume.setBounds (right.removeFromRight (28).withSizeKeepingCentre (28, 28));
+    right.removeFromRight (sp::sm);
+    volumeCaption = right.removeFromRight (24);
+    right.removeFromRight (sp::xl);
+    quality.setBounds (right.removeFromRight (cellsW (3)).withSizeKeepingCentre (cellsW (3), kCtrlH));
+    right.removeFromRight (sp::sm);
+    qualityCaption = right.removeFromRight (60);
 }
 
 void TopBar::showPresetMenu()

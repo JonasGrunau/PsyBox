@@ -1,9 +1,24 @@
 // Renders the editor offscreen to PNGs, one per requested category, so the UI
 // can be reviewed without a DAW or screen-recording permission.
 //   psysynth_snapshot <out-dir> [category-index ...]
+// Setting PSYSNAP_TAB=n also switches every tab strip to tab n (clamped),
+// and PSYSNAP_LOCKS=1 locks a couple of parameters, to review those states.
 
 #include "plugin/PluginEditor.h"
 #include "plugin/PluginProcessor.h"
+
+static void selectTabs (juce::Component& c, int tab)
+{
+    for (auto* child : c.getChildren())
+    {
+        if (auto* t = dynamic_cast<TabStrip*> (child))
+        {
+            t->setSelected (tab);
+            if (t->onChange) t->onChange (t->getSelected());
+        }
+        selectTabs (*child, tab);
+    }
+}
 
 int main (int argc, char** argv)
 {
@@ -15,10 +30,10 @@ int main (int argc, char** argv)
     for (int i = 2; i < argc; ++i) cats.push_back (juce::String (argv[i]).getIntValue());
     if (cats.empty()) cats = { 0 };
 
+    PsySynthEditor::forceKeyboard = std::getenv ("PSYSNAP_KEYS") != nullptr;
     PsySynthProcessor proc;
     proc.prepareToPlay (48000.0, 512);
     std::unique_ptr<juce::AudioProcessorEditor> editor (proc.createEditor());
-    editor->setSize (PsySynthEditor::kW, PsySynthEditor::kH);
 
     for (int c : cats)
     {
@@ -34,6 +49,13 @@ int main (int argc, char** argv)
             proc.processBlock (buf, midi);
             midi.clear();
         }
+        if (auto* locks = std::getenv ("PSYSNAP_LOCKS"); locks != nullptr && *locks == '1')
+        {
+            proc.setLocked (psy::P::F1Cutoff, true);
+            proc.setLocked (psy::P::AenvD, true);
+        }
+        if (auto* tab = std::getenv ("PSYSNAP_TAB"))
+            selectTabs (*editor, juce::String (tab).getIntValue());
         juce::MessageManager::getInstance()->runDispatchLoopUntil (400);
 
         const auto img = editor->createComponentSnapshot (editor->getLocalBounds(), true, 2.f);

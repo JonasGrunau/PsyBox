@@ -93,7 +93,7 @@ TEST_CASE ("All filter types survive brutal modulation without blowing up", "[fi
 {
     const float fs = 96000.f;
     Rng rng (42);
-    for (int type = 1; type <= 9; ++type)
+    for (int type = 1; type < (int) psy::FilterType::Count; ++type)
     {
         FilterSlot f;
         f.prepare (fs * 2.f);
@@ -125,4 +125,55 @@ TEST_CASE ("Formant filter emphasises the vowel's first formant", "[filter]")
     fo.reset();
     const double between = gainAt ([&] (float x) { return fo.process (x); }, 5000.0, fs);
     CHECK (atF1 > between + 12.0);
+}
+
+TEST_CASE ("LP and HP slopes fall at 6, 12, 18 and 24 dB per octave", "[filter]")
+{
+    using T = psy::FilterType;
+    const float fs = 96000.f, fc = 500.f;
+    const auto measure = [&] (T type, double hz) {
+        FilterSlot f;
+        f.prepare (fs);
+        f.setType ((int) type);
+        f.update (fc, 0.f, 0.f, 0.f);
+        return gainAt ([&] (float x) { return f.process (x); }, hz, fs);
+    };
+    const T lps[4] = { T::LP6, T::LP12, T::LP18, T::LP24 };
+    const T hps[4] = { T::HP6, T::HP12, T::HP18, T::HP24 };
+    for (int order = 1; order <= 4; ++order)
+    {
+        // three octaves from the corner: -6 dB * order * 3, less a little near the knee
+        const double expected = -10.0 * order * std::log10 (1.0 + 64.0);   // exact for Butterworth/Q=0.5 at 8x
+        const double lp = measure (lps[order - 1], fc * 8.0);
+        const double hp = measure (hps[order - 1], fc / 8.0);
+        INFO ("order " << order << " lp " << lp << " hp " << hp << " expected " << expected);
+        CHECK (std::abs (lp - expected) < 3.0);
+        CHECK (std::abs (hp - expected) < 3.0);
+    }
+    // Butterworth sections: -3 dB at the cutoff for 18 and 24
+    for (T t : { T::LP18, T::LP24, T::HP18, T::HP24 })
+    {
+        const double g = measure (t, fc);
+        INFO ("type " << (int) t << " gain at fc " << g);
+        CHECK (std::abs (g + 3.01) < 0.5);
+    }
+}
+
+TEST_CASE ("Ladder HP and BP modes keep their shape", "[filter]")
+{
+    using T = psy::FilterType;
+    const float fs = 96000.f, fc = 1000.f;
+    const auto measure = [&] (T type, double hz) {
+        FilterSlot f;
+        f.prepare (fs);
+        f.setType ((int) type);
+        f.update (fc, 0.3f, 0.f, 0.f);
+        return gainAt ([&] (float x) { return f.process (x); }, hz, fs);
+    };
+    CHECK (measure (T::LadderHP, 8000.0) > -3.0);
+    CHECK (measure (T::LadderHP, 125.0) < -50.0);
+    const double peak = measure (T::LadderBP, fc);
+    CHECK (peak > measure (T::LadderBP, 125.0) + 20.0);
+    CHECK (peak > measure (T::LadderBP, 8000.0) + 20.0);
+    CHECK (measure (T::LadderLP12, 8000.0) < -25.0);
 }

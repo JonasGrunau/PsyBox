@@ -53,6 +53,7 @@ PsySynthProcessor::PsySynthProcessor()
     : AudioProcessor (BusesProperties().withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
       apvts (*this, nullptr, "PsySynth", createLayout())
 {
+    resetMacroNames();
     const auto& defs = paramDefs();
     for (size_t i = 0; i < defs.size(); ++i)
     {
@@ -94,6 +95,8 @@ void PsySynthProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
     for (size_t i = 0; i < (size_t) kNumParams; ++i)
         audioParams.v[i] = rawValues[i]->load (std::memory_order_relaxed);
     engine.setParams (audioParams);
+
+    keyboardState.processNextMidiBuffer (midi, 0, n, true);
 
     midiEvents.clear();
     for (const auto meta : midi)
@@ -171,8 +174,73 @@ void PsySynthProcessor::applyState (const ParamState& s)
 
 void PsySynthProcessor::setCategory (Category c)
 {
+    if (c == category) return;
+    switchCategory (c);
+    if (slots[(size_t) c].valid)
+    {
+        pushHistory();
+        sendChangeMessage();
+    }
+    else
+    {
+        generate();   // first visit: a fresh sound of this kind
+    }
+}
+
+void PsySynthProcessor::saveSlot()
+{
+    slots[(size_t) category] = { true, currentState(), seed, presetName };
+}
+
+void PsySynthProcessor::switchCategory (Category c)
+{
+    saveSlot();
     category = c;
-    sendChangeMessage();
+    const auto& slot = slots[(size_t) c];
+    if (! slot.valid) return;
+    auto s = slot.state;
+    s.set (P::Quality, plain (P::Quality));     // global settings are not part of a sound
+    s.set (P::MasterVol, plain (P::MasterVol));
+    seed = slot.seed;
+    presetName = slot.name;
+    applyState (s);
+    restoreRanges();
+}
+
+void PsySynthProcessor::writeSlots (juce::ValueTree& t) const
+{
+    juce::ValueTree all ("Slots");
+    const auto& defs = paramDefs();
+    for (int c = 0; c < kNumCategories; ++c)
+    {
+        const auto& slot = slots[(size_t) c];
+        if (! slot.valid || c == (int) category) continue;   // the current category is the live patch
+        juce::ValueTree st ("Slot");
+        st.setProperty ("category", c, nullptr);
+        st.setProperty ("seed", (int) slot.seed, nullptr);
+        st.setProperty ("name", slot.name, nullptr);
+        for (size_t i = 0; i < (size_t) kNumParams; ++i)
+            st.setProperty (juce::Identifier (defs[i].id), slot.state.v[i], nullptr);
+        all.appendChild (st, nullptr);
+    }
+    t.removeChild (t.getChildWithName ("Slots"), nullptr);
+    t.appendChild (all, nullptr);
+}
+
+void PsySynthProcessor::readSlots (const juce::ValueTree& t)
+{
+    for (auto& slot : slots) slot = {};
+    const auto& defs = paramDefs();
+    for (const auto& st : t.getChildWithName ("Slots"))
+    {
+        const int c = (int) st.getProperty ("category", -1);
+        if (c < 0 || c >= kNumCategories) continue;
+        Slot slot { true, ParamState(), (uint32_t) (int) st.getProperty ("seed", 0), st.getProperty ("name").toString() };
+        for (size_t i = 0; i < (size_t) kNumParams; ++i)
+            if (const auto* v = st.getPropertyPointer (juce::Identifier (defs[i].id)))
+                slot.state.v[i] = defs[i].snap ((float) *v);
+        slots[(size_t) c] = slot;
+    }
 }
 
 void PsySynthProcessor::generate()
@@ -227,6 +295,7 @@ void PsySynthProcessor::undo()
     history[(size_t) historyIndex].state = currentState();
     --historyIndex;
     const auto& h = history[(size_t) historyIndex];
+    if (h.category != category) saveSlot();
     seed = h.seed;
     category = h.category;
     presetName = h.name;
@@ -240,6 +309,7 @@ void PsySynthProcessor::redo()
     if (! canRedo()) return;
     ++historyIndex;
     const auto& h = history[(size_t) historyIndex];
+    if (h.category != category) saveSlot();
     seed = h.seed;
     category = h.category;
     presetName = h.name;
@@ -257,9 +327,35 @@ void PsySynthProcessor::restoreRanges()
     generator.setRanges (scratch.lastRanges());
 }
 
+void PsySynthProcessor::setMacroName (int i, const juce::String& name)
+{
+    const auto n = name.trim().substring (0, 12);
+    macroNames[(size_t) i] = n.isEmpty() ? "Macro " + juce::String (i + 1) : n;
+    sendChangeMessage();
+}
+
+void PsySynthProcessor::resetMacroNames()
+{
+    for (int i = 0; i < kNumMacros; ++i)
+        macroNames[(size_t) i] = "Macro " + juce::String (i + 1);
+}
+
+void PsySynthProcessor::writeMacroNames (juce::ValueTree& t) const
+{
+    for (int i = 0; i < kNumMacros; ++i)
+        t.setProperty ("macro" + juce::String (i + 1), macroNames[(size_t) i], nullptr);
+}
+
+void PsySynthProcessor::readMacroNames (const juce::ValueTree& t)
+{
+    for (int i = 0; i < kNumMacros; ++i)
+        macroNames[(size_t) i] = t.getProperty ("macro" + juce::String (i + 1), "Macro " + juce::String (i + 1)).toString();
+}
+
 void PsySynthProcessor::initPatch()
 {
     applyState (ParamState());
+    resetMacroNames();
     presetName = "Init";
     pushHistory();
     sendChangeMessage();
@@ -276,6 +372,8 @@ void PsySynthProcessor::getStateInformation (juce::MemoryBlock& destData)
     state.setProperty ("seed", (int) seed, nullptr);
     state.setProperty ("mutate", mutateAmount, nullptr);
     state.setProperty ("presetName", presetName, nullptr);
+    writeMacroNames (state);
+    writeSlots (state);
     juce::StringArray lockIds;
     for (int i = 0; i < kNumParams; ++i)
         if (locks.test ((size_t) i))
@@ -296,6 +394,9 @@ void PsySynthProcessor::setStateInformation (const void* data, int sizeInBytes)
     seed = (uint32_t) (int) tree.getProperty ("seed", 0);
     mutateAmount = (float) tree.getProperty ("mutate", 0.25f);
     presetName = tree.getProperty ("presetName", "Init").toString();
+    readMacroNames (tree);
+    readSlots (tree);
+    apvts.state.removeChild (apvts.state.getChildWithName ("Slots"), nullptr);
     locks.reset();
     for (const auto& id : juce::StringArray::fromTokens (tree.getProperty ("locks").toString(), ",", ""))
         if (const int idx = findParam (id.toStdString()); idx >= 0)
@@ -326,6 +427,7 @@ bool PsySynthProcessor::savePreset (const juce::String& name)
     auto state = apvts.copyState();
     state.setProperty ("category", (int) category, nullptr);
     state.setProperty ("seed", (int) seed, nullptr);
+    writeMacroNames (state);
     auto xml = state.createXml();
     if (xml == nullptr) return false;
     const auto file = presetFolder().getChildFile (categoryInfo()[(size_t) category].name)
@@ -354,8 +456,10 @@ bool PsySynthProcessor::loadPreset (const juce::File& file)
     }
     s.set (P::Quality, plain (P::Quality));
     s.set (P::MasterVol, plain (P::MasterVol));
+    saveSlot();
     category = (Category) juce::jlimit (0, kNumCategories - 1, (int) tree.getProperty ("category", (int) category));
     seed = (uint32_t) (int) tree.getProperty ("seed", (int) seed);
+    readMacroNames (tree);
     applyState (s);
     restoreRanges();
     presetName = file.getFileNameWithoutExtension();

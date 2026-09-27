@@ -71,6 +71,15 @@ public:
     juce::Array<juce::File> listPresets() const;
     void initPatch();
 
+    // User names for the four macros. Part of the patch (session + presets);
+    // Generate and Mutate leave them alone.
+    static constexpr int kNumMacros = 4;
+    juce::String getMacroName (int i) const { return macroNames[(size_t) i]; }
+    void setMacroName (int i, const juce::String& name);
+
+    // On-screen / computer keyboard (standalone). Merged into the MIDI input.
+    juce::MidiKeyboardState keyboardState;
+
     // ---- GUI feeds ------------------------------------------------------------
     // Mono scope ring buffer written by the audio thread, read by the GUI.
     static constexpr int kScopeSize = 4096;
@@ -93,6 +102,18 @@ private:
     psy::LockSet locks;
     float mutateAmount = 0.25f;
     juce::String presetName { "Init" };
+    std::array<juce::String, kNumMacros> macroNames;
+    void resetMacroNames();
+    void writeMacroNames (juce::ValueTree&) const;
+    void readMacroNames (const juce::ValueTree&);
+
+    // The patch each category had when you last left it; restored when you come back.
+    struct Slot { bool valid = false; psy::ParamState state; uint32_t seed = 0; juce::String name; };
+    std::array<Slot, psy::kNumCategories> slots;
+    void saveSlot();
+    void switchCategory (psy::Category c);   // saves the old slot, restores or generates the new one
+    void writeSlots (juce::ValueTree&) const;
+    void readSlots (const juce::ValueTree&);
 
     struct Snapshot { psy::ParamState state; uint32_t seed; psy::Category category; juce::String name; };
     std::vector<Snapshot> history;
