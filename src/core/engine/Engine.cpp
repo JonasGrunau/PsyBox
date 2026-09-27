@@ -50,6 +50,7 @@ void Engine::prepare (double sampleRate, int maxBlockSize)
     comp.prepare (f);
     delay.prepare (f);
     reverb.prepare (f);
+    width.prepare (f);
     for (auto& d : outDc) d.prepare (f);
 
     osFactor = factorForQuality (target.geti (P::Quality));
@@ -93,6 +94,7 @@ void Engine::reset()
     comp.reset();
     delay.reset();
     reverb.reset();
+    width.reset();
     for (auto& d : outDc) d.reset();
     decimL.reset();
     decimR.reset();
@@ -601,6 +603,8 @@ void Engine::processFx (float* l, float* r, int n, double bpm) noexcept
     }
     if (p.on (P::ReverbOn))
         reverb.process (l, r, n, p.get (P::ReverbSize), p.get (P::ReverbDecay), p.get (P::ReverbDamp), p.get (P::ReverbPre), p.get (P::ReverbMix));
+    if (width.isActive (p.on (P::WidthOn)))   // last, so Low Mono also cleans delay and reverb lows
+        width.process (l, r, n, p.on (P::WidthOn), p.get (P::WidthAmount), p.get (P::WidthStereo), p.get (P::WidthTime), p.get (P::WidthMonoHz));
 
     const float g = dsp::dbToGain (p.get (P::MasterVol));
     float pk = 0.f;

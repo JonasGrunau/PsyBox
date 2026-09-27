@@ -20,9 +20,10 @@ Zap
 
 Riser is a synth tone climbing in pitch; Uplifter is a noise sweep that opens
 upward. Bass Shot is the progressive-trance one-shot: a saw over a body
-oscillator, a kick-like pitch drop, grit, then multiband compression. Its
-ranges were fitted to a set of reference shots (harmonic slope, band balance,
-envelope shapes, loudness). The sidebar list scrolls when it is longer than the space it has.
+oscillator, a kick-like pitch drop, saturation and direct noise grit,
+multiband compression, and width above a mono low end. Its
+ranges were fitted to a set of reference shots (harmonic slope, band balance, top-end
+noise, stereo width per band, envelope shapes, loudness). The sidebar list scrolls when it is longer than the space it has.
 
 ### Kicks
 
@@ -135,8 +136,8 @@ keep running.
 ### Effects
 
 Distortion (5 types), bitcrusher, Hilbert frequency shifter,
-phaser, chorus / flanger, compressor, ping-pong delay and an 8-line FDN reverb,
-in that order.
+phaser, chorus / flanger, compressor, ping-pong delay, an 8-line FDN reverb
+and a stereo width stage, in that order.
 
 The compressor has two modes. **Normal** is a single-band, soft-knee compressor
 with a parallel mix. **Multi** is a three-band upward + downward compressor in
@@ -146,6 +147,15 @@ It is built to stay clean: Linkwitz-Riley bands that sum flat, a detector
 that holds a whole waveform cycle (no distortion on low notes), stereo-linked
 detection, Depth applied per band (no comb filtering against the band
 filters), upward gain that fades out near silence, and click-free switching.
+
+**Width** comes last, so it also cleans up delay and reverb. **Low Mono** folds
+everything under the split to mono (a Linkwitz-Riley split on the side
+channel only). **Width** scales the stereo above it, and **Stereoize** makes
+stereo out of mono voices (a short Haas side from the mid). Left + right
+never changes, so the mix stays mono-compatible.
+
+The mixer's **Noise direct** switch adds the noise after the filters, for
+bright grit over a dark sound.
 
 ## Building
 

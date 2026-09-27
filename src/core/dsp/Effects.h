@@ -427,4 +427,91 @@ private:
     std::array<float, 8> damp {};
 };
 
+// ---------------------------------------------------------------------------
+// Stereo width with a mono low end, in mid/side.
+//   Low Mono  below the split the side is removed: an LR4 high-pass on S, and
+//             the mid gets the matching allpass, so the output is exactly the
+//             (allpassed) input minus the low side and nothing else changes.
+//   Width     scales the side above the split (0 = mono, 1 = as is, 2 = double).
+//   Stereoize makes side out of the mid for mono sources: the high-passed mid,
+//             delayed a few ms (Haas). It goes to L with + and R with -, so
+//             L + R never changes: the mix stays mono-compatible.
+// On/off crossfades over 10 ms.
+// ---------------------------------------------------------------------------
+class StereoWidth
+{
+public:
+    void prepare (float sr)
+    {
+        fs = sr;
+        fadeStep = 1.f / (0.01f * sr);
+        line.prepare ((int) (0.035f * sr) + 8);
+        reset();
+    }
+
+    void reset() noexcept
+    {
+        for (auto* s : { &sHp1, &sHp2, &mAp, &mHp1, &mHp2 }) s->reset();
+        line.reset();
+        time.reset (-1.f);
+        rWidth.reset();
+        rStereo.reset();
+        fade = 0.f;
+        running = false;
+    }
+
+    bool isActive (bool on) const noexcept { return on || fade > 0.f; }
+
+    void process (float* l, float* r, int n, bool on, float width, float stereoize, float timeMs, float monoHz) noexcept
+    {
+        if (! running)
+        {
+            if (! on) return;
+            reset();   // off for a while: start clean
+            running = true;
+        }
+        const float g = prewarp (std::clamp (monoHz, 10.f, 0.2f * fs), fs);
+        for (auto* s : { &sHp1, &sHp2, &mAp, &mHp1, &mHp2 }) s->setG (g, kSqrt2);
+        rWidth.set (std::max (width, 0.f), n);
+        rStereo.set (clamp01 (stereoize), n);
+        const float delay = std::clamp (timeMs * 0.001f * fs, 1.f, 0.03f * fs);
+        if (time.z < 0.f) time.reset (delay);
+        time.setTime (0.05f, fs);
+
+        for (int i = 0; i < n; ++i)
+        {
+            fade = on ? std::min (1.f, fade + fadeStep) : std::max (0.f, fade - fadeStep);
+            const float xl = l[i], xr = r[i];
+            const float m = 0.5f * (xl + xr), s = 0.5f * (xl - xr);
+
+            const float sHi = sHp2.process (sHp1.process (s).hp).hp;
+            const float mAll = m - 2.f * kSqrt2 * mAp.process (m).bp;   // LP4 + HP4 of the mid
+            line.push (mHp2.process (mHp1.process (m).hp).hp);
+            const float side = rWidth.next() * sHi + rStereo.next() * line.read (time.process (delay));
+
+            l[i] = xl + fade * (mAll + side - xl);
+            r[i] = xr + fade * (mAll - side - xr);
+            if (fade <= 0.f && ! on)
+            {
+                running = false;   // the rest of the block passes through
+                return;
+            }
+        }
+        for (auto* s : { &sHp1, &sHp2, &mAp, &mHp1, &mHp2 })
+        {
+            s->ic1 = flushDenormal (s->ic1);
+            s->ic2 = flushDenormal (s->ic2);
+        }
+    }
+
+private:
+    static constexpr float kSqrt2 = 1.41421356237f;
+    float fs = 48000.f, fadeStep = 1.f / 480.f, fade = 0.f;
+    bool running = false;
+    Svf sHp1, sHp2, mAp, mHp1, mHp2;
+    DelayLine line;
+    OnePole time;
+    Ramp rWidth, rStereo;
+};
+
 } // namespace psy::dsp

@@ -149,21 +149,6 @@ namespace dyn
         }
     };
 
-    // Linear per-sample ramp to a value that arrives once per block.
-    struct Ramp
-    {
-        float cur = 0.f, step = 0.f;
-        bool init = false;
-
-        void set (float target, int n) noexcept
-        {
-            if (! init) { cur = target; init = true; }
-            step = (target - cur) / (float) std::max (n, 1);
-        }
-        void reset() noexcept { init = false; step = 0.f; }
-        float next() noexcept { cur += step; return cur; }
-    };
-
     // 3-band Linkwitz-Riley 4 crossover for one channel.
     //   low  = LP4(f1), then the f2 allpass     mid = LP4(f2) of HP4(f1)
     //   high = HP4(f2) of HP4(f1)
@@ -286,8 +271,8 @@ private:
     std::array<dyn::Crossover3, 2> xover;
     std::array<dyn::PeakHold, 3> hold;
     std::array<dyn::GainSmoother, 3> smooth;
-    std::array<dyn::Ramp, 3> rDown, rUp, rBandGain;
-    dyn::Ramp rThresh, rKnee, rSlope, rMix, rOut, rDownSlope, rUpSlope;
+    std::array<Ramp, 3> rDown, rUp, rBandGain;
+    Ramp rThresh, rKnee, rSlope, rMix, rOut, rDownSlope, rUpSlope;
     CompMeter meters;
 
     void resetMode() noexcept

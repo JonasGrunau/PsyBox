@@ -216,6 +216,16 @@ namespace
         b.uni (P::CompOut, 0.f, 3.f);
     }
 
+    // Stereo from a mono voice above a mono low end (Haas side from the mid).
+    void fxWidth (B& b, float p, float stereoLo, float stereoHi)
+    {
+        if (! b.chance (p)) return;
+        b.on (P::WidthOn, true);
+        b.uni (P::WidthStereo, stereoLo, stereoHi);
+        b.uni (P::WidthTime, 6.f, 18.f);
+        b.uni (P::WidthMonoHz, 120.f, 200.f);
+    }
+
     // Single-band glue: soft knee, medium ratio, made up to the same loudness.
     void fxCompGlue (B& b)
     {
@@ -1092,6 +1102,17 @@ namespace
         b.uni (P::DistTone, 9000.f, 18000.f);
         if (b.chance (0.85f)) fxCompMulti (b);
         else fxCompGlue (b);
+
+        // The references' top end is noise, not harmonics: grit that skips the
+        // filter, then gets saturated and lifted with the rest. Width spreads it
+        // (and the upper body) while everything under ~150 Hz stays mono.
+        if (b.chance (0.85f))
+        {
+            b.on (P::NoiseDirect, true);
+            b.pick (P::NoiseType, { 1, 0 }, { 0.7f, 0.3f });
+            b.uni (P::NoiseLevel, 0.02f, 0.07f);
+        }
+        fxWidth (b, 0.85f, 0.35f, 0.6f);
     }
 } // namespace
 

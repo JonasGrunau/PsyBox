@@ -183,7 +183,50 @@ TEST_CASE ("Bass Shot patches are loud, sub-heavy, compressed one-shots", "[engi
         }
         CHECK (low / all > 0.5);
         CHECK (rmsRel.back() > -20.0);
+
+        // Width may spread the top, but the low end stays mono.
+        std::vector<std::complex<double>> sd (1 << 15);
+        for (size_t i = 0; i < l.size(); ++i) sd[i] = 0.5 * ((double) l[i] - (double) r[i]);
+        testutil::fft (sd);
+        double sideLow = 0.0;
+        for (size_t i = 1; (double) i * fs / (double) sd.size() < 60.0; ++i) sideLow += std::norm (sd[i]);
+        CHECK (sideLow < 1e-3 * low);   // side where the fundamentals sit: 30 dB+ below the lows (refs: -32 dB)
     }
     std::sort (rmsRel.begin(), rmsRel.end());
     CHECK (rmsRel[rmsRel.size() / 2] > -9.0);   // references: -7.5 dB median
+}
+
+TEST_CASE ("Noise Direct adds the noise after the filters", "[engine]")
+{
+    // Noise only, through a dark low-pass: routed direct, its top end survives.
+    const auto highShare = [] (bool direct) {
+        ParamState p;
+        p.set (P::VoiceMode, (float) VoiceMode::Mono);
+        p.set (P::OscAOn, 0.f);
+        p.set (P::NoiseLevel, 0.5f);
+        p.set (P::NoiseType, 0.f);
+        p.set (P::NoiseDirect, direct ? 1.f : 0.f);
+        p.set (P::F1Type, (float) FilterType::LP24);
+        p.set (P::F1Cutoff, 200.f);
+        p.set (P::AenvS, 1.f);
+        const double fs = 48000.0;
+        Engine e;
+        e.setParams (p);
+        e.prepare (fs, 256);
+        std::vector<float> l (1 << 15), r (1 << 15);
+        MidiEvent on { 0, MidiEvent::NoteOn, 48, 0.9f };
+        for (size_t pos = 0; pos < l.size(); pos += 256)
+            e.process (l.data() + pos, r.data() + pos, 256, pos == 0 ? &on : nullptr, pos == 0 ? 1 : 0, 140.0);
+        std::vector<std::complex<double>> a (l.begin(), l.end());
+        testutil::fft (a);
+        double hi = 0.0, all = 1e-30;
+        for (size_t i = 1; i < a.size() / 2; ++i)
+        {
+            all += std::norm (a[i]);
+            if ((double) i * fs / (double) a.size() > 4000.0) hi += std::norm (a[i]);
+        }
+        return hi / all;
+    };
+    CHECK (highShare (false) < 1e-4);
+    CHECK (highShare (true) > 0.3);
 }

@@ -98,6 +98,7 @@ private:
     ParamKnob *oscA, *oscB, *sub, *noise, *ring;
     Segmented subOct;
     ParamCombo subShape, noiseType;
+    ToggleDot noiseDirect;   // in the header: noise skips the filters
 };
 
 class FilterPanel : public Section, private juce::Timer
@@ -273,9 +274,9 @@ public:
 
 private:
     // Pages in signal-chain order.
-    enum Fx : int { Dist, Crush, Shift, Phaser, Chorus, Comp, Delay, Reverb, kNumFx };
+    enum Fx : int { Dist, Crush, Shift, Phaser, Chorus, Comp, Delay, Reverb, Width, kNumFx };
     PsySynthProcessor& proc;
-    TabStrip tabs { { "Dist", "Crush", "Shift", "Phaser", "Chorus", "Comp", "Delay", "Reverb" } };
+    TabStrip tabs { { "Dist", "Crush", "Shift", "Phase", "Chorus", "Comp", "Delay", "Verb", "Width" } };
     struct Page
     {
         std::unique_ptr<ToggleDot> on;

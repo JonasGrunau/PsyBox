@@ -154,6 +154,7 @@ void Voice::render (float* outL, float* outR, int chunkOffsetBase, int nBase, co
     const bool parallel = p.geti (P::FRouting) == 1;
     const int penvDest = p.geti (P::PenvDest);
     const int noiseType = p.geti (P::NoiseType);
+    const bool noiseDirect = p.on (P::NoiseDirect);   // added after the filters instead of before
     const int subShape = p.geti (P::SubShape);
     const float subOct = p.geti (P::SubOct) == 0 ? -12.f : -24.f;
     const float velGain = 1.f - p.get (P::VelSens) * (1.f - velocity);
@@ -305,8 +306,13 @@ void Voice::render (float* outL, float* outR, int chunkOffsetBase, int nBase, co
             float x = a * lvlA + b * lvlB + a * b * lvlRing;
             if (lvlSub > 0.f)
                 x += sub.process (incSub, subShape == 0 ? 0.f : (subShape == 1 ? 1.f : 3.f), 0.5f) * lvlSub;
+            float direct = 0.f;
             if (lvlNoise > 0.f)
-                x += noise.process (noiseType, incA * 4.0) * lvlNoise;
+            {
+                const float nz = noise.process (noiseType, incA * 4.0) * lvlNoise;
+                if (noiseDirect) direct = nz;
+                else x += nz;
+            }
             x *= 0.5f;
 
             float y;
@@ -314,6 +320,7 @@ void Voice::render (float* outL, float* outR, int chunkOffsetBase, int nBase, co
                 y = 0.5f * (f1.process (x) + f2.process (x)) * 1.4f;
             else
                 y = f2.process (f1.process (x));
+            y += 0.5f * direct;   // same staging as the filtered path
 
             y = flushDenormal (y);
             outL[base + j] += y * gL;

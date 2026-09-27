@@ -118,8 +118,11 @@ void OscPanel::resized()
 MixerPanel::MixerPanel (PsySynthProcessor& p)
     : Section ("Mixer"),
       subOct (p, P::SubOct, { "-1", "-2" }),
-      subShape (p, P::SubShape, "Sub Wave"), noiseType (p, P::NoiseType, "Noise Type")
+      subShape (p, P::SubShape, "Sub Wave"), noiseType (p, P::NoiseType, "Noise Type"),
+      noiseDirect (p, P::NoiseDirect, "Noise direct")
 {
+    noiseDirect.setTooltip ("Noise skips the filters and is added after them: bright grit over a dark sound");
+    addAndMakeVisible (noiseDirect);
     oscA = ks.add (*this, p, P::OscALevel, "Osc A");
     oscB = ks.add (*this, p, P::OscBLevel, "Osc B");
     sub = ks.add (*this, p, P::SubLevel);
@@ -131,6 +134,8 @@ MixerPanel::MixerPanel (PsySynthProcessor& p)
 
 void MixerPanel::resized()
 {
+    auto h = header();
+    noiseDirect.setBounds (h.removeFromRight (noiseDirect.idealWidth()));
     const auto gr = grid();
     oscA->setBounds (gr.cell (0, 0));
     oscB->setBounds (gr.cell (1, 0));
@@ -861,7 +866,7 @@ void ModMatrixPanel::resized()
 FxPanel::FxPanel (PsySynthProcessor& p) : Section ("Effects"), proc (p)
 {
     addAndMakeVisible (tabs);
-    static const P onIds[kNumFx] = { P::DistOn, P::CrushOn, P::FshiftOn, P::PhaserOn, P::ChorusOn, P::CompOn, P::DelayOn, P::ReverbOn };
+    static const P onIds[kNumFx] = { P::DistOn, P::CrushOn, P::FshiftOn, P::PhaserOn, P::ChorusOn, P::CompOn, P::DelayOn, P::ReverbOn, P::WidthOn };
     tabs.isLit = [this] (int i) { return proc.plain (onIds[i]) > 0.5f; };
     tabs.onChange = [this] (int i) { show (i); };
 
@@ -915,6 +920,8 @@ FxPanel::FxPanel (PsySynthProcessor& p) : Section ("Effects"), proc (p)
     knob (Delay, P::DelayFb); knob (Delay, P::DelayLowCut); knob (Delay, P::DelayHighCut); knob (Delay, P::DelayMix);
 
     knob (Reverb, P::ReverbSize); knob (Reverb, P::ReverbDecay); knob (Reverb, P::ReverbDamp); knob (Reverb, P::ReverbPre); knob (Reverb, P::ReverbMix);
+
+    knob (Width, P::WidthAmount); knob (Width, P::WidthStereo); knob (Width, P::WidthTime); knob (Width, P::WidthMonoHz);
 
     show (Dist);
     startTimerHz (10);
@@ -978,8 +985,11 @@ void FxPanel::resized()
 {
     auto h = header();
     h.removeFromLeft (titleWidth());
-    tabs.setGap (sp::lg);
-    if (tabs.idealWidth() > h.getWidth()) tabs.setGap (sp::md);   // eight tabs are tight
+    for (int gap : { sp::lg, sp::md, sp::sm })   // nine tabs are tight: close the gaps until they fit
+    {
+        tabs.setGap (gap);
+        if (tabs.idealWidth() <= h.getWidth()) break;
+    }
     tabs.setBounds (h.removeFromRight (juce::jmin (tabs.idealWidth(), h.getWidth())));
 
     const auto gr = grid();

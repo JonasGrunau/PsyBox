@@ -102,4 +102,20 @@ struct DcBlocker
 
 inline float flushDenormal (float x) noexcept { return std::abs (x) < 1e-20f ? 0.f : x; }
 
+// Linear per-sample ramp to a value that arrives once per block, so block-rate
+// parameters never step (zipper noise). Snaps to the first value it gets.
+struct Ramp
+{
+    float cur = 0.f, step = 0.f;
+    bool init = false;
+
+    void set (float target, int n) noexcept
+    {
+        if (! init) { cur = target; init = true; }
+        step = (target - cur) / (float) std::max (n, 1);
+    }
+    void reset() noexcept { init = false; step = 0.f; }
+    float next() noexcept { cur += step; return cur; }
+};
+
 } // namespace psy::dsp

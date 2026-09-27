@@ -104,12 +104,14 @@ TEST_CASE ("Every effect stays finite and bounded on loud noise with max feedbac
     ChorusFlanger ch; ch.prepare (fs);
     StereoDelay dl; dl.prepare (fs);
     Reverb rv; rv.prepare (fs);
+    StereoWidth wd; wd.prepare (fs);
 
     float peak = 0.f;
     for (int block = 0; block < 1500; ++block)
     {
         for (int i = 0; i < n; ++i) { l[(size_t) i] = rng.bipolar(); r[(size_t) i] = rng.bipolar(); }
         dist.process (l.data(), r.data(), n, block % 5, 36.f, 12000.f, 1.f);
+        wd.process (l.data(), r.data(), n, block % 50 != 0, 2.f, 1.f, 1.f + (float) (block % 30), 20.f + (float) (block % 13) * 37.f);
         crush.process (l.data(), r.data(), n, 4.f, 8.f, 1.f);
         shift.process (l.data(), r.data(), n, 300.f, 0.95f, 1.f, 1.f);
         ph.process (l.data(), r.data(), n, 3.f, 1.f, 0.95f, 1000.f, 1.f);
@@ -143,4 +145,94 @@ TEST_CASE ("ADSR segment times are exact", "[env]")
     int rel = 0;
     while (env.active()) { env.process(); ++rel; }
     CHECK_THAT ((double) rel, Catch::Matchers::WithinRel (200.0 * 48.0, 0.1));
+}
+
+namespace
+{
+    // Runs the width stage over stereo buffers in blocks, after a silent
+    // lead-in so the 10 ms fade-in is done.
+    void runWidth (StereoWidth& w, std::vector<float>& l, std::vector<float>& r, float width, float stereo, float timeMs, float monoHz)
+    {
+        std::vector<float> zl (1024, 0.f), zr (1024, 0.f);
+        w.process (zl.data(), zr.data(), 1024, true, width, stereo, timeMs, monoHz);
+        for (size_t i = 0; i < l.size(); i += 256)
+        {
+            const int n = (int) std::min<size_t> (256, l.size() - i);
+            w.process (l.data() + i, r.data() + i, n, true, width, stereo, timeMs, monoHz);
+        }
+    }
+
+    double rmsOf (const std::vector<float>& a, const std::vector<float>& b, float sign, size_t from)
+    {
+        double sum = 0.0;
+        for (size_t i = from; i < a.size(); ++i) { const double v = 0.5 * ((double) a[i] + sign * (double) b[i]); sum += v * v; }
+        return std::sqrt (sum / (double) (a.size() - from));
+    }
+} // namespace
+
+TEST_CASE ("Width never changes the mono sum's magnitude", "[fx][width]")
+{
+    // L + R = 2 * allpass(mid) for any width and stereoize: an impulse on one
+    // side must come out of the sum with a flat magnitude.
+    StereoWidth w;
+    w.prepare (48000.f);
+    std::vector<float> l (1 << 15, 0.f), r (1 << 15, 0.f);
+    l[0] = 1.f;
+    runWidth (w, l, r, 1.7f, 0.8f, 9.f, 150.f);
+    std::vector<std::complex<double>> a (l.size());
+    for (size_t i = 0; i < l.size(); ++i) a[i] = (double) l[i] + (double) r[i];
+    testutil::fft (a);
+    double worst = 0.0;
+    for (size_t i = 1; i < a.size() / 2; ++i)
+    {
+        const double hz = (double) i * 48000.0 / (double) a.size();
+        if (hz < 20.0 || hz > 20000.0) continue;
+        worst = std::max (worst, std::abs (20.0 * std::log10 (std::abs (a[i]))));
+    }
+    CHECK (worst < 0.02);
+}
+
+TEST_CASE ("Low Mono removes the side below the split and keeps it above", "[fx][width]")
+{
+    const float fs = 48000.f;
+    for (double hz : { 60.0, 1000.0 })
+    {
+        StereoWidth w;
+        w.prepare (fs);
+        std::vector<float> l ((size_t) fs), r ((size_t) fs);
+        for (size_t i = 0; i < l.size(); ++i) { l[i] = 0.5f * (float) std::sin (2.0 * M_PI * hz * (double) i / fs); r[i] = -l[i]; }
+        runWidth (w, l, r, 1.f, 0.f, 10.f, 150.f);
+        const double side = 20.0 * std::log10 (rmsOf (l, r, -1.f, l.size() / 2) / (0.5 / std::sqrt (2.0)));
+        INFO (hz << " Hz: side " << side << " dB");
+        if (hz < 150.0) CHECK (side < -30.0);   // LR4: 60 Hz is 1.3 octaves under a 150 Hz split
+        else CHECK (std::abs (side) < 0.1);
+    }
+}
+
+TEST_CASE ("Stereoize widens a mono source above the split only", "[fx][width]")
+{
+    const float fs = 48000.f;
+    for (double hz : { 60.0, 2000.0 })
+    {
+        StereoWidth w;
+        w.prepare (fs);
+        std::vector<float> l ((size_t) fs), r ((size_t) fs);
+        for (size_t i = 0; i < l.size(); ++i) l[i] = r[i] = 0.5f * (float) std::sin (2.0 * M_PI * hz * (double) i / fs);
+        runWidth (w, l, r, 1.f, 0.5f, 12.f, 200.f);
+        const double ratio = 20.0 * std::log10 (rmsOf (l, r, -1.f, l.size() / 2) / rmsOf (l, r, 1.f, l.size() / 2));
+        INFO (hz << " Hz: side/mid " << ratio << " dB");
+        if (hz < 200.0) CHECK (ratio < -40.0);
+        else CHECK (std::abs (ratio - 20.0 * std::log10 (0.5)) < 0.5);   // side = 0.5 x the delayed mid
+    }
+}
+
+TEST_CASE ("Width at 0 % folds everything to mono", "[fx][width]")
+{
+    StereoWidth w;
+    w.prepare (48000.f);
+    std::vector<float> l (24000), r (24000, 0.f);
+    for (size_t i = 0; i < l.size(); ++i) l[i] = (float) std::sin (2.0 * M_PI * 1000.0 * (double) i / 48000.0);
+    runWidth (w, l, r, 0.f, 0.f, 10.f, 120.f);
+    for (size_t i = 4800; i < l.size(); ++i)
+        REQUIRE (std::abs (l[i] - r[i]) < 1e-5f);
 }

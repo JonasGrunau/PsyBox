@@ -136,6 +136,7 @@ enum class ModDst : int
     X(SubShape,    "sub_shape",    "Sub Wave",    "Mixer", Choice, 0, 2, 0, 1.f, None, &choices::subShape, false) \
     X(NoiseLevel,  "noise_level",  "Noise",       "Mixer", Power, 0.f, 1.f, 0.f, 2.f, Percent, nullptr, true) \
     X(NoiseType,   "noise_type",   "Noise Type",  "Mixer", Choice, 0, 2, 0, 1.f, None, &choices::noiseType, false) \
+    X(NoiseDirect, "noise_direct", "Noise Direct","Mixer", Toggle, 0, 1, 0, 1.f, None, nullptr, false) \
     X(RingLevel,   "ring_level",   "Ring",        "Mixer", Linear, 0.f, 1.f, 0.f, 1.f, Percent, nullptr, true) \
     \
     X(PenvAmt,     "penv_amt",     "Amount",      "Pitch Env", BiPower, -60.f, 60.f, 0.f, 2.f, Semi, nullptr, true) \
@@ -285,6 +286,12 @@ enum class ModDst : int
     X(MbLowGain,   "mb_low_gain",  "Low",         "Compressor", Linear, -24.f, 24.f, 0.f, 1.f, Db, nullptr, false) \
     X(MbMidGain,   "mb_mid_gain",  "Mid",         "Compressor", Linear, -24.f, 24.f, 0.f, 1.f, Db, nullptr, false) \
     X(MbHighGain,  "mb_high_gain", "High",        "Compressor", Linear, -24.f, 24.f, 0.f, 1.f, Db, nullptr, false) \
+    \
+    X(WidthOn,     "width_on",     "On",          "Width", Toggle, 0, 1, 0, 1.f, None, nullptr, false) \
+    X(WidthAmount, "width_amount", "Width",       "Width", Linear, 0.f, 2.f, 1.f, 1.f, Percent, nullptr, false) \
+    X(WidthStereo, "width_stereo", "Stereoize",   "Width", Linear, 0.f, 1.f, 0.f, 1.f, Percent, nullptr, false) \
+    X(WidthTime,   "width_time",   "Time",        "Width", Power, 1.f, 30.f, 12.f, 2.f, Ms, nullptr, false) \
+    X(WidthMonoHz, "width_mono",   "Low Mono",    "Width", Exp, 20.f, 500.f, 120.f, 1.f, Hz, nullptr, false) \
     \
     X(ArpOn,       "arp_on",       "On",          "Arp", Toggle, 0, 1, 0, 1.f, None, nullptr, false) \
     X(ArpMode,     "arp_mode",     "Mode",        "Arp", Choice, 0, 4, 0, 1.f, None, &choices::arpMode, false) \

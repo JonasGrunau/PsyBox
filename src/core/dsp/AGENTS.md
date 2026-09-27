@@ -17,8 +17,8 @@ Self-contained audio DSP primitives in namespace `psy::dsp`. Almost everything i
 | `Shapers.h` | `AdaaShaper`: first-order antiderivative anti-aliased waveshaping (computed in double) |
 | `Modulators.h` | `Adsr` (analog-style segments, exact times, click-free retrigger), `PitchEnv`, `Lfo` |
 | `Oversampling.h` | `HalfbandDecimator` (Kaiser-designed FIR) and `Decimator` (1x/2x/4x → base rate, reports latency) |
-| `Effects.h` | `DelayLine`, `Distortion`, `Bitcrusher`, `FrequencyShifter` (Hilbert), `Phaser`, `ChorusFlanger`, `StereoDelay` (ping-pong), `Reverb` (FDN) |
-| `Dynamics.h` | `Compressor` (Normal: single band; Multiband: 3-band up + down, OTT style) with `CompSettings` in and `CompMeter` out. Parts in `dyn::`: `Crossover3` (LR4, low band allpassed so the bands sum flat), `PeakHold` (4-bucket running max over a band's longest period), soft-knee `downGain` / `upGain` (Giannoulis et al.), `GainSmoother` (dB-domain attack/release), `Ramp` |
+| `Effects.h` | `DelayLine`, `Distortion`, `Bitcrusher`, `FrequencyShifter` (Hilbert), `Phaser`, `ChorusFlanger`, `StereoDelay` (ping-pong), `Reverb` (FDN), `StereoWidth` (mid/side: Low Mono via LR4 on the side with the matching allpass on the mid, Width, Haas Stereoize; L + R never changes) |
+| `Dynamics.h` | `Compressor` (Normal: single band; Multiband: 3-band up + down, OTT style) with `CompSettings` in and `CompMeter` out. Parts in `dyn::`: `Crossover3` (LR4, low band allpassed so the bands sum flat), `PeakHold` (4-bucket running max over a band's longest period), soft-knee `downGain` / `upGain` (Giannoulis et al.), `GainSmoother` (dB-domain attack/release). `Ramp` (per-sample ramp for block-rate params) lives in `Common.h` |
 
 ## For AI Agents
 

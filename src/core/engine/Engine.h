@@ -99,6 +99,7 @@ private:
     dsp::Compressor comp;
     dsp::StereoDelay delay;
     dsp::Reverb reverb;
+    dsp::StereoWidth width;
     std::array<dsp::DcBlocker, 2> outDc;
 
     float peak = 0.f;
