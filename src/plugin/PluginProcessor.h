@@ -1,0 +1,114 @@
+#pragma once
+
+#include "engine/Engine.h"
+#include "generator/Generator.h"
+
+#include <juce_audio_processors/juce_audio_processors.h>
+#include <juce_audio_utils/juce_audio_utils.h>
+
+class PsySynthProcessor : public juce::AudioProcessor,
+                          public juce::ChangeBroadcaster
+{
+public:
+    PsySynthProcessor();
+    ~PsySynthProcessor() override = default;
+
+    // ---- AudioProcessor -------------------------------------------------------
+    void prepareToPlay (double sampleRate, int samplesPerBlock) override;
+    void releaseResources() override {}
+    bool isBusesLayoutSupported (const BusesLayout& layouts) const override;
+    void processBlock (juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
+
+    juce::AudioProcessorEditor* createEditor() override;
+    bool hasEditor() const override { return true; }
+
+    const juce::String getName() const override { return JucePlugin_Name; }
+    bool acceptsMidi() const override { return true; }
+    bool producesMidi() const override { return false; }
+    bool isMidiEffect() const override { return false; }
+    double getTailLengthSeconds() const override { return 8.0; }
+
+    int getNumPrograms() override { return 1; }
+    int getCurrentProgram() override { return 0; }
+    void setCurrentProgram (int) override {}
+    const juce::String getProgramName (int) override { return {}; }
+    void changeProgramName (int, const juce::String&) override {}
+
+    void getStateInformation (juce::MemoryBlock& destData) override;
+    void setStateInformation (const void* data, int sizeInBytes) override;
+
+    // ---- Parameters -----------------------------------------------------------
+    juce::AudioProcessorValueTreeState apvts;
+    juce::RangedAudioParameter* param (psy::P p) const noexcept { return params[(size_t) p]; }
+    float plain (psy::P p) const noexcept { return rawValues[(size_t) p]->load (std::memory_order_relaxed); }
+
+    // ---- Generator (message thread) ------------------------------------------
+    psy::Category getCategory() const noexcept { return category; }
+    void setCategory (psy::Category c);
+    void generate();
+    void generateWithSeed (uint32_t seed);
+    void mutate();
+    float getMutateAmount() const noexcept { return mutateAmount; }
+    void setMutateAmount (float a) { mutateAmount = juce::jlimit (0.f, 1.f, a); }
+    uint32_t getSeed() const noexcept { return seed; }
+
+    bool isLocked (psy::P p) const noexcept { return locks.test ((size_t) p); }
+    void setLocked (psy::P p, bool shouldLock);
+    void clearLocks();
+    int numLocks() const noexcept { return (int) locks.count(); }
+
+    bool canUndo() const noexcept { return historyIndex > 0; }
+    bool canRedo() const noexcept { return historyIndex + 1 < (int) history.size(); }
+    void undo();
+    void redo();
+
+    // ---- Presets --------------------------------------------------------------
+    static juce::File presetFolder();
+    juce::String getPresetName() const { return presetName; }
+    bool savePreset (const juce::String& name);
+    bool loadPreset (const juce::File& file);
+    void stepPreset (int delta);
+    juce::Array<juce::File> listPresets() const;
+    void initPatch();
+
+    // ---- GUI feeds ------------------------------------------------------------
+    // Mono scope ring buffer written by the audio thread, read by the GUI.
+    static constexpr int kScopeSize = 4096;
+    void copyScope (float* dest, int num) const noexcept;
+    float getPeak() const noexcept { return peakLevel.load (std::memory_order_relaxed); }
+    int getActiveVoices() const noexcept { return activeVoices.load (std::memory_order_relaxed); }
+
+private:
+    std::array<juce::RangedAudioParameter*, psy::kNumParams> params {};
+    std::array<std::atomic<float>*, psy::kNumParams> rawValues {};
+
+    psy::Engine engine;
+    psy::ParamState audioParams;
+    std::vector<psy::MidiEvent> midiEvents;
+    int reportedLatency = -1;
+
+    psy::Generator generator;
+    psy::Category category = psy::Category::Acid;
+    uint32_t seed = 0;
+    psy::LockSet locks;
+    float mutateAmount = 0.25f;
+    juce::String presetName { "Init" };
+
+    struct Snapshot { psy::ParamState state; uint32_t seed; psy::Category category; juce::String name; };
+    std::vector<Snapshot> history;
+    int historyIndex = -1;
+
+    std::array<float, kScopeSize> scope {};
+    std::atomic<int> scopeWrite { 0 };
+    std::atomic<float> peakLevel { 0.f };
+    std::atomic<int> activeVoices { 0 };
+    juce::Random random;
+
+    static juce::AudioProcessorValueTreeState::ParameterLayout createLayout();
+    psy::ParamState currentState() const;
+    void applyState (const psy::ParamState& s);
+    void pushHistory();
+    void restoreRanges();
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PsySynthProcessor)
+};

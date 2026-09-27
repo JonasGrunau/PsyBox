@@ -91,6 +91,26 @@ if(PSYSYNTH_BUILD_PLUGIN)
             juce::juce_recommended_config_flags
             juce::juce_recommended_lto_flags
             juce::juce_recommended_warning_flags)
+
+    # Dev tool: renders the editor to PNG without a host.
+    juce_add_console_app(psysynth_snapshot PRODUCT_NAME "psysynth_snapshot")
+    target_sources(psysynth_snapshot PRIVATE
+        tools/Snapshot.cpp
+        src/plugin/PluginProcessor.cpp
+        src/plugin/PluginEditor.cpp
+        src/ui/Theme.cpp
+        src/ui/PsyLookAndFeel.cpp
+        src/ui/Widgets.cpp
+        src/ui/Panels.cpp
+        src/ui/Displays.cpp)
+    target_include_directories(psysynth_snapshot PRIVATE src)
+    target_compile_definitions(psysynth_snapshot PRIVATE
+        JucePlugin_Name="PsySynth"
+        JUCE_MODAL_LOOPS_PERMITTED=1
+        JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_DISPLAY_SPLASH_SCREEN=0)
+    target_link_libraries(psysynth_snapshot PRIVATE
+        psysynth_core psysynth_assets juce::juce_audio_utils juce::juce_dsp
+        juce::juce_recommended_config_flags)
 endif()
 
 # ---------------------------------------------------------------------------
