@@ -10,7 +10,7 @@ Developer executables that let you check sound and UI without a DAW.
 | File | Description |
 |------|-------------|
 | `RenderCategories.cpp` | `psysynth_render <out-dir> [seeds-per-category]`: generates patches per category and writes WAVs for listening checks. Core-only (no JUCE); built when `PSYSYNTH_BUILD_TESTS=ON` |
-| `Snapshot.cpp` | `psysynth_snapshot <out-dir> [category-index ...]`: renders the editor offscreen to one PNG per category. Needs JUCE; built when `PSYSYNTH_BUILD_PLUGIN=ON` |
+| `Snapshot.cpp` | `psysynth_snapshot <out-dir> [category-index ...]`: renders the editor offscreen to one PNG per category. `PSYSNAP_TAB=n` switches every tab strip, `PSYSNAP_PARAMS="comp_on=1,comp_mode=0"` sets plain values after Generate. Needs JUCE; built when `PSYSYNTH_BUILD_PLUGIN=ON` |
 
 ## For AI Agents
 
@@ -20,7 +20,7 @@ Developer executables that let you check sound and UI without a DAW.
 - Keep `RenderCategories.cpp` JUCE-free so it builds in `build-core`.
 
 ### Testing Requirements
-- Smoke-run after changes: `./build-core/psysynth_render /tmp/psy 1` and check that WAVs appear for all 29 categories (the five kicks play four on the floor on F, F, G and D#).
+- Smoke-run after changes: `./build-core/psysynth_render /tmp/psy 1` and check that WAVs appear for all 30 categories (the five kicks play four on the floor on F, F, G and D#).
 
 ## Dependencies
 

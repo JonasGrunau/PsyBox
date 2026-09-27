@@ -4,6 +4,8 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
+
 using namespace psy;
 
 namespace
@@ -136,4 +138,52 @@ TEST_CASE ("Extreme parameter fuzzing never produces NaN or runaway output", "[e
         const Render out = play (p, 1.0);
         CHECK (out.peak <= 1.f);
     }
+}
+
+TEST_CASE ("Bass Shot patches are loud, sub-heavy, compressed one-shots", "[engine][generator]")
+{
+    // Traits measured on progressive-trance reference shots: nearly all energy
+    // under 150 Hz, RMS within a few dB of the peak (heavy compression), the
+    // compressor on and no delay or reverb tails.
+    Generator g;
+    const double fs = 44100.0;
+    const int total = (int) (fs * 60.0 / 140.0);   // one beat at 140 BPM, cut like a sample
+    std::vector<double> rmsRel;
+    for (uint32_t seed = 1; seed <= 24; ++seed)
+    {
+        ParamState p = g.generate (Category::BassShot, seed * 7919u, ParamState(), LockSet(), false);
+        INFO ("seed " << seed);
+        CHECK (p.on (P::CompOn));
+        CHECK_FALSE (p.on (P::DelayOn));
+        CHECK_FALSE (p.on (P::ReverbOn));
+        p.set (P::MasterVol, 0.f);
+
+        Engine e;
+        e.setParams (p);
+        e.prepare (fs, 256);
+        std::vector<float> l ((size_t) total), r ((size_t) total);
+        MidiEvent on { 0, MidiEvent::NoteOn, 40 + (int) (seed % 6), 0.9f };   // E2..A2
+        for (int pos = 0; pos < total; pos += 256)
+            e.process (l.data() + pos, r.data() + pos, std::min (256, total - pos), pos == 0 ? &on : nullptr, pos == 0 ? 1 : 0, 140.0);
+
+        float pk = 0.f;
+        for (float v : l) pk = std::max (pk, std::abs (v));
+        REQUIRE (pk > 0.01f);
+        rmsRel.push_back (20.0 * std::log10 (testutil::rms (l) / pk));
+
+        std::vector<std::complex<double>> a (1 << 15);
+        for (size_t i = 0; i < l.size(); ++i) a[i] = l[i];
+        testutil::fft (a);
+        double low = 0.0, all = 0.0;
+        for (size_t i = 1; i < a.size() / 2; ++i)
+        {
+            const double pw = std::norm (a[i]);
+            all += pw;
+            if ((double) i * fs / (double) a.size() < 150.0) low += pw;
+        }
+        CHECK (low / all > 0.5);
+        CHECK (rmsRel.back() > -20.0);
+    }
+    std::sort (rmsRel.begin(), rmsRel.end());
+    CHECK (rmsRel[rmsRel.size() / 2] > -9.0);   // references: -7.5 dB median
 }

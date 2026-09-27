@@ -40,6 +40,15 @@ namespace
         swing (b, 0.06f);
     }
 
+    // One long shot per step on the beat grid: every beat, every bar or halves.
+    void bassShot (B& b)
+    {
+        b.pick (P::ArpDiv, { D1_4 });
+        b.pick (P::ArpMode, { Order });
+        b.pick (P::ArpOctaves, { 1 });
+        gate (b, 0.8f, 1.f);
+    }
+
     // 303 line: long gates tie into slides on the legato voice.
     void acid (B& b)
     {
@@ -593,6 +602,14 @@ namespace
         write (b, ArpPattern::parse (form (choose (b, shapes, { 0.6f, 0.4f }), "x---", fill)));
     }
 
+    // Steps are beats here (1/4): a shot on every beat, once a bar, on halves,
+    // or 3-3-2 across two bars.
+    void bassShotPattern (B& b)
+    {
+        const char* bars[] = { "x", "x---", "x-x-", "x--x--x-" };
+        write (b, ArpPattern::parse (choose (b, bars, { 0.4f, 0.3f, 0.2f, 0.1f })));
+    }
+
     void impactPattern (B& b)
     {
         const char* bars[] = { "X---", "X-------", "X------x", "X-----x-" };
@@ -671,6 +688,7 @@ Recipe arpPatternRecipeFor (Category c) noexcept
         case Category::Gate:        return gatePattern;
         case Category::Glitch:      return glitchPattern;
         case Category::Reverse:     return reversePattern;
+        case Category::BassShot:    return bassShotPattern;
         case Category::Riser:
         case Category::Uplifter:
         case Category::Downlifter:
@@ -715,6 +733,7 @@ Recipe arpRecipeFor (Category c) noexcept
         case Category::Gate:        return gated;
         case Category::Glitch:      return glitch;
         case Category::Reverse:     return reverse;
+        case Category::BassShot:    return bassShot;
         case Category::KickFullOn:
         case Category::KickGoa:
         case Category::KickDarkForest:

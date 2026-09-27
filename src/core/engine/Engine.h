@@ -4,6 +4,7 @@
 #include "KickVoice.h"
 #include "Params.h"
 #include "Voice.h"
+#include "dsp/Dynamics.h"
 #include "dsp/Effects.h"
 #include "dsp/Oversampling.h"
 
@@ -53,6 +54,7 @@ public:
 
     // For the GUI (approximate, read without locking).
     float lastPeak() const noexcept { return peak; }
+    const dsp::CompMeter& compMeter() const noexcept { return comp.meter(); }
 
 private:
     double fs = 48000.0;
@@ -94,6 +96,7 @@ private:
     dsp::FrequencyShifter fshift;
     dsp::Phaser phaser;
     dsp::ChorusFlanger chorus;
+    dsp::Compressor comp;
     dsp::StereoDelay delay;
     dsp::Reverb reverb;
     std::array<dsp::DcBlocker, 2> outDc;

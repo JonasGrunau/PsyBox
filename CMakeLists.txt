@@ -133,6 +133,7 @@ if(PSYSYNTH_BUILD_TESTS)
         tests/TestOscillators.cpp
         tests/TestFilters.cpp
         tests/TestShapersAndFx.cpp
+        tests/TestDynamics.cpp
         tests/TestEngine.cpp
         tests/TestGenerator.cpp
         tests/TestArp.cpp

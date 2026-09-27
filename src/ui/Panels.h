@@ -272,20 +272,28 @@ public:
     void resized() override;
 
 private:
+    // Pages in signal-chain order.
+    enum Fx : int { Dist, Crush, Shift, Phaser, Chorus, Comp, Delay, Reverb, kNumFx };
     PsySynthProcessor& proc;
-    TabStrip tabs { { "Dist", "Crush", "Shift", "Phaser", "Chorus", "Delay", "Reverb" } };
+    TabStrip tabs { { "Dist", "Crush", "Shift", "Phaser", "Chorus", "Comp", "Delay", "Reverb" } };
     struct Page
     {
         std::unique_ptr<ToggleDot> on;
         std::vector<juce::Component*> items;
         std::vector<std::unique_ptr<juce::Component>> owned;
     };
-    Page pages[7];
+    Page pages[kNumFx];
     KnobSet ks;
     ParamKnob *delayTime = nullptr, *delayDiv = nullptr;
+    // Compressor page: a knob set per mode (attack, release and output are in
+    // both), the mode switch, and the display on the right.
+    std::vector<ParamKnob*> compNormal, compMulti;
+    Segmented* compMode = nullptr;
+    CompDisplay* compDisplay = nullptr;
     int current = 0;
-    bool lastDelaySync = true;
+    bool lastDelaySync = true, lastCompMulti = false;
     void show (int page);
+    void layoutComp (const CellGrid&);
     void timerCallback() override;
 };
 

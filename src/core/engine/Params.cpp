@@ -37,6 +37,7 @@ namespace choices
                                             "Filter Env Amt" };
     const std::vector<std::string> distType { "Soft", "Hard", "Fold", "Tube", "Rectify" };
     const std::vector<std::string> chorusMode { "Chorus", "Flanger" };
+    const std::vector<std::string> compMode { "Normal", "Multi" };
     const std::vector<std::string> arpMode { "Up", "Down", "Up/Down", "Random", "Order" };
     const std::vector<std::string> engineMode { "Synth", "Kick" };
     const std::vector<std::string> kickClick { "Noise", "Tick", "Blip" };
@@ -125,6 +126,10 @@ std::string ParamDef::format (float p) const
         case Unit::Db:      std::snprintf (buf, sizeof buf, "%.1f dB", p); break;
         case Unit::Octaves: std::snprintf (buf, sizeof buf, "%+.2f oct", p); break;
         case Unit::Ratio:   std::snprintf (buf, sizeof buf, "%.2fx", p); break;
+        case Unit::RatioTo1:
+            if (p >= 10.f) std::snprintf (buf, sizeof buf, "%.0f:1", p);
+            else std::snprintf (buf, sizeof buf, "%.1f:1", p);
+            break;
         case Unit::Int:     std::snprintf (buf, sizeof buf, "%d", (int) std::lround (p)); break;
         case Unit::None:    std::snprintf (buf, sizeof buf, "%.2f", p); break;
     }

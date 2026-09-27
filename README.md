@@ -11,14 +11,18 @@ Builds as **VST3**, **Audio Unit** and **Standalone** (macOS).
 
 ## Categories
 
-24 kinds of sound, each with its own recipe and accent colour:
+25 kinds of sound, each with its own recipe and accent colour:
 
-Acid · Alien Voice · Atmos · Bubble · Downlifter · Drone · Gate · Glitch ·
-Gurgle · Impact · Laser · Metallic · Noise FX · Pluck · Psy Lead · Reverse ·
-Riser · Rolling Bass · Screech · Squelch · Stab · Uplifter · Wobble · Zap
+Acid · Alien Voice · Atmos · Bass Shot · Bubble · Downlifter · Drone · Gate ·
+Glitch · Gurgle · Impact · Laser · Metallic · Noise FX · Pluck · Psy Lead ·
+Reverse · Riser · Rolling Bass · Screech · Squelch · Stab · Uplifter · Wobble ·
+Zap
 
 Riser is a synth tone climbing in pitch; Uplifter is a noise sweep that opens
-upward. The sidebar list scrolls when it is longer than the space it has.
+upward. Bass Shot is the progressive-trance one-shot: a saw over a body
+oscillator, a kick-like pitch drop, grit, then multiband compression. Its
+ranges were fitted to a set of reference shots (harmonic slope, band balance,
+envelope shapes, loudness). The sidebar list scrolls when it is longer than the space it has.
 
 ### Kicks
 
@@ -131,7 +135,17 @@ keep running.
 ### Effects
 
 Distortion (5 types), bitcrusher, Hilbert frequency shifter,
-phaser, chorus / flanger, ping-pong delay and an 8-line FDN reverb.
+phaser, chorus / flanger, compressor, ping-pong delay and an 8-line FDN reverb,
+in that order.
+
+The compressor has two modes. **Normal** is a single-band, soft-knee compressor
+with a parallel mix. **Multi** is a three-band upward + downward compressor in
+the OTT / Serum style: drag each band's down and up thresholds and the two
+band splits in the display, set the band gains, Depth, Down and Up amounts.
+It is built to stay clean: Linkwitz-Riley bands that sum flat, a detector
+that holds a whole waveform cycle (no distortion on low notes), stereo-linked
+detection, Depth applied per band (no comb filtering against the band
+filters), upward gain that fades out near silence, and click-free switching.
 
 ## Building
 

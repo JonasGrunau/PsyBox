@@ -1,5 +1,6 @@
 #include "Displays.h"
 
+#include "dsp/Dynamics.h"
 #include "dsp/Filters.h"
 #include "dsp/Shapers.h"
 #include "engine/KickVoice.h"
@@ -695,4 +696,314 @@ void KickWaveDisplay::paintContent (juce::Graphics& g, juce::Rectangle<float> r)
     }
     g.setColour (col::text.withAlpha (0.35f));
     g.strokePath (p, juce::PathStrokeType (1.f));
+}
+
+// ---------------------------------------------------------------------------
+// CompDisplay
+// ---------------------------------------------------------------------------
+namespace
+{
+    constexpr float kMbBottomDb = -72.f;    // Multiband level axis: 0 dB at the top
+    constexpr float kNormLoDb = -60.f;      // Normal: -60..0 dB in and out
+    constexpr float kLoHz = 20.f, kHiHz = 20000.f;
+    constexpr float kGrabPx = 6.f;
+    constexpr float kGrRangeDb = 24.f;      // full height of the Normal gain-reduction bar
+}
+
+juce::Rectangle<float> CompDisplay::plot() const
+{
+    const auto r = getLocalBounds().toFloat().reduced (1.f);
+    if (multi()) return r.withTrimmedTop (15.f).withTrimmedBottom (13.f);   // readouts above, splits below
+    return r.reduced (8.f).withTrimmedRight (8.f);                           // gain-reduction bar on the right
+}
+
+float CompDisplay::xOfHz (float hz) const
+{
+    const auto p = plot();
+    return p.getX() + p.getWidth() * std::log (hz / kLoHz) / std::log (kHiHz / kLoHz);
+}
+
+float CompDisplay::hzOfX (float x) const
+{
+    const auto p = plot();
+    return kLoHz * std::pow (kHiHz / kLoHz, juce::jlimit (0.f, 1.f, (x - p.getX()) / p.getWidth()));
+}
+
+float CompDisplay::yOfDb (float db) const
+{
+    const auto p = plot();
+    return p.getY() + p.getHeight() * db / (multi() ? kMbBottomDb : kNormLoDb);
+}
+
+float CompDisplay::dbOfY (float y) const
+{
+    const auto p = plot();
+    return (y - p.getY()) / p.getHeight() * (multi() ? kMbBottomDb : kNormLoDb);
+}
+
+float CompDisplay::xOfDb (float db) const
+{
+    const auto p = plot();
+    return p.getX() + p.getWidth() * (db - kNormLoDb) / -kNormLoDb;
+}
+
+float CompDisplay::dbOfX (float x) const
+{
+    const auto p = plot();
+    return kNormLoDb - (x - p.getX()) / p.getWidth() * kNormLoDb;
+}
+
+int CompDisplay::bandAt (float x) const
+{
+    if (x < xOfHz (proc.plain (P::MbXLow))) return 0;
+    return x < xOfHz (proc.plain (P::MbXHigh)) ? 1 : 2;
+}
+
+CompDisplay::Target CompDisplay::targetAt (juce::Point<float> pt) const
+{
+    if (! getLocalBounds().toFloat().contains (pt)) return {};
+    if (! multi()) return { P::CompThresh, P::Count, true };   // the threshold follows the input axis
+
+    if (std::abs (pt.x - xOfHz (proc.plain (P::MbXLow))) <= kGrabPx) return { P::MbXLow, P::Count, false };
+    if (std::abs (pt.x - xOfHz (proc.plain (P::MbXHigh))) <= kGrabPx) return { P::MbXHigh, P::Count, false };
+    const int b = bandAt (pt.x);
+    const auto down = psy::mbDownParam (b), up = psy::mbUpParam (b);
+    const float dd = std::abs (pt.y - yOfDb (proc.plain (down)));
+    const float du = std::abs (pt.y - yOfDb (proc.plain (up)));
+    return dd <= du ? Target { down, up, true } : Target { up, down, false };
+}
+
+void CompDisplay::setPlain (P p, float plain)
+{
+    proc.param (p)->setValueNotifyingHost (psy::def (p).toNorm (plain));
+}
+
+void CompDisplay::mouseMove (const juce::MouseEvent& e)
+{
+    const auto t = targetAt (e.position);
+    if (t.param != hover.param) { hover = t; repaint(); }
+    const bool sideways = t.param == P::MbXLow || t.param == P::MbXHigh || t.param == P::CompThresh;
+    setMouseCursor (sideways ? juce::MouseCursor::LeftRightResizeCursor : juce::MouseCursor::UpDownResizeCursor);
+}
+
+void CompDisplay::mouseExit (const juce::MouseEvent&)
+{
+    hover = {};
+    repaint();
+}
+
+void CompDisplay::mouseDown (const juce::MouseEvent& e)
+{
+    drag = targetAt (e.position);
+    if (drag.param == P::Count) return;
+    for (auto p : { drag.param, drag.partner })
+        if (p != P::Count) proc.param (p)->beginChangeGesture();
+
+    // Grab relative to the handle, so a click never makes the value jump.
+    const float v = proc.plain (drag.param);
+    if (drag.param == P::MbXLow || drag.param == P::MbXHigh) grabOffset = e.position.x - xOfHz (v);
+    else if (drag.param == P::CompThresh) grabOffset = e.position.x - xOfDb (v);
+    else grabOffset = e.position.y - yOfDb (v);
+}
+
+void CompDisplay::mouseDrag (const juce::MouseEvent& e)
+{
+    if (drag.param == P::Count) return;
+    if (drag.param == P::MbXLow)
+        setPlain (P::MbXLow, std::min (hzOfX (e.position.x - grabOffset), 0.5f * proc.plain (P::MbXHigh)));
+    else if (drag.param == P::MbXHigh)
+        setPlain (P::MbXHigh, std::max (hzOfX (e.position.x - grabOffset), 2.f * proc.plain (P::MbXLow)));
+    else if (drag.param == P::CompThresh)
+        setPlain (P::CompThresh, dbOfX (e.position.x - grabOffset));
+    else
+    {
+        const auto& d = psy::def (drag.param);
+        const float v = juce::jlimit (d.min, d.max, dbOfY (e.position.y - grabOffset));
+        setPlain (drag.param, v);
+        // up threshold <= down threshold: the dragged one pushes the other along
+        const float other = proc.plain (drag.partner);
+        if (drag.isDown ? other > v : other < v) setPlain (drag.partner, v);
+    }
+    repaint();
+}
+
+void CompDisplay::mouseUp (const juce::MouseEvent&)
+{
+    for (auto p : { drag.param, drag.partner })
+        if (p != P::Count) proc.param (p)->endChangeGesture();
+    drag = {};
+    repaint();
+}
+
+void CompDisplay::mouseDoubleClick (const juce::MouseEvent& e)
+{
+    const auto t = targetAt (e.position);
+    if (t.param == P::Count) return;
+    for (auto p : { t.param, t.partner })
+        if (p != P::Count) proc.param (p)->beginChangeGesture();
+    const float v = psy::def (t.param).def;
+    setPlain (t.param, v);
+    if (t.partner != P::Count)
+    {
+        const float other = proc.plain (t.partner);
+        if (t.isDown ? other > v : other < v) setPlain (t.partner, v);
+    }
+    for (auto p : { t.param, t.partner })
+        if (p != P::Count) proc.param (p)->endChangeGesture();
+    repaint();
+}
+
+void CompDisplay::timerCallback()
+{
+    if (proc.plain (P::CompOn) > 0.5f) repaint();   // live meters
+    else DisplayBase::timerCallback();
+}
+
+uint64_t CompDisplay::fingerprint() const
+{
+    return hashParams ({ P::CompOn, P::CompMode, P::CompThresh, P::CompRatio, P::CompKnee, P::MbXLow, P::MbXHigh,
+                         P::MbLowDown, P::MbMidDown, P::MbHighDown, P::MbLowUp, P::MbMidUp, P::MbHighUp })
+         ^ ((uint64_t) hover.param << 40) ^ ((uint64_t) drag.param << 50);
+}
+
+void CompDisplay::paintContent (juce::Graphics& g, juce::Rectangle<float> r)
+{
+    const bool on = proc.plain (P::CompOn) > 0.5f;
+    if (multi()) paintMulti (g, r, on);
+    else paintNormal (g, r, on);
+    if (! on)
+    {
+        g.setColour (col::well.withAlpha (0.4f));   // still editable, visibly off
+        g.fillRect (r);
+    }
+}
+
+void CompDisplay::paintMulti (juce::Graphics& g, juce::Rectangle<float> r, bool on)
+{
+    const auto p = plot();
+    const auto acc = accent();
+    const float splits[2] = { proc.plain (P::MbXLow), proc.plain (P::MbXHigh) };
+    const float xs[4] = { r.getX(), xOfHz (splits[0]), xOfHz (splits[1]), r.getRight() };
+
+    g.setColour (col::grid);
+    for (float db = -12.f; db > kMbBottomDb; db -= 12.f)
+        g.fillRect (r.getX(), yOfDb (db), r.getWidth(), 1.f);
+
+    g.setFont (mono (9.f));
+    static const char* names[3] = { "LOW", "MID", "HIGH" };
+    for (int b = 0; b < 3; ++b)
+    {
+        const float x0 = xs[b], x1 = xs[b + 1], cx = 0.5f * (x0 + x1);
+        const float down = proc.plain (psy::mbDownParam (b));
+        const float yDown = yOfDb (down), yUp = yOfDb (std::min (proc.plain (psy::mbUpParam (b)), down));
+        const juce::Rectangle<float> column (x0, p.getY(), x1 - x0, p.getHeight());
+
+        // above the down threshold gets pushed down, below the up threshold lifted
+        g.setColour (acc.withAlpha (on ? 0.11f : 0.05f));
+        g.fillRect (column.withBottom (yDown));
+        g.setColour (acc.withAlpha (on ? 0.05f : 0.025f));
+        g.fillRect (column.withTop (yUp));
+
+        const auto readout = juce::Rectangle<float> (x0, r.getY() + 2.f, x1 - x0, 11.f);
+        if (on)
+        {
+            const auto m = proc.getCompReading (b);
+            const float bw = juce::jlimit (3.f, 6.f, (x1 - x0) * 0.1f);
+            const auto bar = [&] (float x, float db, juce::Colour c) {
+                const float y = juce::jlimit (p.getY(), p.getBottom(), yOfDb (db));
+                g.setColour (c);
+                g.fillRect (juce::Rectangle<float> (x, y, bw, p.getBottom() - y));
+            };
+            bar (cx - bw - 1.f, m.inDb, col::textDim.withAlpha (0.5f));        // in
+            bar (cx + 1.f, m.inDb + m.totalDb, acc.withAlpha (0.9f));           // out
+            const bool moving = std::abs (m.gainDb) >= 0.05f;
+            g.setColour (moving ? col::text : col::textFaint);
+            g.drawText ((m.gainDb > 0.f ? "+" : "") + juce::String (moving ? m.gainDb : 0.f, 1), readout, juce::Justification::centred, false);
+        }
+        else
+        {
+            g.setColour (col::textFaint);
+            g.drawText (names[b], readout, juce::Justification::centred, false);
+        }
+
+        // thresholds: a line across the band and a handle in the middle
+        const auto line = [&] (float y, P prm, float alpha) {
+            const bool hot = hover.param == prm || drag.param == prm;
+            g.setColour (acc.withAlpha (alpha * (on ? 1.f : 0.55f)));
+            g.fillRect (x0 + 2.f, y - (hot ? 1.f : 0.5f), x1 - x0 - 4.f, hot ? 2.f : 1.f);
+            const float hw = hot ? 14.f : 10.f;
+            g.fillRoundedRectangle (cx - 0.5f * hw, y - 2.f, hw, 4.f, 2.f);
+        };
+        line (yUp, psy::mbUpParam (b), 0.6f);
+        line (yDown, psy::mbDownParam (b), 1.f);
+    }
+
+    for (int i = 0; i < 2; ++i)
+    {
+        const auto prm = i == 0 ? P::MbXLow : P::MbXHigh;
+        const bool hot = hover.param == prm || drag.param == prm;
+        g.setColour (hot ? col::textDim : col::lineStrong);
+        g.fillRect (xs[i + 1] - (hot ? 1.f : 0.5f), r.getY(), hot ? 2.f : 1.f, r.getHeight());
+        g.setColour (hot ? col::text : col::textFaint);
+        g.drawText (hzText (splits[i]), juce::Rectangle<float> (xs[i + 1] - 20.f, p.getBottom() + 2.f, 40.f, 10.f),
+                    juce::Justification::centred, false);
+    }
+}
+
+void CompDisplay::paintNormal (juce::Graphics& g, juce::Rectangle<float> r, bool on)
+{
+    const auto p = plot();
+    const auto acc = accent();
+    const float thr = proc.plain (P::CompThresh), knee = proc.plain (P::CompKnee);
+    const float slope = 1.f - 1.f / std::max (proc.plain (P::CompRatio), 1.f);
+    const auto out = [&] (float in) { return in + psy::dsp::dyn::downGain (in, thr, slope, knee); };
+
+    g.setColour (col::grid);
+    for (float db = -12.f; db > kNormLoDb; db -= 12.f)
+    {
+        g.fillRect (xOfDb (db), p.getY(), 1.f, p.getHeight());
+        g.fillRect (p.getX(), yOfDb (db), p.getWidth(), 1.f);
+    }
+    g.setColour (col::lineStrong);
+    g.drawLine (xOfDb (kNormLoDb), yOfDb (kNormLoDb), xOfDb (0.f), yOfDb (0.f), 1.f);   // 1:1
+
+    juce::Path curve;
+    for (int i = 0; i <= 120; ++i)
+    {
+        const float in = kNormLoDb * (1.f - (float) i / 120.f);
+        const juce::Point<float> pt (xOfDb (in), yOfDb (out (in)));
+        if (i == 0) curve.startNewSubPath (pt);
+        else curve.lineTo (pt);
+    }
+    strokeCurve (g, curve, p, true);
+
+    // threshold handle and value
+    const bool hot = hover.param == P::CompThresh || drag.param == P::CompThresh;
+    const juce::Point<float> tp (xOfDb (thr), yOfDb (out (thr)));
+    const float d = hot ? 8.f : 6.f;
+    g.setColour (acc);
+    g.fillEllipse (tp.x - 0.5f * d, tp.y - 0.5f * d, d, d);
+    g.setFont (mono (9.f));
+    g.setColour (hot ? col::text : col::textDim);
+    const bool leftSide = tp.x > p.getCentreX();
+    g.drawText (juce::String (thr, 1) + " dB", juce::Rectangle<float> (leftSide ? tp.x - 58.f : tp.x + 6.f, tp.y - 14.f, 52.f, 10.f),
+                leftSide ? juce::Justification::centredRight : juce::Justification::centredLeft, false);
+
+    if (! on) return;
+    const auto m = proc.getCompReading (0);
+    if (m.inDb > kNormLoDb)
+    {
+        const juce::Point<float> lp (xOfDb (juce::jmin (m.inDb, 0.f)), yOfDb (juce::jlimit (kNormLoDb, 0.f, m.inDb + m.gainDb)));
+        g.setColour (col::text);
+        g.fillEllipse (lp.x - 2.5f, lp.y - 2.5f, 5.f, 5.f);
+    }
+    // gain reduction, hanging from the top
+    const float gr = juce::jlimit (0.f, kGrRangeDb, -m.gainDb);
+    const juce::Rectangle<float> track (r.getRight() - 7.f, p.getY(), 3.f, p.getHeight());
+    g.setColour (col::grid);
+    g.fillRect (track);
+    g.setColour (acc);
+    g.fillRect (track.withHeight (track.getHeight() * gr / kGrRangeDb));
+    g.setColour (gr >= 0.05f ? col::text : col::textFaint);
+    g.drawText ("-" + juce::String (gr, 1), juce::Rectangle<float> (p.getX() + 2.f, p.getY(), 40.f, 10.f), juce::Justification::centredLeft, false);
 }

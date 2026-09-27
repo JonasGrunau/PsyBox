@@ -4,6 +4,7 @@
 // Setting PSYSNAP_TAB=n also switches every tab strip to tab n (clamped),
 // and PSYSNAP_LOCKS=1 locks a couple of parameters, to review those states.
 // PSYSNAP_ARP=1 generates with an arp; PSYSNAP_PATTERN=1 opens the pattern editor.
+// PSYSNAP_PARAMS="comp_on=1,comp_mode=0" sets plain parameter values after Generate.
 
 #include "plugin/PluginEditor.h"
 #include "plugin/PluginProcessor.h"
@@ -53,6 +54,14 @@ int main (int argc, char** argv)
     {
         proc.setCategory ((psy::Category) juce::jlimit (0, psy::kNumCategories - 1, c));
         proc.generateWithSeed (0x1000u + (uint32_t) c * 7919u);
+        if (auto* list = std::getenv ("PSYSNAP_PARAMS"))
+            for (const auto& item : juce::StringArray::fromTokens (list, ",", ""))
+            {
+                const int i = psy::findParam (item.upToFirstOccurrenceOf ("=", false, false).trim().toStdString());
+                if (i >= 0)
+                    proc.param ((psy::P) i)->setValueNotifyingHost (
+                        psy::paramDefs()[(size_t) i].toNorm (item.fromFirstOccurrenceOf ("=", false, false).getFloatValue()));
+            }
 
         // Feed a note through the engine so the scope has something to show.
         juce::AudioBuffer<float> buf (2, 512);

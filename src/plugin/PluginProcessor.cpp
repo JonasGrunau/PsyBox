@@ -224,6 +224,16 @@ void PsySynthProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
     peakLevel.store (std::max (engine.lastPeak(), peakLevel.load (std::memory_order_relaxed) * 0.9f), std::memory_order_relaxed);
     activeVoices.store (engine.activeVoices(), std::memory_order_relaxed);
     arpStep.store (engine.arpStep(), std::memory_order_relaxed);
+
+    const auto& cm = engine.compMeter();
+    const float fall = 45.f * (float) n / (float) getSampleRate();
+    for (size_t b = 0; b < 3; ++b)
+    {
+        auto& m = compMeters[b];
+        m[0].store (std::max (cm.inDb[b], m[0].load (std::memory_order_relaxed) - fall), std::memory_order_relaxed);
+        m[1].store (cm.gainDb[b], std::memory_order_relaxed);
+        m[2].store (cm.totalDb[b], std::memory_order_relaxed);
+    }
 }
 
 void PsySynthProcessor::copyScope (float* dest, int num) const noexcept

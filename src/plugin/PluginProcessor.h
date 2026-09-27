@@ -106,6 +106,14 @@ public:
     void copyScope (float* dest, int num) const noexcept;
     float getPeak() const noexcept { return peakLevel.load (std::memory_order_relaxed); }
     int getActiveVoices() const noexcept { return activeVoices.load (std::memory_order_relaxed); }
+    // Compressor band readings in dB (band 0 only in Normal mode). The input
+    // level holds its peaks and falls back at ~45 dB/s.
+    struct CompReading { float inDb = -200.f, gainDb = 0.f, totalDb = 0.f; };
+    CompReading getCompReading (int band) const noexcept
+    {
+        const auto& m = compMeters[(size_t) band];
+        return { m[0].load (std::memory_order_relaxed), m[1].load (std::memory_order_relaxed), m[2].load (std::memory_order_relaxed) };
+    }
 
 private:
     std::array<juce::RangedAudioParameter*, psy::kNumParams> params {};
@@ -162,6 +170,7 @@ private:
     std::atomic<float> peakLevel { 0.f };
     std::atomic<int> activeVoices { 0 };
     std::atomic<int> arpStep { -1 };
+    std::array<std::array<std::atomic<float>, 3>, 3> compMeters {};   // per band: in, gain, total
     juce::Random random;
 
     static juce::AudioProcessorValueTreeState::ParameterLayout createLayout();

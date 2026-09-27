@@ -191,6 +191,45 @@ namespace
         b.uni (P::FshiftMix, 0.3f, 0.6f);
     }
 
+    // OTT-style multiband: down and up on every band, lows and highs lifted.
+    // Thresholds sit where a mono bass voice lands after the voice gain staging.
+    void fxCompMulti (B& b)
+    {
+        b.on (P::CompOn, true);
+        b.set (P::CompMode, (float) CompMode::Multiband);
+        b.uni (P::CompAttack, 2.f, 12.f);
+        b.uni (P::CompRelease, 60.f, 220.f);
+        b.uni (P::CompMix, 0.5f, 0.85f);
+        b.uni (P::CompDown, 0.5f, 0.8f);
+        b.uni (P::CompUp, 0.5f, 0.9f);
+        b.uni (P::MbXLow, 120.f, 200.f);   // keeps the 2nd harmonic of an E1-A1 shot with its fundamental
+        b.uni (P::MbXHigh, 1800.f, 3500.f);
+        b.uni (P::MbLowDown, -10.f, -4.f);
+        b.uni (P::MbMidDown, -22.f, -14.f);
+        b.uni (P::MbHighDown, -28.f, -20.f);
+        b.uni (P::MbLowUp, -40.f, -30.f);
+        b.uni (P::MbMidUp, -44.f, -34.f);
+        b.uni (P::MbHighUp, -42.f, -30.f);
+        b.uni (P::MbLowGain, 0.f, 3.f);
+        b.uni (P::MbMidGain, -1.f, 3.f);
+        b.uni (P::MbHighGain, 4.f, 10.f);
+        b.uni (P::CompOut, 0.f, 3.f);
+    }
+
+    // Single-band glue: soft knee, medium ratio, made up to the same loudness.
+    void fxCompGlue (B& b)
+    {
+        b.on (P::CompOn, true);
+        b.set (P::CompMode, (float) CompMode::Normal);
+        b.uni (P::CompThresh, -24.f, -14.f);
+        b.uni (P::CompRatio, 4.f, 10.f);
+        b.uni (P::CompKnee, 6.f, 12.f);
+        b.uni (P::CompAttack, 5.f, 20.f);
+        b.uni (P::CompRelease, 80.f, 200.f);
+        b.set (P::CompMix, 1.f);
+        b.uni (P::CompOut, 4.f, 8.f);
+    }
+
     // =========================================================================
     // Recipes
     // =========================================================================
@@ -971,6 +1010,89 @@ namespace
         fxDelay (b, 0.3f, { D1_8D, D1_4 }, 0.2f, 0.4f, 0.1f, 0.2f);
         fxChorus (b, 0.3f, false);
     }
+    // Progressive-trance bass shot: one big, sustained, heavily compressed hit
+    // per beat. Modelled on reference one-shots: a low-passed saw over a sine
+    // body (E1-A1 when played at E2-A2), a kick-like pitch drop on most hits,
+    // flat sustain, swell or pluck shapes, soft saturation, OTT on top. Dry.
+    void bassShot (B& b)
+    {
+        if (b.chance (0.1f)) monoVoice (b, true, 40.f, 150.f);   // the odd two-note glide shot
+        else monoVoice (b, false, 0.f, 0.f);
+        b.pick (P::Octave, { -1, 0 }, { 0.75f, 0.25f });
+        b.set (P::VelSens, 0.15f);
+        b.set (P::Accent, 0.f);
+
+        const bool analog = b.chance (0.55f);
+        if (analog) analogA (b, kSaw, 0.8f);
+        else { supersawA (b, 0.08f, 0.25f); b.set (P::OscALevel, 0.7f); }
+        // The body, same pitch and retriggered with A. It must add to the saw's
+        // fundamental, not cancel it: the analog saw's fundamental lines up with
+        // a triangle, the supersaw's with a sine.
+        analogB (b, analog ? kTri : kSine, 0.5f, 0.8f);
+        b.set (P::OscBFine, 0.f);
+
+        // Gentle slopes: the references keep a long, soft top above the body.
+        // Key tracking counts from C4, so at E2 the cutoff lands ~1 octave lower.
+        b.pick (P::F1Type, { ft (FilterType::LP12), ft (FilterType::LP18) }, { 0.7f, 0.3f });
+        b.uni (P::F1Cutoff, 500.f, 2000.f);
+        b.uni (P::F1Reso, 0.05f, 0.3f);
+        b.uni (P::F1Key, 0.3f, 0.7f);
+        b.uni (P::F1Drive, 0.1f, 0.4f);
+
+        // Shape: flat sustain, swell, pluck or slow decay, in the reference mix.
+        const int shape = b.weighted ({ 0.55f, 0.35f, 0.06f, 0.04f });
+        switch (shape)
+        {
+            case 0:
+                ampEnv (b, 0.f, 3.f, 200.f, 600.f, 0.85f, 1.f, 30.f, 120.f);
+                filterEnv (b, 0.f, 0.f, 60.f, 200.f, 0.2f, 0.5f, 40.f, 120.f);
+                b.uni (P::F1Env, 0.2f, 0.45f);
+                break;
+            case 1:
+                // The amp attack alone rises too fast early on; multiplying it by a
+                // falling mod env on Amp gives the slow start of a real swell
+                // (about -16 dB at 50 ms, -4 dB at 150 ms).
+                ampEnv (b, 150.f, 300.f, 200.f, 600.f, 1.f, 1.f, 40.f, 120.f);
+                modEnv (b, 0.f, 0.f, 600.f, 1200.f, 0.f, 0.f, 100.f, 300.f);
+                b.route (S::ModEnv, D::Amp, -0.95f, -0.85f);
+                filterEnv (b, 120.f, 350.f, 200.f, 500.f, 0.5f, 0.9f, 40.f, 120.f);
+                b.uni (P::F1Env, 0.25f, 0.5f);
+                break;
+            case 2:
+                ampEnv (b, 0.f, 2.f, 120.f, 300.f, 0.f, 0.3f, 60.f, 150.f);
+                filterEnv (b, 0.f, 0.f, 60.f, 150.f, 0.f, 0.1f, 40.f, 100.f);
+                b.uni (P::F1Env, 0.3f, 0.55f);
+                break;
+            default:
+                ampEnv (b, 0.f, 2.f, 250.f, 500.f, 0.3f, 0.6f, 60.f, 150.f);
+                filterEnv (b, 0.f, 0.f, 100.f, 250.f, 0.1f, 0.3f, 40.f, 100.f);
+                b.uni (P::F1Env, 0.3f, 0.5f);
+                break;
+        }
+
+        // Kick-like punch: a fast drop that settles in 50-100 ms. Swells rarely have one.
+        if (b.chance (shape == 1 ? 0.3f : 0.9f))
+        {
+            b.set (P::PenvAttack, 0.f);
+            b.set (P::PenvDest, 0.f);
+            switch (b.weighted ({ 0.25f, 0.45f, 0.3f }))
+            {
+                case 0:  b.uni (P::PenvAmt, 7.f, 12.f); break;
+                case 1:  b.uni (P::PenvAmt, 12.f, 24.f); break;
+                default: b.uni (P::PenvAmt, 24.f, 40.f); break;
+            }
+            b.uni (P::PenvDecay, 60.f, 180.f);
+            b.uni (P::PenvCurve, 0.3f, 0.6f);   // a gradual fall over ~10 cycles, like a kick body
+        }
+
+        b.route (S::Macro1, D::F1Cutoff, 0.2f, 0.35f);
+        b.route (S::Macro2, D::PitchEnvAmt, 0.2f, 0.4f);
+
+        fxDist (b, 0.9f, { 0, 3, 1 }, 10.f, 20.f, 0.5f, 0.9f);   // the grit that OTT then lifts
+        b.uni (P::DistTone, 9000.f, 18000.f);
+        if (b.chance (0.85f)) fxCompMulti (b);
+        else fxCompGlue (b);
+    }
 } // namespace
 
 Recipe recipeFor (Category c) noexcept
@@ -1001,6 +1123,7 @@ Recipe recipeFor (Category c) noexcept
         case Category::Gate:        return gate;
         case Category::Glitch:      return glitch;
         case Category::Reverse:     return reverse;
+        case Category::BassShot:    return bassShot;
         case Category::KickFullOn:
         case Category::KickGoa:
         case Category::KickDarkForest:

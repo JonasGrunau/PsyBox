@@ -348,7 +348,7 @@ TabStrip::TabStrip (juce::StringArray n) : names (std::move (n)) {}
 
 std::vector<juce::Rectangle<int>> TabStrip::tabBounds() const
 {
-    // Text runs flush with the strip edges; tabs are sp::lg apart.
+    // Text runs flush with the strip edges; tabs are `gap` apart (sp::lg by default).
     std::vector<juce::Rectangle<int>> out;
     int x = 0;
     const auto f = heading (9.5f);
@@ -356,7 +356,7 @@ std::vector<juce::Rectangle<int>> TabStrip::tabBounds() const
     {
         const int w = juce::GlyphArrangement::getStringWidthInt (f, names[i].toUpperCase()) + (ledOn (i) ? 11 : 0);
         out.push_back ({ x, 0, w, getHeight() });
-        x += w + sp::lg;
+        x += w + gap;
     }
     return out;
 }

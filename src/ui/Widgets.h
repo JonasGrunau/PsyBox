@@ -147,6 +147,7 @@ public:
     int getSelected() const noexcept { return selected; }
     void setSelected (int i);
     int idealWidth() const;
+    void setGap (int px) { gap = px; }   // space between tabs
     std::function<void (int)> onChange;
     std::function<bool (int)> isLit;  // draws a state dot before the name
     std::function<bool (int)> hasLed; // with isLit: which tabs get a dot (all when unset)
@@ -154,6 +155,7 @@ public:
 private:
     juce::StringArray names;
     int selected = 0, hover = -1;
+    int gap = theme::sp::lg;
     std::vector<juce::Rectangle<int>> tabBounds() const;
     bool ledOn (int i) const { return isLit && (! hasLed || hasLed (i)); }
 };

@@ -183,3 +183,44 @@ private:
     void paintContent (juce::Graphics&, juce::Rectangle<float>) override;
     uint64_t fingerprint() const override { return 0; }
 };
+
+// Compressor. Normal mode shows the transfer curve, Multiband shows the three
+// bands on a log-frequency axis with their thresholds and level meters. Drag a
+// threshold (or, in Multiband, a band split) to set it; double-click resets
+// the one under the mouse.
+class CompDisplay : public DisplayBase
+{
+public:
+    explicit CompDisplay (PsySynthProcessor& p) : DisplayBase (p) {}
+    void mouseMove (const juce::MouseEvent&) override;
+    void mouseExit (const juce::MouseEvent&) override;
+    void mouseDown (const juce::MouseEvent&) override;
+    void mouseDrag (const juce::MouseEvent&) override;
+    void mouseUp (const juce::MouseEvent&) override;
+    void mouseDoubleClick (const juce::MouseEvent&) override;
+
+private:
+    // What a mouse position grabs: a parameter, and for thresholds the
+    // partner it pushes along (down and up threshold of the same band).
+    struct Target { psy::P param = psy::P::Count, partner = psy::P::Count; bool isDown = false; };
+    Target hover, drag;
+    float grabOffset = 0.f;
+
+    bool multi() const { return proc.plain (psy::P::CompMode) > 0.5f; }
+    juce::Rectangle<float> plot() const;
+    float xOfHz (float hz) const;
+    float hzOfX (float x) const;
+    float yOfDb (float db) const;
+    float dbOfY (float y) const;
+    float xOfDb (float db) const;   // Normal mode input axis
+    float dbOfX (float x) const;
+    int bandAt (float x) const;
+    Target targetAt (juce::Point<float>) const;
+    void setPlain (psy::P, float plain);
+
+    void timerCallback() override;
+    void paintContent (juce::Graphics&, juce::Rectangle<float>) override;
+    void paintMulti (juce::Graphics&, juce::Rectangle<float>, bool on);
+    void paintNormal (juce::Graphics&, juce::Rectangle<float>, bool on);
+    uint64_t fingerprint() const override;
+};

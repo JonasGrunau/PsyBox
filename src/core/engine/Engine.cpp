@@ -47,6 +47,7 @@ void Engine::prepare (double sampleRate, int maxBlockSize)
     fshift.prepare (f);
     phaser.prepare (f);
     chorus.prepare (f);
+    comp.prepare (f);
     delay.prepare (f);
     reverb.prepare (f);
     for (auto& d : outDc) d.prepare (f);
@@ -89,6 +90,7 @@ void Engine::reset()
     fshift.reset();
     phaser.reset();
     chorus.reset();
+    comp.reset();
     delay.reset();
     reverb.reset();
     for (auto& d : outDc) d.reset();
@@ -551,6 +553,34 @@ void Engine::process (float* left, float* right, int numSamples, const MidiEvent
         handleEvent (events[ev++]);
 }
 
+namespace
+{
+    dsp::CompSettings compSettings (const ParamState& p) noexcept
+    {
+        dsp::CompSettings s;
+        s.on = p.on (P::CompOn);
+        s.mode = p.geti (P::CompMode);
+        s.attackMs = p.get (P::CompAttack);
+        s.releaseMs = p.get (P::CompRelease);
+        s.mix = p.get (P::CompMix);
+        s.outDb = p.get (P::CompOut);
+        s.threshDb = p.get (P::CompThresh);
+        s.ratio = p.get (P::CompRatio);
+        s.kneeDb = p.get (P::CompKnee);
+        s.down = p.get (P::CompDown);
+        s.up = p.get (P::CompUp);
+        s.xLow = p.get (P::MbXLow);
+        s.xHigh = p.get (P::MbXHigh);
+        for (int b = 0; b < 3; ++b)
+        {
+            s.downDb[(size_t) b] = p.get (mbDownParam (b));
+            s.upDb[(size_t) b] = p.get (mbUpParam (b));
+            s.gainDb[(size_t) b] = p.get (mbGainParam (b));
+        }
+        return s;
+    }
+} // namespace
+
 void Engine::processFx (float* l, float* r, int n, double bpm) noexcept
 {
     const auto& p = cur;
@@ -562,6 +592,8 @@ void Engine::processFx (float* l, float* r, int n, double bpm) noexcept
         phaser.process (l, r, n, p.get (P::PhaserRate), p.get (P::PhaserDepth), p.get (P::PhaserFb), p.get (P::PhaserCenter), p.get (P::PhaserMix));
     if (p.on (P::ChorusOn))
         chorus.process (l, r, n, p.geti (P::ChorusMode) == 1, p.get (P::ChorusRate), p.get (P::ChorusDepth), p.get (P::ChorusFb), p.get (P::ChorusMix));
+    if (comp.isActive (p.on (P::CompOn)))
+        comp.process (l, r, n, compSettings (p));
     if (p.on (P::DelayOn))
     {
         const float ms = p.on (P::DelaySync) ? (float) (60000.0 / bpm) * syncDivBeats (p.geti (P::DelayDiv)) : p.get (P::DelayMs);

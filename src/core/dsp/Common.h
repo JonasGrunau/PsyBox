@@ -13,6 +13,7 @@ constexpr double kPiD = 3.14159265358979323846;
 
 inline float noteToHz (float note) noexcept { return 440.f * std::exp2 ((note - 69.f) * (1.f / 12.f)); }
 inline float dbToGain (float db) noexcept { return std::pow (10.f, db * 0.05f); }
+inline float gainToDb (float g) noexcept { return 20.f * std::log10 (std::max (g, 1e-10f)); }  // floors at -200 dB
 inline float clamp01 (float x) noexcept { return std::clamp (x, 0.f, 1.f); }
 
 // Pade-style tanh, accurate to ~1e-4 in [-3, 3], saturates exactly outside.

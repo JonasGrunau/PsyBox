@@ -15,6 +15,7 @@ Catch2 v3 unit tests for `psysynth_core` (no JUCE), built as `psysynth_tests` an
 | `TestShapersAndFx.cpp` | `[shaper]`, `[oversampling]`, `[fx]`, `[env]`: ADAA, half-band decimator response, frequency shifter, FX stress, exact ADSR times |
 | `TestEngine.cpp` | `[engine]`: plays a 145 BPM 16th-note pattern. Init patch, every category, quality modes, parameter fuzzing |
 | `TestGenerator.cpp` | `[generator]`, `[params]`: seed determinism, locks, mutate ranges, mapping round-trips. `[generator][kick]`: engine mode per family, param isolation, the key toggle, kick arps |
+| `TestDynamics.cpp` | `[dynamics]`: compressor. Crossover sums flat, static curve and knee, upward lift, exact silence, clean low end (41 Hz THD), 0 % mix identity, stereo link, click-free switching, `[dynamics][stress]` |
 | `TestKick.cpp` | `[kick]`: the kick engine. Hits, tuning to the played key (zero crossings and the exact pitch trace), sweep landing, punch, one-shot, retrigger click bound, chord merge, mode switching, quality independence, arp ties, `[kick][stress]` fuzzing |
 
 ## For AI Agents

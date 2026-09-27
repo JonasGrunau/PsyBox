@@ -853,14 +853,15 @@ void ModMatrixPanel::resized()
 }
 
 // ---------------------------------------------------------------------------
-// FxPanel: one page per effect.
+// FxPanel: one page per effect, in signal-chain order.
 //   row 0: knobs
 //   row 1: enabled, then the effect's selectors and switches
+// The compressor page lays itself out (knobs in both rows, display right).
 // ---------------------------------------------------------------------------
 FxPanel::FxPanel (PsySynthProcessor& p) : Section ("Effects"), proc (p)
 {
     addAndMakeVisible (tabs);
-    static const P onIds[7] = { P::DistOn, P::CrushOn, P::FshiftOn, P::PhaserOn, P::ChorusOn, P::DelayOn, P::ReverbOn };
+    static const P onIds[kNumFx] = { P::DistOn, P::CrushOn, P::FshiftOn, P::PhaserOn, P::ChorusOn, P::CompOn, P::DelayOn, P::ReverbOn };
     tabs.isLit = [this] (int i) { return proc.plain (onIds[i]) > 0.5f; };
     tabs.onChange = [this] (int i) { show (i); };
 
@@ -871,57 +872,70 @@ FxPanel::FxPanel (PsySynthProcessor& p) : Section ("Effects"), proc (p)
     };
     const auto own = [&] (int page, std::unique_ptr<juce::Component> c) {
         addAndMakeVisible (*c);
-        pages[page].items.push_back (c.get());
+        auto* raw = c.get();
+        pages[page].items.push_back (raw);
         pages[page].owned.push_back (std::move (c));
+        return raw;
     };
     const auto toggle = [&] (int page, P prm, const juce::String& t) {
         auto tg = std::make_unique<ToggleDot> (p, prm, t);
         tg->setStacked (true);
         own (page, std::move (tg));
     };
-    for (int i = 0; i < 7; ++i)
+    for (int i = 0; i < kNumFx; ++i)
     {
         pages[i].on = std::make_unique<ToggleDot> (p, onIds[i], "On");
         pages[i].on->setStacked (true);
         addAndMakeVisible (*pages[i].on);
     }
 
-    own (0, std::make_unique<Segmented> (p, P::DistType));
-    knob (0, P::DistDrive); knob (0, P::DistTone); knob (0, P::DistMix);
+    own (Dist, std::make_unique<Segmented> (p, P::DistType));
+    knob (Dist, P::DistDrive); knob (Dist, P::DistTone); knob (Dist, P::DistMix);
 
-    knob (1, P::CrushBits); knob (1, P::CrushRate); knob (1, P::CrushMix);
+    knob (Crush, P::CrushBits); knob (Crush, P::CrushRate); knob (Crush, P::CrushMix);
 
-    knob (2, P::FshiftHz); knob (2, P::FshiftFb); knob (2, P::FshiftSpread); knob (2, P::FshiftMix);
+    knob (Shift, P::FshiftHz); knob (Shift, P::FshiftFb); knob (Shift, P::FshiftSpread); knob (Shift, P::FshiftMix);
 
-    knob (3, P::PhaserRate); knob (3, P::PhaserDepth); knob (3, P::PhaserFb); knob (3, P::PhaserCenter); knob (3, P::PhaserMix);
+    knob (Phaser, P::PhaserRate); knob (Phaser, P::PhaserDepth); knob (Phaser, P::PhaserFb); knob (Phaser, P::PhaserCenter); knob (Phaser, P::PhaserMix);
 
-    own (4, std::make_unique<Segmented> (p, P::ChorusMode));
-    knob (4, P::ChorusRate); knob (4, P::ChorusDepth); knob (4, P::ChorusFb); knob (4, P::ChorusMix);
+    own (Chorus, std::make_unique<Segmented> (p, P::ChorusMode));
+    knob (Chorus, P::ChorusRate); knob (Chorus, P::ChorusDepth); knob (Chorus, P::ChorusFb); knob (Chorus, P::ChorusMix);
 
-    toggle (5, P::DelaySync, "Sync");
-    toggle (5, P::DelayPing, "Ping-Pong");
-    delayTime = knob (5, P::DelayMs);
+    compMode = dynamic_cast<Segmented*> (own (Comp, std::make_unique<Segmented> (p, P::CompMode)));
+    compDisplay = dynamic_cast<CompDisplay*> (own (Comp, std::make_unique<CompDisplay> (p)));
+    compNormal = { knob (Comp, P::CompThresh), knob (Comp, P::CompRatio), knob (Comp, P::CompKnee), knob (Comp, P::CompMix) };
+    compMulti = { knob (Comp, P::MbLowGain), knob (Comp, P::MbMidGain), knob (Comp, P::MbHighGain), knob (Comp, P::CompMix, "Depth"),
+                  knob (Comp, P::CompDown), knob (Comp, P::CompUp) };
+    knob (Comp, P::CompAttack); knob (Comp, P::CompRelease); knob (Comp, P::CompOut);
+
+    toggle (Delay, P::DelaySync, "Sync");
+    toggle (Delay, P::DelayPing, "Ping-Pong");
+    delayTime = knob (Delay, P::DelayMs);
     delayDiv = ks.add (*this, p, P::DelayDiv, "Division");
-    knob (5, P::DelayFb); knob (5, P::DelayLowCut); knob (5, P::DelayHighCut); knob (5, P::DelayMix);
+    knob (Delay, P::DelayFb); knob (Delay, P::DelayLowCut); knob (Delay, P::DelayHighCut); knob (Delay, P::DelayMix);
 
-    knob (6, P::ReverbSize); knob (6, P::ReverbDecay); knob (6, P::ReverbDamp); knob (6, P::ReverbPre); knob (6, P::ReverbMix);
+    knob (Reverb, P::ReverbSize); knob (Reverb, P::ReverbDecay); knob (Reverb, P::ReverbDamp); knob (Reverb, P::ReverbPre); knob (Reverb, P::ReverbMix);
 
-    show (0);
+    show (Dist);
     startTimerHz (10);
 }
 
 void FxPanel::show (int page)
 {
     current = page;
-    for (int i = 0; i < 7; ++i)
+    for (int i = 0; i < kNumFx; ++i)
     {
         const bool vis = i == page;
         pages[i].on->setVisible (vis);
         for (auto* c : pages[i].items) c->setVisible (vis);
     }
     lastDelaySync = proc.plain (P::DelaySync) > 0.5f;
-    delayDiv->setVisible (page == 5 && lastDelaySync);
-    delayTime->setVisible (page == 5 && ! lastDelaySync);
+    delayDiv->setVisible (page == Delay && lastDelaySync);
+    delayTime->setVisible (page == Delay && ! lastDelaySync);
+
+    lastCompMulti = proc.plain (P::CompMode) > 0.5f;
+    for (auto* k : compNormal) k->setVisible (page == Comp && ! lastCompMulti);
+    for (auto* k : compMulti) k->setVisible (page == Comp && lastCompMulti);
     resized();
 }
 
@@ -929,25 +943,56 @@ void FxPanel::timerCallback()
 {
     tabs.repaint();
     const bool s = proc.plain (P::DelaySync) > 0.5f;
-    if (s != lastDelaySync) show (current);
+    const bool m = proc.plain (P::CompMode) > 0.5f;
+    if (s != lastDelaySync || m != lastCompMulti) show (current);
+}
+
+void FxPanel::layoutComp (const CellGrid& gr)
+{
+    pages[Comp].on->setBounds (gr.cell (0, 1));
+    compMode->setBounds (gr.control (1, 1, 2));
+
+    // Normal: Thresh Ratio Knee | Attack Release Mix, Output under Mix.
+    // Multi:  Low Mid High (band gains) | Attack Release Depth, Down Up Output below.
+    const auto at = [&] (juce::Component* c, int col, int row) { c->setBounds (gr.cell (col, row)); };
+    for (int i = 0; i < 3; ++i) at (compNormal[(size_t) i], i, 0);
+    at (compNormal[3], 5, 0);
+    for (int i = 0; i < 4; ++i) at (compMulti[(size_t) i], i < 3 ? i : 5, 0);
+    at (compMulti[4], 3, 1);
+    at (compMulti[5], 4, 1);
+    for (auto* c : pages[Comp].items)
+        if (auto* k = dynamic_cast<ParamKnob*> (c))
+        {
+            if (k->getParam() == P::CompAttack) at (k, 3, 0);
+            else if (k->getParam() == P::CompRelease) at (k, 4, 0);
+            else if (k->getParam() == P::CompOut) at (k, 5, 1);
+        }
+
+    // The display takes the rest of the body, both rows.
+    const auto top = gr.cell (6, 0);
+    compDisplay->setBounds (juce::Rectangle<int>::leftTopRightBottom (top.getX() + kCellInset, top.getY(), body().getRight(),
+                                                                       gr.cell (6, 1).getBottom()));
 }
 
 void FxPanel::resized()
 {
     auto h = header();
     h.removeFromLeft (titleWidth());
-    tabs.setBounds (h.removeFromRight (tabs.idealWidth()));
+    tabs.setGap (sp::lg);
+    if (tabs.idealWidth() > h.getWidth()) tabs.setGap (sp::md);   // eight tabs are tight
+    tabs.setBounds (h.removeFromRight (juce::jmin (tabs.idealWidth(), h.getWidth())));
 
     const auto gr = grid();
-    for (int i = 0; i < 7; ++i)
+    for (int i = 0; i < kNumFx; ++i)
     {
+        if (i == Comp) continue;
         pages[i].on->setBounds (gr.cell (0, 1));
         int knobCol = 0, lowCol = 1;
         for (auto* c : pages[i].items)
         {
             if (auto* seg = dynamic_cast<Segmented*> (c))
             {
-                const int span = i == 0 ? 5 : 3;
+                const int span = i == Dist ? 5 : 3;
                 seg->setBounds (gr.control (lowCol, 1, span));
                 lowCol += span;
             }
@@ -962,9 +1007,11 @@ void FxPanel::resized()
             }
         }
     }
+    layoutComp (gr);
+
     captions.clear();
-    if (current == 0) addCaption ("Type", gr.cell (1, 1, 5));
-    if (current == 4) addCaption ("Mode", gr.cell (1, 1, 3));
+    if (current == Dist) addCaption ("Type", gr.cell (1, 1, 5));
+    if (current == Chorus || current == Comp) addCaption ("Mode", gr.cell (1, 1, current == Comp ? 2 : 3));
     repaint();
 }
 
@@ -1258,28 +1305,6 @@ void Sidebar::resized()
 
     // Built from the bottom edge up so the buttons sit on the window's padding.
     auto a = getLocalBounds().reduced (kPad);
-    // "SEED" caption left, value right: same pattern as AMOUNT / 25% above
-    auto bottom = a.removeFromBottom (kLabelH);
-    seedCaption = bottom;
-    seedLabel.setBounds (bottom.removeFromRight (100));
-    a.removeFromBottom (sp::sm);
-
-    // "ARP" caption left, switch right: whether Generate adds an arp
-    auto arpRow = a.removeFromBottom (kLabelH);
-    arpCaption = arpRow;
-    arpToggle.setBounds (arpRow.removeFromRight (26));
-    a.removeFromBottom (sp::sm);
-
-    // "TUNE TO KEY" (kick categories): whether Generate key-tracks the kick
-    keyCaption = {};
-    if (keyToggle.isVisible())
-    {
-        auto keyRow = a.removeFromBottom (kLabelH);
-        keyCaption = keyRow;
-        keyToggle.setBounds (keyRow.removeFromRight (26));
-        a.removeFromBottom (sp::sm);
-    }
-
     auto r = a.removeFromBottom (32);   // mutate + amount
     mutateButton.setBounds (r.removeFromLeft ((r.getWidth() - sp::md) / 2));
     r.removeFromLeft (sp::md);
@@ -1287,9 +1312,32 @@ void Sidebar::resized()
     a.removeFromBottom (sp::sm);
 
     generateButton.setBounds (a.removeFromBottom (44));
+    a.removeFromBottom (sp::md);
+
+    // The options that shape the next Generate sit right above it.
+    // "SEED" caption left, value right: same pattern as AMOUNT / 25% below
+    auto seedRow = a.removeFromBottom (kLabelH);
+    seedCaption = seedRow;
+    seedLabel.setBounds (seedRow.removeFromRight (100));
+    a.removeFromBottom (sp::sm);
+
+    // "ARP" caption left, switch right: whether Generate adds an arp
+    auto arpRow = a.removeFromBottom (kLabelH);
+    arpCaption = arpRow;
+    arpToggle.setBounds (arpRow.removeFromRight (26));
+
+    // "TUNE TO KEY" (kick categories): whether Generate key-tracks the kick
+    keyCaption = {};
+    if (keyToggle.isVisible())
+    {
+        a.removeFromBottom (sp::sm);
+        auto keyRow = a.removeFromBottom (kLabelH);
+        keyCaption = keyRow;
+        keyToggle.setBounds (keyRow.removeFromRight (26));
+    }
 
     // The list runs down to the divider above the info block; the rest scroll.
-    listH = juce::jmax (kItemH, generateButton.getY() - sp::sm - kInfoH - kListTop);
+    listH = juce::jmax (kItemH, a.getBottom() - sp::sm - kInfoH - kListTop);
     setScroll (scrollY);
     scrollToShow (proc.getCategory());
 

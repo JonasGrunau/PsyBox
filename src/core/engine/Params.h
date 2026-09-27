@@ -27,7 +27,7 @@ enum class Mapping : uint8_t
     Toggle    // 0 / 1
 };
 
-enum class Unit : uint8_t { None, Percent, Hz, Ms, Sec, Semi, Cents, Db, Octaves, Ratio, Int };
+enum class Unit : uint8_t { None, Percent, Hz, Ms, Sec, Semi, Cents, Db, Octaves, Ratio, RatioTo1, Int };
 
 struct ParamDef
 {
@@ -54,7 +54,7 @@ namespace choices
 {
     extern const std::vector<std::string> voiceMode, glideMode, quality, oscType, wavetable,
         subOct, subShape, noiseType, penvDest, filterType, filterRouting, lfoShape, syncDiv,
-        modSrc, modDst, distType, chorusMode, arpMode, engineMode, kickClick, kickDrive;
+        modSrc, modDst, distType, chorusMode, compMode, arpMode, engineMode, kickClick, kickDrive;
 }
 
 // Sync divisions expressed in beats (quarter notes), index-aligned with choices::syncDiv.
@@ -64,6 +64,7 @@ enum class VoiceMode : int { Poly, Mono, Legato };
 enum class OscType : int { Analog, Supersaw, Wavetable, FM };
 enum class LfoShape : int { Sine, Triangle, SawUp, SawDown, Square, SampleHold, SmoothRandom };
 enum class DistType : int { Soft, Hard, Fold, Tube, Rectify };
+enum class CompMode : int { Normal, Multiband };
 enum class ArpMode : int { Up, Down, UpDown, Random, Order };
 // A patch is a synth sound or a kick; the category decides, never the recipe.
 enum class EngineMode : int { Synth, Kick };
@@ -262,6 +263,29 @@ enum class ModDst : int
     X(ReverbPre,   "reverb_pre",   "Pre-Delay",   "Reverb", Power, 0.f, 250.f, 10.f, 2.f, Ms, nullptr, false) \
     X(ReverbMix,   "reverb_mix",   "Mix",         "Reverb", Linear, 0.f, 1.f, 0.2f, 1.f, Percent, nullptr, false) \
     \
+    X(CompOn,      "comp_on",      "On",          "Compressor", Toggle, 0, 1, 0, 1.f, None, nullptr, false) \
+    X(CompMode,    "comp_mode",    "Mode",        "Compressor", Choice, 0, 1, 0, 1.f, None, &choices::compMode, false) \
+    X(CompThresh,  "comp_thresh",  "Threshold",   "Compressor", Linear, -60.f, 0.f, -18.f, 1.f, Db, nullptr, false) \
+    X(CompRatio,   "comp_ratio",   "Ratio",       "Compressor", Power, 1.f, 20.f, 4.f, 2.f, RatioTo1, nullptr, false) \
+    X(CompKnee,    "comp_knee",    "Knee",        "Compressor", Linear, 0.f, 24.f, 6.f, 1.f, Db, nullptr, false) \
+    X(CompAttack,  "comp_attack",  "Attack",      "Compressor", Power, 0.05f, 200.f, 8.f, 3.f, Ms, nullptr, false) \
+    X(CompRelease, "comp_release", "Release",     "Compressor", Power, 5.f, 2000.f, 150.f, 3.f, Ms, nullptr, false) \
+    X(CompMix,     "comp_mix",     "Mix",         "Compressor", Linear, 0.f, 1.f, 1.f, 1.f, Percent, nullptr, false) \
+    X(CompOut,     "comp_out",     "Output",      "Compressor", Linear, -24.f, 24.f, 0.f, 1.f, Db, nullptr, false) \
+    X(CompDown,    "comp_down",    "Down",        "Compressor", Linear, 0.f, 1.f, 1.f, 1.f, Percent, nullptr, false) \
+    X(CompUp,      "comp_up",      "Up",          "Compressor", Linear, 0.f, 1.f, 0.5f, 1.f, Percent, nullptr, false) \
+    X(MbXLow,      "mb_xlow",      "Low Split",   "Compressor", Exp, 40.f, 600.f, 120.f, 1.f, Hz, nullptr, false) \
+    X(MbXHigh,     "mb_xhigh",     "High Split",  "Compressor", Exp, 1000.f, 12000.f, 2500.f, 1.f, Hz, nullptr, false) \
+    X(MbLowDown,   "mb_low_down",  "Low Down",    "Compressor", Linear, -60.f, 0.f, -20.f, 1.f, Db, nullptr, false) \
+    X(MbMidDown,   "mb_mid_down",  "Mid Down",    "Compressor", Linear, -60.f, 0.f, -24.f, 1.f, Db, nullptr, false) \
+    X(MbHighDown,  "mb_high_down", "High Down",   "Compressor", Linear, -60.f, 0.f, -28.f, 1.f, Db, nullptr, false) \
+    X(MbLowUp,     "mb_low_up",    "Low Up",      "Compressor", Linear, -72.f, 0.f, -40.f, 1.f, Db, nullptr, false) \
+    X(MbMidUp,     "mb_mid_up",    "Mid Up",      "Compressor", Linear, -72.f, 0.f, -44.f, 1.f, Db, nullptr, false) \
+    X(MbHighUp,    "mb_high_up",   "High Up",     "Compressor", Linear, -72.f, 0.f, -48.f, 1.f, Db, nullptr, false) \
+    X(MbLowGain,   "mb_low_gain",  "Low",         "Compressor", Linear, -24.f, 24.f, 0.f, 1.f, Db, nullptr, false) \
+    X(MbMidGain,   "mb_mid_gain",  "Mid",         "Compressor", Linear, -24.f, 24.f, 0.f, 1.f, Db, nullptr, false) \
+    X(MbHighGain,  "mb_high_gain", "High",        "Compressor", Linear, -24.f, 24.f, 0.f, 1.f, Db, nullptr, false) \
+    \
     X(ArpOn,       "arp_on",       "On",          "Arp", Toggle, 0, 1, 0, 1.f, None, nullptr, false) \
     X(ArpMode,     "arp_mode",     "Mode",        "Arp", Choice, 0, 4, 0, 1.f, None, &choices::arpMode, false) \
     X(ArpDiv,      "arp_div",      "Rate",        "Arp", Choice, 0, 17, 12, 1.f, None, &choices::syncDiv, false) \
@@ -324,6 +348,10 @@ inline P modSrcParam (int slot) noexcept { return (P) ((int) P::Mod1Src + slot *
 inline P modDstParam (int slot) noexcept { return (P) ((int) P::Mod1Dst + slot * 3); }
 inline P modAmtParam (int slot) noexcept { return (P) ((int) P::Mod1Amt + slot * 3); }
 inline P lfoParam (int lfo, int offset) noexcept { return (P) ((int) P::Lfo1Shape + lfo * 6 + offset); }
+// Multiband compressor, per band (0 low, 1 mid, 2 high).
+inline P mbDownParam (int band) noexcept { return (P) ((int) P::MbLowDown + band); }
+inline P mbUpParam (int band) noexcept { return (P) ((int) P::MbLowUp + band); }
+inline P mbGainParam (int band) noexcept { return (P) ((int) P::MbLowGain + band); }
 
 // Arp pattern lanes, per step: plays, accent, slide (see PSY_ARP_STEP).
 constexpr int kArpSteps = 16;
