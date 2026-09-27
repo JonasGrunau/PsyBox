@@ -13,7 +13,7 @@ ArpSettings ArpSettings::from (const ParamState& p) noexcept
     s.mode = p.geti (P::ArpMode);
     s.div = p.geti (P::ArpDiv);
     s.octaves = std::clamp (p.geti (P::ArpOctaves), 1, 4);
-    s.rhythm = p.geti (P::ArpRhythm);
+    s.pattern = ArpPattern::from (p);
     s.gate = p.get (P::ArpGate);
     s.swing = p.get (P::ArpSwing);
     s.hold = p.on (P::ArpHold);
@@ -32,6 +32,7 @@ void Arpeggiator::reset() noexcept
     seqPos = 0;
     current = -1;
     lastRandom = -1;
+    lastStep = -1;
     releasePending = false;
     rng.reseed (0xA59u);
 }

@@ -54,22 +54,17 @@ namespace choices
 {
     extern const std::vector<std::string> voiceMode, glideMode, quality, oscType, wavetable,
         subOct, subShape, noiseType, penvDest, filterType, filterRouting, lfoShape, syncDiv,
-        modSrc, modDst, distType, chorusMode, arpMode, arpRhythm;
+        modSrc, modDst, distType, chorusMode, arpMode;
 }
 
 // Sync divisions expressed in beats (quarter notes), index-aligned with choices::syncDiv.
 float syncDivBeats (int index) noexcept;
-
-// Arp rhythm masks, index-aligned with choices::arpRhythm. Step 0 is the beat.
-struct ArpRhythmMask { const char* steps; int length; };   // 'x' plays, '-' rests
-ArpRhythmMask arpRhythmMask (int index) noexcept;
 
 enum class VoiceMode : int { Poly, Mono, Legato };
 enum class OscType : int { Analog, Supersaw, Wavetable, FM };
 enum class LfoShape : int { Sine, Triangle, SawUp, SawDown, Square, SampleHold, SmoothRandom };
 enum class DistType : int { Soft, Hard, Fold, Tube, Rectify };
 enum class ArpMode : int { Up, Down, UpDown, Random, Order };
-enum class ArpRhythm : int { Straight, Rolling, Gallop, Offbeat, Skip, ThreeThreeTwo, Broken };
 
 enum class ModSrc : int
 {
@@ -269,8 +264,18 @@ enum class ModDst : int
     X(ArpOctaves,  "arp_oct",      "Octaves",     "Arp", Linear, 1, 4, 1, 1.f, Int, nullptr, false) \
     X(ArpGate,     "arp_gate",     "Gate",        "Arp", Linear, 0.05f, 1.5f, 0.5f, 1.f, Percent, nullptr, false) \
     X(ArpSwing,    "arp_swing",    "Swing",       "Arp", Linear, 0.f, 0.75f, 0.f, 1.f, Percent, nullptr, false) \
-    X(ArpRhythm,   "arp_rhythm",   "Rhythm",      "Arp", Choice, 0, 6, 0, 1.f, None, &choices::arpRhythm, false) \
-    X(ArpHold,     "arp_hold",     "Hold",        "Arp", Toggle, 0, 1, 0, 1.f, None, nullptr, false)
+    X(ArpHold,     "arp_hold",     "Hold",        "Arp", Toggle, 0, 1, 0, 1.f, None, nullptr, false) \
+    X(ArpLength,   "arp_length",   "Steps",       "Arp", Linear, 1, 16, 16, 1.f, Int, nullptr, false) \
+    PSY_ARP_STEP (X, 1)  PSY_ARP_STEP (X, 2)  PSY_ARP_STEP (X, 3)  PSY_ARP_STEP (X, 4) \
+    PSY_ARP_STEP (X, 5)  PSY_ARP_STEP (X, 6)  PSY_ARP_STEP (X, 7)  PSY_ARP_STEP (X, 8) \
+    PSY_ARP_STEP (X, 9)  PSY_ARP_STEP (X, 10) PSY_ARP_STEP (X, 11) PSY_ARP_STEP (X, 12) \
+    PSY_ARP_STEP (X, 13) PSY_ARP_STEP (X, 14) PSY_ARP_STEP (X, 15) PSY_ARP_STEP (X, 16)
+
+// One step of the arp pattern: plays, accented, slides into the next step.
+#define PSY_ARP_STEP(X, n) \
+    X(ArpStep##n,  "arp_step" #n,  "Step " #n,   "Arp", Toggle, 0, 1, 1, 1.f, None, nullptr, false) \
+    X(ArpAcc##n,   "arp_acc" #n,   "Accent " #n, "Arp", Toggle, 0, 1, 0, 1.f, None, nullptr, false) \
+    X(ArpSlide##n, "arp_slide" #n, "Slide " #n,  "Arp", Toggle, 0, 1, 0, 1.f, None, nullptr, false)
 
 enum class P : int
 {
@@ -295,6 +300,11 @@ inline P modDstParam (int slot) noexcept { return (P) ((int) P::Mod1Dst + slot *
 inline P modAmtParam (int slot) noexcept { return (P) ((int) P::Mod1Amt + slot * 3); }
 inline P lfoParam (int lfo, int offset) noexcept { return (P) ((int) P::Lfo1Shape + lfo * 6 + offset); }
 
+// Arp pattern lanes, per step: plays, accent, slide (see PSY_ARP_STEP).
+constexpr int kArpSteps = 16;
+enum class ArpLane : int { On, Accent, Slide };
+inline P arpStepParam (int step, ArpLane lane) noexcept { return (P) ((int) P::ArpStep1 + step * 3 + (int) lane); }
+
 // A full patch: plain (denormalised) values for every parameter.
 struct ParamState
 {
@@ -305,6 +315,29 @@ struct ParamState
     int geti (P p) const noexcept { return (int) std::lround (v[(size_t) p]); }
     bool on (P p) const noexcept { return v[(size_t) p] > 0.5f; }
     void set (P p, float plain) noexcept { v[(size_t) p] = def (p).snap (plain); }
+};
+
+// The arp pattern as one value. Step 0 is the beat when the host plays.
+struct ArpPattern
+{
+    enum Flag : uint8_t { On = 1, Accent = 2, Slide = 4 };
+
+    int length = kArpSteps;
+    std::array<uint8_t, kArpSteps> steps {};
+
+    bool has (int step, Flag f) const noexcept { return (steps[(size_t) step] & f) != 0; }
+    void setFlag (int step, Flag f, bool on) noexcept
+    {
+        steps[(size_t) step] = (uint8_t) (on ? (steps[(size_t) step] | f) : (steps[(size_t) step] & ~f));
+    }
+
+    static ArpPattern from (const ParamState&) noexcept;
+    void writeTo (ParamState&) const noexcept;
+
+    // '-' rest, 'x' play, 'X' accent, 's' slide, 'S' accent + slide.
+    // Shorter strings repeat to fill 16 steps; the length stays 16.
+    static ArpPattern parse (std::string_view text) noexcept;
+    bool operator== (const ArpPattern&) const = default;
 };
 
 } // namespace psy

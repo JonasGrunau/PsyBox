@@ -94,12 +94,15 @@ void PsySynthEditor::Keys::drawBlackNote (int, juce::Graphics& g, juce::Rectangl
 PsySynthEditor::PsySynthEditor (PsySynthProcessor& p)
     : AudioProcessorEditor (p), proc (p), root (p),
       withKeyboard (forceKeyboard || p.wrapperType == juce::AudioProcessor::wrapperType_Standalone),
-      keyboard (p.keyboardState, juce::MidiKeyboardComponent::horizontalKeyboard)
+      keyboard (p.keyboardState, juce::MidiKeyboardComponent::horizontalKeyboard), patternEditor (p)
 {
     juce::LookAndFeel::setDefaultLookAndFeel (&lnf);
     setLookAndFeel (&lnf);
     addAndMakeVisible (root);
     root.setBounds (0, 0, kW, kH);
+    addChildComponent (patternEditor);
+    patternEditor.setBounds (0, 0, kW, kH);
+    root.voicePanel().onEditPattern = [this] { patternEditor.open(); };
 
     if (withKeyboard)
     {
@@ -131,6 +134,7 @@ PsySynthEditor::PsySynthEditor (PsySynthProcessor& p)
             for (auto* child : c.getChildren()) noFocus (*child);
         };
         noFocus (root);
+        noFocus (patternEditor);
         startTimerHz (5);
     }
 }
@@ -164,6 +168,7 @@ void PsySynthEditor::resized()
 {
     const float s = (float) getWidth() / (float) kW;
     root.setTransform (juce::AffineTransform::scale (s));
+    patternEditor.setTransform (juce::AffineTransform::scale (s));
     if (withKeyboard)
     {
         // same logical layout as the panels: full width, 1 px hairline above

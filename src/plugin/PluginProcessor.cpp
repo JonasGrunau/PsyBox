@@ -213,6 +213,7 @@ void PsySynthProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
     scopeWrite.store (w, std::memory_order_release);
     peakLevel.store (std::max (engine.lastPeak(), peakLevel.load (std::memory_order_relaxed) * 0.9f), std::memory_order_relaxed);
     activeVoices.store (engine.activeVoices(), std::memory_order_relaxed);
+    arpStep.store (engine.arpStep(), std::memory_order_relaxed);
 }
 
 void PsySynthProcessor::copyScope (float* dest, int num) const noexcept
@@ -331,6 +332,23 @@ void PsySynthProcessor::generateWithSeed (uint32_t s)
 void PsySynthProcessor::setArpGeneration (bool on)
 {
     arpGeneration = on;
+    sendChangeMessage();
+}
+
+void PsySynthProcessor::setArpPattern (const ArpPattern& p)
+{
+    auto s = currentState();
+    p.writeTo (s);
+    applyState (s);
+}
+
+// No patch-swap fade here: the sound stays, only the steps change.
+void PsySynthProcessor::generateArpPattern()
+{
+    applyState (generator.generateArpPattern (category, (uint32_t) random.nextInt(), currentState(), locks));
+    if (! presetName.endsWith ("*"))
+        presetName << "*";
+    pushHistory();
     sendChangeMessage();
 }
 

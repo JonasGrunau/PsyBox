@@ -13,7 +13,7 @@ Turns a `ParamState` plus MIDI events into stereo audio. `Params` is the single 
 | `Params.cpp` | Choice lists (`choices::…`), `paramDefs()` table, norm↔plain mappings, `format`, `findParam`, `syncDivBeats` |
 | `Voice.h/.cpp` | `VoiceContext` (per-chunk shared state + pre-filtered mod slots) and `Voice`: 2 osc slots (Analog/Supersaw/Wavetable/FM), sub, noise, 2 `FilterSlot`s, amp/filter/mod envs, pitch env, per-voice LFOs, glide |
 | `Engine.h/.cpp` | `MidiEvent`, `Transport`, `Engine`: `prepare`, `setParams` (target, smoothed internally), `process(l, r, n, events, transport)` (a `bpm` overload remains), keys → arp or voices, voice allocation/stealing, note stack, sustain, FX chain, `latencySamples()` |
-| `Arpeggiator.h/.cpp` | Tempo-synced arp between MIDI keys and voices: modes, octaves, rhythm masks (`arpRhythmMask` in `Params.cpp`), gate, swing, hold. `sync(ppq)` per block, then `fireDue`/`samplesToNextEvent`/`advance` inside the engine's chunk loop. Gate ≥ 100 % emits slide events (no retrigger) |
+| `Arpeggiator.h/.cpp` | Tempo-synced arp between MIDI keys and voices: modes, octaves, the 16-step `ArpPattern` (on/accent/slide per step + length; params `arp_step*`/`arp_acc*`/`arp_slide*` from `PSY_ARP_STEP` in `Params.h`), gate, swing, hold. `sync(ppq)` per block, then `fireDue`/`samplesToNextEvent`/`advance` inside the engine's chunk loop. Slide steps and gate ≥ 100 % emit slide events (no retrigger) |
 
 ## For AI Agents
 

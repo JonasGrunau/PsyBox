@@ -55,6 +55,13 @@ public:
     bool getArpGeneration() const noexcept { return arpGeneration; }
     void setArpGeneration (bool on);
 
+    // Arp pattern editing (message thread). The pattern is plain parameters;
+    // these read and write it as one value.
+    psy::ArpPattern getArpPattern() const { return psy::ArpPattern::from (currentState()); }
+    void setArpPattern (const psy::ArpPattern& p);
+    void generateArpPattern();   // a new pattern in the category's style, undoable
+    int getArpStep() const noexcept { return arpStep.load (std::memory_order_relaxed); }   // -1 when idle
+
     bool isLocked (psy::P p) const noexcept { return locks.test ((size_t) p); }
     void setLocked (psy::P p, bool shouldLock);
     void clearLocks();
@@ -147,6 +154,7 @@ private:
     std::atomic<int> scopeWrite { 0 };
     std::atomic<float> peakLevel { 0.f };
     std::atomic<int> activeVoices { 0 };
+    std::atomic<int> arpStep { -1 };
     juce::Random random;
 
     static juce::AudioProcessorValueTreeState::ParameterLayout createLayout();

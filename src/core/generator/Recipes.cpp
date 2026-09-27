@@ -646,20 +646,64 @@ namespace
         fxChorus (b, 0.3f, false);
     }
 
+    // Tonal: the pitch climbs one to two octaves while the filter opens.
+    // Noise is at most a trace of air; the noise sweep is the Uplifter.
     void riser (B& b)
     {
         if (b.chance (0.5f)) polyVoice (b, 2, 4);
         else monoVoice (b, false, 0.f, 0.f);
-        b.pick (P::NoiseType, { 0, 1 });
-        b.uni (P::NoiseLevel, 0.4f, 0.9f);
-        if (b.chance (0.5f)) supersawA (b, 0.3f, 0.7f);
-        else b.on (P::OscAOn, false);
+        if (b.chance (0.55f)) supersawA (b, 0.3f, 0.7f);
+        else
+        {
+            analogA (b, kSaw);
+            analogB (b, kSaw, 0.5f, 0.8f);
+            b.uni (P::OscBFine, 6.f, 18.f);
+        }
+        if (b.chance (0.4f)) { b.pick (P::NoiseType, { 0, 1 }); b.uni (P::NoiseLevel, 0.02f, 0.1f); }
 
         modEnv (b, 2000.f, 8000.f, 1000.f, 1000.f, 1.f, 1.f, 300.f, 1500.f);
-        b.route (S::ModEnv, D::PitchAll, 0.3f, 1.f);
-        filter1 (b, b.chance (0.5f) ? ft (FilterType::BP12) : ft (FilterType::LP12), 200.f, 600.f, 0.3f, 0.7f, 0.f, 0.f);
-        b.route (S::ModEnv, D::F1Cutoff, 0.5f, 0.9f);
+        b.route (S::ModEnv, D::PitchAll, 0.45f, 1.f);
+        filter1 (b, ft (FilterType::LP12), 400.f, 1500.f, 0.2f, 0.5f, 0.f, 0.f);
+        b.route (S::ModEnv, D::F1Cutoff, 0.4f, 0.7f);
+        if (b.chance (0.5f))
+        {
+            // spiral: a wobble that speeds up as the pitch climbs
+            b.lfo (1, LfoShape::Sine, 2.f, 5.f, true);
+            if (b.chance (0.5f)) b.route (S::Lfo2, D::PitchAll, 0.02f, 0.06f);
+            else b.route (S::Lfo2, D::F1Cutoff, 0.05f, 0.15f);
+            b.route (S::ModEnv, D::Lfo2Rate, 0.3f, 0.6f);
+        }
+        ampEnv (b, 1000.f, 6000.f, 1000.f, 1000.f, 1.f, 1.f, 500.f, 2000.f);
+        b.route (S::Macro1, D::F1Reso, 0.2f, 0.4f);
+
+        fxReverb (b, 0.9f, 4.f, 10.f, 0.3f, 0.5f);
+        fxDelay (b, 0.7f, { D1_8D, D1_4, D1_8 }, 0.35f, 0.6f, 0.15f, 0.3f);
+        fxPhaser (b, 0.3f);
+        fxDist (b, 0.3f, { 0, 3 }, 3.f, 12.f, 0.2f, 0.5f);
+        fxShift (b, 0.2f, 5.f, 200.f, 0.2f, 0.6f);
+    }
+
+    // Noise sweep: the filter opens upward and the pitch stays put.
+    void uplifter (B& b)
+    {
+        polyVoice (b, 2, 4);
+        b.pick (P::NoiseType, { 0, 1 }, { 0.6f, 0.4f });
+        b.uni (P::NoiseLevel, 0.8f, 1.f);
+        if (b.chance (0.2f)) { supersawA (b, 0.3f, 0.7f); b.uni (P::OscALevel, 0.05f, 0.15f); }
+        else b.on (P::OscAOn, false);
+
+        filter1 (b, b.chance (0.4f) ? ft (FilterType::BP12) : (b.chance (0.5f) ? ft (FilterType::HP12) : ft (FilterType::LP12)),
+                 150.f, 500.f, 0.2f, 0.6f, 0.f, 0.f);
+        modEnv (b, 2000.f, 8000.f, 1000.f, 1000.f, 1.f, 1.f, 300.f, 1500.f);
+        b.route (S::ModEnv, D::F1Cutoff, 0.6f, 0.95f);
         if (b.chance (0.4f))
+        {
+            // a high-pass that follows, so the bottom thins out as it rises
+            b.set (P::F2Type, (float) ft (FilterType::HP12));
+            b.uni (P::F2Cutoff, 100.f, 300.f);
+            b.route (S::ModEnv, D::F2Cutoff, 0.3f, 0.6f);
+        }
+        if (b.chance (0.5f))
         {
             b.lfoSync (1, LfoShape::Triangle, { D1_16, D1_8, D1_16T }, false);
             b.route (S::Lfo2, D::F1Cutoff, 0.05f, 0.15f);
@@ -667,10 +711,10 @@ namespace
         ampEnv (b, 1000.f, 6000.f, 1000.f, 1000.f, 1.f, 1.f, 500.f, 2000.f);
         b.route (S::Macro1, D::F1Reso, 0.2f, 0.4f);
 
+        fxPhaser (b, 0.5f);
+        fxShift (b, 0.4f, 5.f, 200.f, 0.2f, 0.6f);
         fxReverb (b, 0.9f, 4.f, 10.f, 0.3f, 0.5f);
-        fxDelay (b, 0.7f, { D1_8D, D1_4, D1_8 }, 0.35f, 0.6f, 0.15f, 0.3f);
-        fxPhaser (b, 0.4f);
-        fxShift (b, 0.3f, 5.f, 200.f, 0.2f, 0.6f);
+        fxDelay (b, 0.5f, { D1_8D, D1_4 }, 0.3f, 0.55f, 0.15f, 0.3f);
     }
 
     void downlifter (B& b)
@@ -804,6 +848,129 @@ namespace
         fxShift (b, 0.3f, 0.1f, 3.f, 0.f, 0.3f);
         fxChorus (b, 0.3f, false);
     }
+
+    // A boom that falls into the sub: bright noise transient, seconds of
+    // tail. Deeper and longer than a Zap, and the tail outlasts the note.
+    void impact (B& b)
+    {
+        monoVoice (b, false, 0.f, 0.f);
+        b.pick (P::Octave, { -1, 0 }, { 0.7f, 0.3f });
+        analogA (b, kSine, 0.9f);
+        if (b.chance (0.4f)) { analogB (b, kTri, 0.2f, 0.4f); b.set (P::OscBCoarse, 12.f); }
+
+        b.set (P::PenvAttack, 0.f);
+        b.set (P::PenvDest, 0.f);
+        b.uni (P::PenvAmt, 12.f, 36.f);
+        b.uni (P::PenvDecay, 300.f, 1500.f);
+        b.uni (P::PenvCurve, 0.3f, 0.7f);
+
+        b.pick (P::NoiseType, { 0, 1 });
+        b.uni (P::NoiseLevel, 0.2f, 0.5f);
+        filter1 (b, ft (FilterType::LP12), 300.f, 1000.f, 0.f, 0.25f, 0.4f, 0.8f);
+        filterEnv (b, 0.f, 0.f, 80.f, 400.f, 0.f, 0.f, 100.f, 400.f);
+        ampEnv (b, 0.f, 0.f, 1500.f, 5000.f, 0.f, 0.f, 1500.f, 5000.f);
+        b.route (S::Macro1, D::PitchEnvAmt, 0.2f, 0.4f);
+        b.route (S::Velocity, D::F1Cutoff, 0.1f, 0.25f);
+
+        fxDist (b, 0.5f, { 0, 3 }, 3.f, 9.f, 0.2f, 0.5f);
+        fxReverb (b, 0.9f, 4.f, 12.f, 0.25f, 0.45f);
+        fxDelay (b, 0.2f, { D1_4, D1_4D }, 0.2f, 0.4f, 0.1f, 0.2f);
+    }
+
+    // A held pad chopped on the grid. Amp mod is 1 + m, so a full-depth
+    // square swings the gain between silence and 2x: sources sit at half level.
+    void gate (B& b)
+    {
+        if (b.chance (0.7f)) polyVoice (b, 4, 8);
+        else monoVoice (b, false, 0.f, 0.f);
+        if (b.chance (0.2f))
+        {
+            // chopped noise texture
+            b.on (P::OscAOn, false);
+            b.pick (P::NoiseType, { 0, 1 });
+            b.uni (P::NoiseLevel, 0.35f, 0.5f);
+        }
+        else if (b.chance (0.4f)) { supersawA (b, 0.3f, 0.6f); b.set (P::OscALevel, 0.5f); }
+        else if (b.chance (0.5f)) { wavetableA (b, { 0, 2, 6 }, 0.1f, 0.7f); b.set (P::OscALevel, 0.5f); }
+        else
+        {
+            analogA (b, kSaw, 0.5f);
+            analogB (b, kSaw, 0.3f, 0.45f);
+            b.uni (P::OscBFine, 8.f, 20.f);
+        }
+
+        filter1 (b, b.chance (0.5f) ? ft (FilterType::LP12) : ft (FilterType::Ladder24), 800.f, 4000.f, 0.1f, 0.4f, 0.f, 0.f);
+        // mostly a hard square; sometimes a falling saw, the "acid gate" shape
+        b.lfoSync (0, b.chance (0.75f) ? LfoShape::Square : LfoShape::SawDown, { D1_16, D1_8, D1_16D, D1_8T }, true);
+        b.route (S::Lfo1, D::Amp, 0.85f, 1.f);
+        ampEnv (b, 0.f, 10.f, 1000.f, 1000.f, 1.f, 1.f, 50.f, 300.f);
+        b.route (S::Macro1, D::F1Cutoff, 0.3f, 0.5f);
+
+        fxDelay (b, 0.7f, { D1_8D, D1_4 }, 0.3f, 0.55f, 0.15f, 0.3f);
+        fxReverb (b, 0.7f, 2.f, 6.f, 0.15f, 0.35f);
+        fxChorus (b, 0.4f, false);
+        fxPhaser (b, 0.2f);
+    }
+
+    // Stepped random pitch and a stuttering gain on the grid, through a crusher.
+    void glitch (B& b)
+    {
+        if (b.chance (0.6f)) monoVoice (b, false, 0.f, 0.f);
+        else polyVoice (b, 2, 4);
+        if (b.chance (0.4f)) { fmA (b, { 1.f, 2.f, 3.5f, 7.f }, 1.f, 6.f, 0.f, 0.5f); b.set (P::OscALevel, 0.5f); }
+        else if (b.chance (0.5f)) { wavetableA (b, { 1, 3, 4, 5 }, 0.f, 1.f); b.set (P::OscALevel, 0.5f); }
+        else analogA (b, kSquare, 0.5f);
+        if (b.chance (0.3f)) { b.pick (P::NoiseType, { 0, 2 }); b.uni (P::NoiseLevel, 0.1f, 0.3f); }
+
+        b.lfoSync (0, LfoShape::SampleHold, { D1_16, D1_32, D1_16T, D1_32T }, true);
+        b.route (S::Lfo1, D::PitchAll, 0.1f, 0.4f);
+        b.lfoSync (1, LfoShape::Square, { D1_32, D1_64, D1_16T }, true);
+        b.route (S::Lfo2, D::Amp, 0.6f, 1.f);
+        filter1 (b, b.chance (0.5f) ? ft (FilterType::BP12) : ft (FilterType::LP12), 800.f, 5000.f, 0.2f, 0.6f, 0.f, 0.f);
+        b.lfo (2, LfoShape::SampleHold, 8.f, 30.f, false);
+        b.route (S::Lfo3, D::F1Cutoff, 0.2f, 0.5f);
+        ampEnv (b, 0.f, 0.f, 150.f, 800.f, 0.f, 0.6f, 30.f, 150.f);
+        b.route (S::Macro1, D::Lfo3Rate, 0.2f, 0.4f);
+
+        if (b.chance (0.8f))
+        {
+            b.on (P::CrushOn, true);
+            b.uni (P::CrushBits, 3.f, 8.f);
+            b.uni (P::CrushRate, 2.f, 16.f);
+            b.uni (P::CrushMix, 0.4f, 0.9f);
+        }
+        fxShift (b, 0.4f, 20.f, 400.f, 0.f, 0.5f);
+        fxDelay (b, 0.5f, { D1_16, D1_32, D1_16T }, 0.2f, 0.5f, 0.1f, 0.3f);
+        fxDist (b, 0.3f, { 1, 2 }, 4.f, 14.f, 0.3f, 0.6f);
+        fxReverb (b, 0.3f, 0.5f, 1.5f, 0.1f, 0.2f);
+    }
+
+    // Swells and cuts at the peak like a reversed hit: the amp envelope
+    // drops to nothing a few ms after its attack, whatever the note length.
+    // The filter opens with it. Little reverb, so no tail softens the cut.
+    void reverse (B& b)
+    {
+        polyVoice (b, 4, 8);
+        if (b.chance (0.4f)) supersawA (b, 0.3f, 0.7f);
+        else if (b.chance (0.5f))
+        {
+            analogA (b, kSaw);
+            analogB (b, kSaw, 0.4f, 0.7f);
+            b.among (P::OscBCoarse, { 0.f, 7.f, 12.f });
+            b.uni (P::OscBFine, 6.f, 16.f);
+        }
+        else fmA (b, { 1.41f, 2.76f, 3.5f, 1.5f }, 1.f, 4.f, 0.f, 0.3f);
+        if (b.chance (0.3f)) { b.pick (P::NoiseType, { 0, 1 }); b.uni (P::NoiseLevel, 0.1f, 0.3f); }
+
+        filter1 (b, ft (FilterType::LP12), 300.f, 1200.f, 0.1f, 0.4f, 0.4f, 0.8f);
+        filterEnv (b, 300.f, 2000.f, 1000.f, 1000.f, 1.f, 1.f, 20.f, 80.f);
+        ampEnv (b, 300.f, 1800.f, 5.f, 40.f, 0.f, 0.f, 5.f, 40.f);
+        b.route (S::Macro1, D::F1Cutoff, 0.2f, 0.4f);
+
+        fxReverb (b, 0.5f, 1.f, 3.f, 0.08f, 0.2f);
+        fxDelay (b, 0.3f, { D1_8D, D1_4 }, 0.2f, 0.4f, 0.1f, 0.2f);
+        fxChorus (b, 0.3f, false);
+    }
 } // namespace
 
 Recipe recipeFor (Category c) noexcept
@@ -829,6 +996,11 @@ Recipe recipeFor (Category c) noexcept
         case Category::NoiseFx:     return noiseFx;
         case Category::Atmos:       return atmos;
         case Category::Drone:       return drone;
+        case Category::Uplifter:    return uplifter;
+        case Category::Impact:      return impact;
+        case Category::Gate:        return gate;
+        case Category::Glitch:      return glitch;
+        case Category::Reverse:     return reverse;
         default:                    return acid;
     }
 }

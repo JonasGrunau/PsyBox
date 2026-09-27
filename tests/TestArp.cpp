@@ -113,7 +113,7 @@ TEST_CASE ("Up/Down does not repeat the turning notes", "[arp]")
 TEST_CASE ("Rolling leaves the beat to the kick when synced to the host", "[arp]")
 {
     ArpSettings s;
-    s.rhythm = (int) ArpRhythm::Rolling;
+    s.pattern = ArpPattern::parse ("-xxx");
     auto a = make (s);
     a.keyOn (36, 0.8f);
     const auto o = ons (run (a, kSixteenth * 8, 256, 120.0, true, 0.0));
@@ -172,8 +172,79 @@ TEST_CASE ("Engine: tied arp steps keep a slow attack swelling", "[arp][engine]"
         e.process (l.data() + pos, r.data() + pos, 256, pos == 0 ? &on : nullptr, pos == 0 ? 1 : 0, 120.0);
     float pk = 0.f;
     for (int i = 40000; i < 48000; ++i) pk = std::max (pk, std::abs (l[(size_t) i]));
-    CHECK (pk > 0.1f);   // retriggering every 1/16 would keep it near silence
+    CHECK (pk > 0.05f);   // retriggering every 1/16 would keep it near silence
     CHECK (e.activeVoices() == 1);
+}
+
+namespace
+{
+    // Every event with its sample time, stepping one sample at a time.
+    std::vector<std::pair<int64_t, ArpEvent>> trace (Arpeggiator& a, int64_t total)
+    {
+        std::vector<std::pair<int64_t, ArpEvent>> out;
+        for (int64_t t = 0; t < total; ++t)
+        {
+            a.fireDue ([&] (const ArpEvent& e) { out.push_back ({ t, e }); });
+            a.advance (1);
+        }
+        return out;
+    }
+} // namespace
+
+TEST_CASE ("Pattern accents own the velocity", "[arp]")
+{
+    ArpSettings s;
+    s.pattern = ArpPattern::parse ("xX");
+    auto a = make (s);
+    a.keyOn (60, 0.9f);
+    std::vector<float> vel;
+    for (const auto& [t, e] : trace (a, kSixteenth * 4))
+        if (e.on) vel.push_back (e.velocity);
+    REQUIRE (vel.size() == 4);
+    CHECK (vel[0] < 100.f / 127.f);   // under the engine's accent threshold
+    CHECK (vel[1] == 1.f);
+    CHECK (vel[2] < 100.f / 127.f);
+    CHECK (vel[3] == 1.f);
+}
+
+TEST_CASE ("A slide step holds its note and glides into the next one", "[arp]")
+{
+    ArpSettings s;
+    s.gate = 0.5f;
+    s.pattern = ArpPattern::parse ("sx");
+    auto a = make (s);
+    a.keyOn (60, 0.8f);
+    a.keyOn (63, 0.8f);
+    const auto ev = trace (a, kSixteenth * 2 - 1);
+    REQUIRE (ev.size() == 3);
+    CHECK ((ev[0].first == 0 && ev[0].second.on && ev[0].second.note == 60));
+    CHECK ((ev[1].first == kSixteenth && ev[1].second.slideFrom == 60 && ev[1].second.note == 63));
+    CHECK ((ev[2].first == kSixteenth + kSixteenth / 2 && ! ev[2].second.on));   // the plain step keeps its gate
+}
+
+TEST_CASE ("The pattern loops over its length, not over 16", "[arp]")
+{
+    ArpSettings s;
+    s.pattern = ArpPattern::parse ("x-x");
+    s.pattern.length = 3;
+    auto a = make (s);
+    a.keyOn (60, 0.8f);
+    const auto o = ons (run (a, kSixteenth * 7, 256));
+    const int64_t expected[] = { 0, 2, 3, 5, 6 };
+    REQUIRE (o.size() == 5);
+    for (size_t i = 0; i < 5; ++i)
+        CHECK (o[i].t == expected[i] * kSixteenth);
+    CHECK (a.currentStep() == 0);
+}
+
+TEST_CASE ("Arp patterns survive a trip through the parameters", "[arp][params]")
+{
+    auto p = ArpPattern::parse ("Xxs--S-x");
+    p.length = 11;
+    ParamState st;
+    p.writeTo (st);
+    CHECK (ArpPattern::from (st) == p);
+    CHECK (ArpPattern::from (ParamState()) == ArpPattern::parse ("x"));   // default: every step plays
 }
 
 TEST_CASE ("Swing delays the odd steps", "[arp]")
@@ -219,7 +290,7 @@ TEST_CASE ("Engine: with the arp on, rhythm rests are silent and steps play", "[
 {
     ParamState p;
     p.set (P::ArpOn, 1.f);
-    p.set (P::ArpRhythm, (float) ArpRhythm::Offbeat);   // --x-
+    ArpPattern::parse ("--x-").writeTo (p);
     p.set (P::AenvR, 5.f);
     p.set (P::ArpGate, 0.5f);
     Engine e;

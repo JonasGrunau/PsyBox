@@ -48,6 +48,7 @@ public:
 
     int latencySamples() const noexcept { return decimL.latency (osFactor); }
     int activeVoices() const noexcept;
+    int arpStep() const noexcept { return arpActive ? arp.currentStep() : -1; }   // pattern step playing, or -1
 
     // For the GUI (approximate, read without locking).
     float lastPeak() const noexcept { return peak; }

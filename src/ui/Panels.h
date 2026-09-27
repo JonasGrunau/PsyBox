@@ -118,15 +118,69 @@ private:
     void timerCallback() override;
 };
 
-// One bar of the arp rhythm at 1/16: lit steps play, the rest are rests.
-class ArpPatternView : public juce::Component
+// The arp pattern as a 4 x 4 pad grid (one row per beat). Click to edit.
+class ArpPatternView : public juce::Component,
+                       public juce::SettableTooltipClient
 {
 public:
-    explicit ArpPatternView (PsySynthProcessor& p) : proc (p) {}
+    explicit ArpPatternView (PsySynthProcessor&);
     void paint (juce::Graphics&) override;
+    void mouseUp (const juce::MouseEvent&) override;
+    void mouseEnter (const juce::MouseEvent&) override { repaint(); }
+    void mouseExit (const juce::MouseEvent&) override { repaint(); }
+    std::function<void()> onClick;
 
 private:
     PsySynthProcessor& proc;
+};
+
+// Step editor for the arp pattern, shown over the whole UI: step, accent and
+// slide lanes, a ruler that sets the loop length, templates and tools.
+class ArpPatternEditor : public juce::Component, private juce::Timer
+{
+public:
+    explicit ArpPatternEditor (PsySynthProcessor&);
+    void open();
+    void close();
+    void paint (juce::Graphics&) override;
+    void resized() override;
+    void mouseDown (const juce::MouseEvent&) override;   // outside the panel closes
+
+private:
+    class Grid : public juce::Component
+    {
+    public:
+        explicit Grid (PsySynthProcessor& p) : proc (p) {}
+        void paint (juce::Graphics&) override;
+        void mouseDown (const juce::MouseEvent&) override;
+        void mouseDrag (const juce::MouseEvent&) override;
+        void mouseMove (const juce::MouseEvent&) override;
+        void mouseExit (const juce::MouseEvent&) override { hover = {}; repaint(); }
+
+    private:
+        PsySynthProcessor& proc;
+        enum class Row { None, Ruler, On, Accent, Slide };
+        struct Hit { Row row = Row::None; int step = -1; };
+        Hit hover, drag;
+        bool paintValue = true;
+        juce::Rectangle<int> rowArea (Row) const;
+        juce::Rectangle<int> cellArea (Row, int step) const;
+        Hit locate (juce::Point<int>) const;
+        void apply (Hit);
+    };
+
+    PsySynthProcessor& proc;
+    Grid grid;
+    juce::TextButton templates { "Templates" }, clear { "Clear" }, done { "Done" }, dice { "Generate" };
+    ToggleDot arpOn;
+    IconButton shiftLeft { IconButton::Icon::Left, "Shift the pattern one step earlier" };
+    IconButton shiftRight { IconButton::Icon::Right, "Shift the pattern one step later" };
+    KnobSet ks;
+    std::vector<ParamKnob*> knobs;
+    juce::Rectangle<int> panel;
+    void rotate (int by);
+    void showTemplates();
+    void timerCallback() override { grid.repaint(); }
 };
 
 class VoicePanel : public Section, private juce::Timer
@@ -134,6 +188,7 @@ class VoicePanel : public Section, private juce::Timer
 public:
     explicit VoicePanel (PsySynthProcessor&);
     void resized() override;
+    std::function<void()> onEditPattern;   // the pattern grid was clicked
 
 private:
     PsySynthProcessor& proc;
@@ -143,7 +198,7 @@ private:
     std::vector<ParamKnob*> knobs;
 
     ToggleDot arpOn, arpHold;
-    ParamCombo arpMode, arpRhythm;
+    ParamCombo arpMode;
     ArpPatternView pattern;
     std::vector<ParamKnob*> arpKnobs;
     int current = 0;
@@ -272,22 +327,30 @@ public:
     void mouseDoubleClick (const juce::MouseEvent&) override;
     void mouseMove (const juce::MouseEvent&) override;
     void mouseExit (const juce::MouseEvent&) override { hover = -1; repaint(); }
+    void mouseWheelMove (const juce::MouseEvent&, const juce::MouseWheelDetails&) override;
     void changeListenerCallback (juce::ChangeBroadcaster*) override;
 
 private:
     PsySynthProcessor& proc;
     int hover = -1;
+    int scrollY = 0, listH = 0;                            // the category list scrolls inside listH
+    psy::Category shownCategory = psy::Category::Count;   // last category scrolled into view
     juce::TextButton generateButton { "Generate" }, mutateButton { "Mutate" }, clearLocks { "Unlock" };
-    ToggleDot arpToggle { "Arp" };
+    ToggleDot arpToggle { juce::String() };   // switch only; the caption is painted like SEED
     juce::Slider mutateAmount;
     juce::Label seedLabel;
-    juce::Rectangle<int> seedCaption;
+    juce::Rectangle<int> seedCaption, arpCaption;
 
-    static constexpr int kItemH = 26;
+    static constexpr int kItemH = 25;
     static constexpr int kListTop = theme::kPad + theme::kHeaderH + theme::sp::sm;
+    static constexpr int kInfoH = theme::kPad + 24 + theme::sp::xs + 30;   // category name + blurb
     int categoryAt (juce::Point<int>) const;
     juce::Rectangle<int> rowBounds (int i) const;
+    juce::Rectangle<int> listArea() const;
     juce::Rectangle<int> infoArea() const;
+    int maxScroll() const;
+    void setScroll (int y);
+    void scrollToShow (psy::Category);
     void refresh();
 };
 

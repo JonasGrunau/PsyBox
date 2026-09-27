@@ -11,11 +11,14 @@ Builds as **VST3**, **Audio Unit** and **Standalone** (macOS).
 
 ## Categories
 
-19 kinds of sound, each with its own recipe and accent colour:
+24 kinds of sound, each with its own recipe and accent colour:
 
-Acid · Alien Voice · Atmos · Bubble · Downlifter · Drone · Gurgle · Laser ·
-Metallic · Noise FX · Pluck · Psy Lead · Riser · Rolling Bass · Screech ·
-Squelch · Stab · Wobble · Zap
+Acid · Alien Voice · Atmos · Bubble · Downlifter · Drone · Gate · Glitch ·
+Gurgle · Impact · Laser · Metallic · Noise FX · Pluck · Psy Lead · Reverse ·
+Riser · Rolling Bass · Screech · Squelch · Stab · Uplifter · Wobble · Zap
+
+Riser is a synth tone climbing in pitch; Uplifter is a noise sweep that opens
+upward. The sidebar list scrolls when it is longer than the space it has.
 
 No drums. This is for the synth side of a track.
 
@@ -30,8 +33,9 @@ No drums. This is for the synth side of a track.
   it alone.
 - Tick **Arp** next to Generate and every new sound comes with an arp in the
   style of its category: rolling 16ths for basses, tied 303 slides for acid,
-  random blips for bubbles, stepped sweeps for risers. The sound itself is the
-  same with or without it; only the arp settings differ.
+  random blips for bubbles, stepped sweeps for risers, each with a freshly
+  generated step pattern. The sound itself is the same with or without it;
+  only the arp settings differ.
 - The same category and seed always give the same sound. Double-click the seed
   in the sidebar to type one in.
 - Each category remembers its patch. Switch from Acid to Zap and back and your
@@ -81,11 +85,16 @@ Amp, filter, mod and pitch envelopes, 3 LFOs (tempo sync, retrigger, S&H,
 smooth random) and an 8-slot mod matrix.
 
 Arpeggiator (Voice panel, Arp tab): Up, Down, Up/Down, Random and played order
-over 1 to 4 octaves, with rate, gate, swing and hold. Rhythm patterns built for
-psy: Straight, Rolling (`-xxx`, the kick keeps the beat), Gallop, Offbeat, Skip,
-3-3-2 and a one-bar Broken line. It locks to the host transport while it plays.
-Gates of 100 % or more tie: the voice slides to the next note without
-retriggering, so 303 slides and long sweeps keep running.
+over 1 to 4 octaves, with rate, gate, swing and hold, playing a 16-step pattern
+with per-step accent and slide and a loop length of 1 to 16 steps. Generate
+writes a new pattern in the category's style every time (rolling basses keep
+the kick steps free, acid lines get accents and slides, bubbles loop at odd
+lengths). Click the pattern grid to open the step editor: paint steps, set the
+length on the ruler, shift, clear, start from a template (Rolling, Gallop,
+3-3-2, Acid line...) or generate just a new pattern. The arp locks to the host
+transport while it plays. Slides, and gates of 100 % or more, tie: the voice
+glides to the next note without retriggering, so 303 slides and long sweeps
+keep running.
 
 ### Effects
 

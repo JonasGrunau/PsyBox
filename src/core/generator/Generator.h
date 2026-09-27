@@ -7,6 +7,7 @@
 #include <array>
 #include <bitset>
 #include <initializer_list>
+#include <vector>
 
 namespace psy
 {
@@ -71,7 +72,12 @@ private:
 
 using Recipe = void (*) (RecipeBuilder&);
 Recipe recipeFor (Category c) noexcept;
-Recipe arpRecipeFor (Category c) noexcept;   // arp params only (ArpRecipes.cpp)
+Recipe arpRecipeFor (Category c) noexcept;          // arp settings (ArpRecipes.cpp)
+Recipe arpPatternRecipeFor (Category c) noexcept;   // the arp's 16 steps
+
+// Named starting points for the pattern editor (ArpPattern::parse notation).
+struct ArpTemplate { const char* name; const char* steps; };
+const std::vector<ArpTemplate>& arpTemplates() noexcept;
 
 class Generator
 {
@@ -81,6 +87,9 @@ public:
     // withArp adds the category's arp on a separate random stream, so the
     // sound itself is the same either way.
     ParamState generate (Category c, uint32_t seed, const ParamState& current, const LockSet& locks, bool withArp = false);
+
+    // Only a new arp pattern in the category's style; everything else stays.
+    ParamState generateArpPattern (Category c, uint32_t seed, const ParamState& current, const LockSet& locks);
 
     // Nudges every unlocked parameter the last recipe touched by up to
     // `amount` (0..1) of its allowed range.

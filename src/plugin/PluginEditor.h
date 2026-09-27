@@ -27,6 +27,7 @@ private:
     {
     public:
         explicit Root (PsySynthProcessor&);
+        VoicePanel& voicePanel() noexcept { return voice; }
         void paint (juce::Graphics&) override;
         void paintOverChildren (juce::Graphics&) override;
         void resized() override;
@@ -60,6 +61,7 @@ private:
     Root root;
     const bool withKeyboard;
     Keys keyboard;
+    ArpPatternEditor patternEditor;   // over the panels, same scale as root
     int totalH() const { return kH + (withKeyboard ? kKeysH : 0); }
     // Keeps the piano playable from the computer keyboard: controls never take
     // focus, and focus returns to the piano whenever nothing is being typed.

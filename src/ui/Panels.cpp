@@ -213,7 +213,7 @@ VoicePanel::VoicePanel (PsySynthProcessor& p)
     : Section ("Voice"), proc (p),
       mode (p, P::VoiceMode), glideMode (p, P::GlideMode, { "Always", "Legato" }),
       arpOn (p, P::ArpOn, "On"), arpHold (p, P::ArpHold, "Hold"),
-      arpMode (p, P::ArpMode, "Mode"), arpRhythm (p, P::ArpRhythm, "Rhythm"), pattern (p)
+      arpMode (p, P::ArpMode, "Mode"), pattern (p)
 {
     addAndMakeVisible (tabs);
     tabs.hasLed = [] (int i) { return i == 1; };
@@ -228,14 +228,15 @@ VoicePanel::VoicePanel (PsySynthProcessor& p)
     arpOn.setStacked (true);
     arpHold.setStacked (true);
     arpHold.setTooltip ("Keep the arp running after you let go of the keys");
+    pattern.onClick = [this] { if (onEditPattern) onEditPattern(); };
     for (juce::Component* c : { (juce::Component*) &arpOn, (juce::Component*) &arpHold, (juce::Component*) &arpMode,
-                                (juce::Component*) &arpRhythm, (juce::Component*) &pattern })
+                                (juce::Component*) &pattern })
         addChildComponent (c);
     arpKnobs = { ks.add (*this, p, P::ArpDiv), ks.add (*this, p, P::ArpOctaves), ks.add (*this, p, P::ArpGate),
                  ks.add (*this, p, P::ArpSwing) };
 
     show (0);
-    startTimerHz (10);
+    startTimerHz (30);   // the pattern grid follows the playing step
 }
 
 void VoicePanel::show (int page)
@@ -246,7 +247,7 @@ void VoicePanel::show (int page)
     glideMode.setVisible (voice);
     for (auto* k : knobs) k->setVisible (voice);
     for (juce::Component* c : { (juce::Component*) &arpOn, (juce::Component*) &arpHold, (juce::Component*) &arpMode,
-                                (juce::Component*) &arpRhythm, (juce::Component*) &pattern })
+                                (juce::Component*) &pattern })
         c->setVisible (! voice);
     for (auto* k : arpKnobs) k->setVisible (! voice);
     resized();
@@ -275,10 +276,10 @@ void VoicePanel::resized()
     arpOn.setBounds (gr.cell (0, 0));
     arpHold.setBounds (gr.cell (1, 0));
     arpMode.setBounds (gr.captioned (2, 0, 2));
-    arpRhythm.setBounds (gr.captioned (4, 0, 2));
     for (int i = 0; i < (int) arpKnobs.size(); ++i)
         arpKnobs[(size_t) i]->setBounds (gr.cell (i, 1));
-    pattern.setBounds (gr.captioned (4, 1, 2).removeFromTop (kKnobD));
+    // the pad grid fills the last two columns of both rows
+    pattern.setBounds (gr.captioned (4, 0, 2).getUnion (gr.captioned (4, 1, 2)).withTrimmedBottom (kLabelH + kLabelGap));
 
     if (current == 0)
     {
@@ -291,30 +292,388 @@ void VoicePanel::resized()
     }
 }
 
+// ---------------------------------------------------------------------------
+// Arp pattern: pad grid and editor
+// ---------------------------------------------------------------------------
+namespace
+{
+    // Fill for one step, shared by the pad grid and the editor.
+    juce::Colour stepColour (const psy::ArpPattern& pt, int i, bool arpOn)
+    {
+        const bool acc = pt.has (i, psy::ArpPattern::Accent);
+        return arpOn ? accent().withAlpha (acc ? 1.f : 0.55f) : col::textFaint.withAlpha (acc ? 0.7f : 0.4f);
+    }
+} // namespace
+
+ArpPatternView::ArpPatternView (PsySynthProcessor& p) : proc (p)
+{
+    setMouseCursor (juce::MouseCursor::PointingHandCursor);
+    setTooltip ("Click to edit the pattern");
+}
+
+void ArpPatternView::mouseUp (const juce::MouseEvent& e)
+{
+    if (e.mouseWasClicked() && onClick) onClick();
+}
+
 void ArpPatternView::paint (juce::Graphics& g)
 {
-    const auto mask = psy::arpRhythmMask ((int) proc.plain (P::ArpRhythm));
+    const auto pt = proc.getArpPattern();
     const bool on = proc.plain (P::ArpOn) > 0.5f;
+    const int playing = proc.getArpStep();
+    const bool hot = isMouseOver();
 
-    // 16 steps in four beat groups, centred vertically in the control area
-    constexpr int kSteps = 16, kGap = 2, kBeatGap = 5;
-    const float w = (float) (getWidth() - 12 * kGap - 3 * kBeatGap) / (float) kSteps;
-    const float hgt = 14.f, y = ((float) getHeight() - hgt) * 0.5f;
-    float x = 0.f;
-    for (int i = 0; i < kSteps; ++i)
+    constexpr int kGap = 4;
+    const float w = (float) (getWidth() - 3 * kGap) / 4.f, h = (float) (getHeight() - 3 * kGap) / 4.f;
+    for (int i = 0; i < psy::kArpSteps; ++i)
     {
-        const juce::Rectangle<float> r (x, y, w, hgt);
-        if (mask.steps[i % mask.length] == 'x')
+        const juce::Rectangle<float> r ((float) (i % 4) * (w + kGap), (float) (i / 4) * (h + kGap), w, h);
+        const bool inLoop = i < pt.length;
+        if (pt.has (i, psy::ArpPattern::On) && inLoop)
         {
-            g.setColour (on ? accent() : col::textFaint);
-            g.fillRoundedRectangle (r, 1.5f);
+            g.setColour (stepColour (pt, i, on));
+            g.fillRoundedRectangle (r, 2.f);
+            // a tie bridges the gap to the next pad in the row
+            if (pt.has (i, psy::ArpPattern::Slide) && i % 4 != 3 && i + 1 < pt.length)
+                g.fillRect (r.getRight(), r.getCentreY() - 1.5f, (float) kGap, 3.f);
         }
         else
         {
-            g.setColour (col::lineStrong);
-            g.drawRoundedRectangle (r.reduced (0.5f), 1.5f, 1.f);
+            g.setColour (inLoop ? (hot ? col::textFaint : col::lineStrong) : col::grid);
+            g.drawRoundedRectangle (r.reduced (0.5f), 2.f, 1.f);
         }
-        x += w + (i % 4 == 3 ? kBeatGap : kGap);
+        if (i == playing)
+        {
+            g.setColour (col::text);
+            g.drawRoundedRectangle (r.reduced (0.5f), 2.f, 1.5f);
+        }
+    }
+}
+
+ArpPatternEditor::ArpPatternEditor (PsySynthProcessor& p) : proc (p), grid (p), arpOn (p, P::ArpOn, "On")
+{
+    for (juce::Component* c : std::initializer_list<juce::Component*> { &grid, &templates, &clear, &done, &dice,
+                                                                         &shiftLeft, &shiftRight, &arpOn })
+        addAndMakeVisible (c);
+    done.getProperties().set ("primary", true);
+    dice.setTooltip ("New pattern in the style of the category");
+    templates.setTooltip ("Start from a classic figure");
+    clear.setTooltip ("Rest on every step");
+    templates.onClick = [this] { showTemplates(); };
+    clear.onClick = [this] {
+        auto pt = proc.getArpPattern();
+        pt.steps = {};
+        proc.setArpPattern (pt);
+    };
+    done.onClick = [this] { close(); };
+    dice.onClick = [this] { proc.generateArpPattern(); };
+    shiftLeft.onClick = [this] { rotate (-1); };
+    shiftRight.onClick = [this] { rotate (1); };
+    knobs = { ks.add (*this, p, P::ArpLength), ks.add (*this, p, P::ArpDiv), ks.add (*this, p, P::ArpGate),
+              ks.add (*this, p, P::ArpSwing), ks.add (*this, p, P::ArpOctaves) };
+    setVisible (false);
+}
+
+void ArpPatternEditor::open()
+{
+    resized();   // the header follows the category name
+    setVisible (true);
+    toFront (false);
+    startTimerHz (30);
+}
+
+void ArpPatternEditor::close()
+{
+    stopTimer();
+    setVisible (false);
+}
+
+void ArpPatternEditor::mouseDown (const juce::MouseEvent& e)
+{
+    if (! panel.contains (e.getPosition())) close();
+}
+
+void ArpPatternEditor::rotate (int by)
+{
+    const auto pt = proc.getArpPattern();
+    auto out = pt;
+    for (int i = 0; i < pt.length; ++i)
+        out.steps[(size_t) ((i + by + pt.length) % pt.length)] = pt.steps[(size_t) i];
+    proc.setArpPattern (out);
+}
+
+void ArpPatternEditor::showTemplates()
+{
+    juce::PopupMenu m;
+    const auto& t = psy::arpTemplates();
+    for (int i = 0; i < (int) t.size(); ++i)
+        m.addItem (i + 1, t[(size_t) i].name);
+    m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&templates), [this] (int r) {
+        const auto& list = psy::arpTemplates();
+        if (r > 0 && r <= (int) list.size())
+            proc.setArpPattern (psy::ArpPattern::parse (list[(size_t) r - 1].steps));
+    });
+}
+
+void ArpPatternEditor::paint (juce::Graphics& g)
+{
+    g.fillAll (juce::Colours::black.withAlpha (0.6f));
+    g.setColour (col::panel);
+    g.fillRoundedRectangle (panel.toFloat(), 6.f);
+    g.setColour (col::lineStrong);
+    g.drawRoundedRectangle (panel.toFloat().reduced (0.5f), 6.f, 1.f);
+
+    const auto pair = shiftLeft.getBounds().getUnion (shiftRight.getBounds()).toFloat().reduced (0.5f);
+    g.setColour (col::lineStrong);
+    g.drawRoundedRectangle (pair, 4.f, 1.f);
+    g.fillRect ((float) shiftRight.getX(), pair.getY() + 5.f, 1.f, pair.getHeight() - 10.f);
+
+    auto head = panel.reduced (sp::xl).removeFromTop (kHeaderH);
+    drawHeading (g, "Arp Pattern", head);
+    const int titleW = juce::GlyphArrangement::getStringWidthInt (heading(), "ARP PATTERN") + sp::md;
+    g.setColour (accent());
+    g.setFont (label (11.f));
+    g.drawText (psy::categoryInfo()[(size_t) proc.getCategory()].name, head.withTrimmedLeft (titleW), juce::Justification::centredLeft, false);
+
+    // beside the knobs, centred on their dials
+    auto hint = panel.reduced (sp::xl).removeFromBottom (kCellH).removeFromTop (kKnobD).withTrimmedLeft (5 * kCellW + sp::lg);
+    g.setColour (col::textFaint);
+    g.setFont (label (10.5f));
+    g.drawFittedText ("Click or drag to paint steps. Accent hits full velocity, slide glides into the next step "
+                      "without a retrigger. Click the numbers to set the loop length.",
+                      hint, juce::Justification::centredRight, 3, 1.f);
+}
+
+void ArpPatternEditor::resized()
+{
+    panel = getLocalBounds().withSizeKeepingCentre (820, 330);
+    auto a = panel.reduced (sp::xl);
+
+    auto head = a.removeFromTop (kHeaderH);
+    // On switch after the title and category name (both painted)
+    const int nameW = juce::GlyphArrangement::getStringWidthInt (heading(), "ARP PATTERN") + sp::md
+                    + juce::GlyphArrangement::getStringWidthInt (label (11.f), psy::categoryInfo()[(size_t) proc.getCategory()].name) + sp::xl;
+    arpOn.setBounds (head.withTrimmedLeft (nameW).withWidth (arpOn.idealWidth()));
+    const auto button = [&] (juce::Component& c, int w) { c.setBounds (head.removeFromRight (w).withSizeKeepingCentre (w, kCtrlH)); head.removeFromRight (sp::sm); };
+    button (done, 64);
+    head.removeFromRight (sp::md);
+    button (clear, 56);
+    button (templates, 84);
+    // the shift arrows share one outlined pair (drawn in paint)
+    auto pair = head.removeFromRight (56).withSizeKeepingCentre (56, kCtrlH);
+    shiftRight.setBounds (pair.removeFromRight (28));
+    shiftLeft.setBounds (pair);
+    head.removeFromRight (sp::sm);
+    button (dice, 88);
+    a.removeFromTop (sp::lg);
+
+    // knob cells start one inset early so the first knob lines up with the lane names
+    auto foot = a.removeFromBottom (kCellH).withTrimmedLeft (-kCellInset);
+    for (auto* k : knobs)
+        k->setBounds (foot.removeFromLeft (kCellW));
+    a.removeFromBottom (sp::lg);
+    grid.setBounds (a);
+}
+
+// ---- grid -------------------------------------------------------------------
+
+namespace
+{
+    constexpr int kLabelCol = 72, kStepGap = 4, kBeatGap = 12, kRulerH = 18, kLaneGap = 6, kSmallLaneH = 24;
+}
+
+juce::Rectangle<int> ArpPatternEditor::Grid::rowArea (Row row) const
+{
+    auto a = getLocalBounds().withTrimmedLeft (kLabelCol);
+    const auto ruler = a.removeFromTop (kRulerH);
+    a.removeFromTop (kLaneGap);
+    const auto slide = a.removeFromBottom (kSmallLaneH);
+    a.removeFromBottom (kLaneGap);
+    const auto acc = a.removeFromBottom (kSmallLaneH);
+    a.removeFromBottom (kLaneGap);
+    switch (row)
+    {
+        case Row::Ruler:  return ruler;
+        case Row::On:     return a;
+        case Row::Accent: return acc;
+        case Row::Slide:  return slide;
+        case Row::None:   break;
+    }
+    return {};
+}
+
+juce::Rectangle<int> ArpPatternEditor::Grid::cellArea (Row row, int step) const
+{
+    // fractional columns, rounded per edge, so the last one ends on the row's right edge
+    const auto r = rowArea (row);
+    const float colW = (float) (r.getWidth() - 12 * kStepGap - 3 * kBeatGap) / (float) psy::kArpSteps;
+    const float x = (float) r.getX() + (float) step * (colW + (float) kStepGap) + (float) ((step / 4) * (kBeatGap - kStepGap));
+    const int left = juce::roundToInt (x), right = juce::roundToInt (x + colW);
+    return { left, r.getY(), right - left, r.getHeight() };
+}
+
+ArpPatternEditor::Grid::Hit ArpPatternEditor::Grid::locate (juce::Point<int> pt) const
+{
+    for (auto row : { Row::Ruler, Row::On, Row::Accent, Row::Slide })
+    {
+        if (! rowArea (row).expanded (0, kLaneGap / 2).contains (pt)) continue;
+        for (int i = 0; i < psy::kArpSteps; ++i)
+            if (cellArea (row, i).expanded (kBeatGap / 2, kLaneGap / 2).contains (pt))
+                return { row, i };
+    }
+    return {};
+}
+
+void ArpPatternEditor::Grid::apply (Hit h)
+{
+    auto pt = proc.getArpPattern();
+    using F = psy::ArpPattern;
+    switch (h.row)
+    {
+        case Row::Ruler:
+            pt.length = h.step + 1;
+            break;
+        case Row::On:
+            pt.setFlag (h.step, F::On, paintValue);
+            if (! paintValue) { pt.setFlag (h.step, F::Accent, false); pt.setFlag (h.step, F::Slide, false); }
+            break;
+        case Row::Accent:
+        case Row::Slide:
+            pt.setFlag (h.step, h.row == Row::Accent ? F::Accent : F::Slide, paintValue);
+            if (paintValue) pt.setFlag (h.step, F::On, true);   // an accent or slide needs a note
+            break;
+        case Row::None:
+            return;
+    }
+    proc.setArpPattern (pt);
+    repaint();
+}
+
+void ArpPatternEditor::Grid::mouseDown (const juce::MouseEvent& e)
+{
+    drag = locate (e.getPosition());
+    if (drag.row == Row::None) return;
+    const auto pt = proc.getArpPattern();
+    using F = psy::ArpPattern;
+    const F::Flag flag = drag.row == Row::Accent ? F::Accent : (drag.row == Row::Slide ? F::Slide : F::On);
+    paintValue = ! (pt.has (drag.step, flag) && drag.step < pt.length);
+    if (drag.row != Row::Ruler && drag.step >= pt.length)
+        paintValue = true;
+    apply (drag);
+}
+
+void ArpPatternEditor::Grid::mouseDrag (const juce::MouseEvent& e)
+{
+    if (drag.row == Row::None) return;
+    // stay on the lane the drag started in; only the column follows the mouse
+    const auto y = rowArea (drag.row).getCentreY();
+    auto h = locate ({ e.getPosition().x, y });
+    if (h.row == drag.row && h.step >= 0 && h.step != drag.step)
+    {
+        drag = h;
+        apply (h);
+    }
+}
+
+void ArpPatternEditor::Grid::mouseMove (const juce::MouseEvent& e)
+{
+    const auto h = locate (e.getPosition());
+    if (h.row != hover.row || h.step != hover.step)
+    {
+        hover = h;
+        setMouseCursor (h.row == Row::None ? juce::MouseCursor::NormalCursor : juce::MouseCursor::PointingHandCursor);
+        repaint();
+    }
+}
+
+void ArpPatternEditor::Grid::paint (juce::Graphics& g)
+{
+    using F = psy::ArpPattern;
+    const auto pt = proc.getArpPattern();
+    const bool on = proc.plain (P::ArpOn) > 0.5f;
+    const int playing = proc.getArpStep();
+
+    // lane names
+    g.setFont (label (10.f));
+    g.setColour (col::textDim);
+    for (auto [row, name] : { std::pair { Row::Ruler, "STEP" }, std::pair { Row::On, "PLAY" },
+                              std::pair { Row::Accent, "ACCENT" }, std::pair { Row::Slide, "SLIDE" } })
+        g.drawText (name, rowArea (row).withX (0).withWidth (kLabelCol - sp::md), juce::Justification::centredLeft, false);
+
+    for (int i = 0; i < psy::kArpSteps; ++i)
+    {
+        const bool inLoop = i < pt.length;
+        const float dim = inLoop ? 1.f : 0.3f;
+
+        // playing column
+        if (i == playing)
+        {
+            const auto col = cellArea (Row::On, i).getUnion (cellArea (Row::Slide, i)).expanded (2, 4).toFloat();
+            g.setColour (juce::Colours::white.withAlpha (0.05f));
+            g.fillRoundedRectangle (col, 3.f);
+        }
+
+        // ruler: step numbers, the last step of the loop marked
+        const auto rr = cellArea (Row::Ruler, i);
+        const bool isEnd = i == pt.length - 1;
+        g.setFont (mono (10.f));
+        g.setColour (isEnd ? accent() : (i == playing ? col::text : (hover.row == Row::Ruler && hover.step == i ? col::text : (inLoop ? col::textDim : col::textFaint))));
+        g.drawText (juce::String (i + 1), rr, juce::Justification::centred, false);
+        if (isEnd)
+            g.fillRect (rr.getX() + 4, rr.getBottom() - 1, rr.getWidth() - 8, 2);
+
+        // play lane; a slide bridges the gap into the next step, like a tie
+        const auto c = cellArea (Row::On, i).toFloat();
+        if (pt.has (i, F::On))
+        {
+            g.setColour (stepColour (pt, i, on).withMultipliedAlpha (dim));
+            g.fillRoundedRectangle (c, 3.f);
+            if (pt.has (i, F::Slide) && i + 1 < pt.length)
+            {
+                const float next = (float) cellArea (Row::On, i + 1).getX();
+                g.fillRect (c.getRight(), c.getCentreY() - 2.f, next - c.getRight(), 4.f);
+            }
+        }
+        else
+        {
+            g.setColour (col::well);
+            g.fillRoundedRectangle (c, 3.f);
+            g.setColour (col::lineStrong.withMultipliedAlpha (dim));
+            g.drawRoundedRectangle (c.reduced (0.5f), 3.f, 1.f);
+        }
+
+        // accent lane
+        const auto a = cellArea (Row::Accent, i).toFloat();
+        const auto dot = a.withSizeKeepingCentre (12.f, 12.f);
+        if (pt.has (i, F::Accent))
+        {
+            g.setColour ((on ? accent() : col::textDim).withMultipliedAlpha (dim));
+            g.fillRoundedRectangle (dot, 2.f);
+        }
+        else
+        {
+            g.setColour (col::lineStrong.withMultipliedAlpha (dim));
+            g.drawRoundedRectangle (dot.reduced (0.5f), 2.f, 1.f);
+        }
+
+        // slide lane: a pill in the step's own column, filled when on
+        const auto pill = cellArea (Row::Slide, i).toFloat().withSizeKeepingCentre (22.f, 10.f);
+        if (pt.has (i, F::Slide))
+        {
+            g.setColour ((on ? accent() : col::textDim).withMultipliedAlpha (dim));
+            g.fillRoundedRectangle (pill, 5.f);
+        }
+        else
+        {
+            g.setColour (col::lineStrong.withMultipliedAlpha (dim));
+            g.drawRoundedRectangle (pill.reduced (0.5f), 4.5f, 1.f);
+        }
+
+        if (hover.step == i && hover.row != Row::None && hover.row != Row::Ruler)
+        {
+            g.setColour (col::text.withAlpha (0.35f));
+            g.drawRoundedRectangle (cellArea (hover.row, i).toFloat().reduced (0.5f), 3.f, 1.f);
+        }
     }
 }
 
@@ -666,6 +1025,7 @@ Sidebar::Sidebar (PsySynthProcessor& p) : proc (p)
     mutateButton.onClick = [this] { proc.mutate(); };
     clearLocks.onClick = [this] { proc.clearLocks(); };
     arpToggle.setTooltip ("Generate adds an arp in the style of the category");
+    arpToggle.setStacked (true);
     arpToggle.onToggle = [this] (bool on) { proc.setArpGeneration (on); };
 
     mutateAmount.setSliderStyle (juce::Slider::LinearHorizontal);
@@ -705,23 +1065,53 @@ void Sidebar::refresh()
     arpToggle.setOn (proc.getArpGeneration());
     clearLocks.setVisible (proc.numLocks() > 0);
     clearLocks.setTooltip ("Unlock all " + juce::String (proc.numLocks()) + " locked parameters");
+    if (proc.getCategory() != shownCategory && listH > 0)
+        scrollToShow (proc.getCategory());   // e.g. a session that loads with a hidden category
     repaint();
 }
 
 juce::Rectangle<int> Sidebar::rowBounds (int i) const
 {
-    return { 0, kListTop + i * kItemH, getWidth() - 1, kItemH };
+    return { 0, kListTop + i * kItemH - scrollY, getWidth() - 1, kItemH };
+}
+
+// The visible window of the category list; rows scroll inside it.
+juce::Rectangle<int> Sidebar::listArea() const
+{
+    return { 0, kListTop, getWidth() - 1, listH };
 }
 
 // Everything below the category list, starting at the divider.
 juce::Rectangle<int> Sidebar::infoArea() const
 {
-    return getLocalBounds().withTrimmedTop (kListTop + psy::kNumCategories * kItemH + sp::lg);
+    return getLocalBounds().withTrimmedTop (kListTop + listH + sp::lg);
+}
+
+int Sidebar::maxScroll() const
+{
+    return juce::jmax (0, psy::kNumCategories * kItemH - listH);
+}
+
+void Sidebar::setScroll (int y)
+{
+    y = juce::jlimit (0, maxScroll(), y);
+    if (y != scrollY) { scrollY = y; repaint(); }
+}
+
+void Sidebar::scrollToShow (psy::Category c)
+{
+    shownCategory = c;
+    const auto& order = psy::categoryDisplayOrder();
+    const int row = (int) (std::find (order.begin(), order.end(), c) - order.begin());
+    const int top = row * kItemH;
+    if (top < scrollY) setScroll (top);
+    else if (top + kItemH > scrollY + listH) setScroll (top + kItemH - listH);
 }
 
 // Returns the category (enum value) under the point; rows are in display order.
 int Sidebar::categoryAt (juce::Point<int> pt) const
 {
+    if (! listArea().contains (pt)) return -1;
     for (int i = 0; i < psy::kNumCategories; ++i)
         if (rowBounds (i).contains (pt)) return (int) psy::categoryDisplayOrder()[(size_t) i];
     return -1;
@@ -741,10 +1131,14 @@ void Sidebar::paint (juce::Graphics& g)
 
     const int sel = (int) proc.getCategory();
     const auto& info = psy::categoryInfo();
+    const auto list = listArea();
+    g.saveState();   // clip the rows (and their scroll hints) to the list window
+    g.reduceClipRegion (list);
     for (int row = 0; row < psy::kNumCategories; ++row)
     {
         const int i = (int) psy::categoryDisplayOrder()[(size_t) row];
         const auto r = rowBounds (row);
+        if (! r.intersects (list)) continue;
         const auto c = juce::Colour ((juce::uint32) (0xff000000 | info[(size_t) i].colour));
         const bool isSel = i == sel;
         if (isSel)
@@ -767,6 +1161,29 @@ void Sidebar::paint (juce::Graphics& g)
         g.drawText (info[(size_t) i].name, r.withTrimmedLeft (kPad + 7 + sp::md), juce::Justification::centredLeft, false);
     }
 
+    // scroll hints: rows fade out at an edge with more beyond it, and a thin thumb
+    if (maxScroll() > 0)
+    {
+        constexpr float kFade = 18.f;
+        const auto top = (float) list.getY(), bottom = (float) list.getBottom();
+        if (scrollY > 0)
+        {
+            g.setGradientFill ({ col::panel, 0.f, top, col::panel.withAlpha (0.f), 0.f, top + kFade, false });
+            g.fillRect (list.withHeight ((int) kFade));
+        }
+        if (scrollY < maxScroll())
+        {
+            g.setGradientFill ({ col::panel, 0.f, bottom, col::panel.withAlpha (0.f), 0.f, bottom - kFade, false });
+            g.fillRect (list.withTrimmedTop (list.getHeight() - (int) kFade));
+        }
+        const int contentH = psy::kNumCategories * kItemH;
+        const int thumbH = juce::jmax (24, listH * listH / contentH);
+        const int thumbY = list.getY() + (listH - thumbH) * scrollY / maxScroll();
+        g.setColour (col::textFaint.withAlpha (0.5f));
+        g.fillRoundedRectangle (juce::Rectangle<int> (getWidth() - 5, thumbY, 2, thumbH).toFloat(), 1.f);
+    }
+    g.restoreState();
+
     // info block
     auto a = infoArea();
     g.setColour (col::line);
@@ -788,6 +1205,7 @@ void Sidebar::paint (juce::Graphics& g)
     g.setFont (label (10.f));
     g.drawText ("AMOUNT", cap, juce::Justification::centredLeft, false);
     g.drawText ("SEED", seedCaption, juce::Justification::centredLeft, false);
+    g.drawText ("ARP", arpCaption, juce::Justification::centredLeft, false);
 
 }
 
@@ -801,17 +1219,25 @@ void Sidebar::resized()
     seedLabel.setBounds (bottom.removeFromRight (100));
     a.removeFromBottom (sp::sm);
 
+    // "ARP" caption left, switch right: whether Generate adds an arp
+    auto arpRow = a.removeFromBottom (kLabelH);
+    arpCaption = arpRow;
+    arpToggle.setBounds (arpRow.removeFromRight (26));
+    a.removeFromBottom (sp::sm);
+
     auto r = a.removeFromBottom (32);   // mutate + amount
     mutateButton.setBounds (r.removeFromLeft ((r.getWidth() - sp::md) / 2));
     r.removeFromLeft (sp::md);
     mutateAmount.setBounds (r.withTrimmedTop (kLabelH));
     a.removeFromBottom (sp::sm);
 
-    // Generate, with the arp switch for it on the right
-    auto gen = a.removeFromBottom (44);
-    arpToggle.setBounds (gen.removeFromRight (arpToggle.idealWidth()));
-    gen.removeFromRight (sp::md);
-    generateButton.setBounds (gen);
+    generateButton.setBounds (a.removeFromBottom (44));
+
+    // The list gets the whole rows that fit above the info block; the rest scroll.
+    const int listSpace = generateButton.getY() - sp::sm - kInfoH - sp::lg - kListTop;
+    listH = juce::jmax (1, listSpace / kItemH) * kItemH;
+    setScroll (scrollY);
+    scrollToShow (proc.getCategory());
 
     // Unlock sits on the category name line, right-aligned.
     auto nameLine = infoArea().reduced (kPad, 0).withTrimmedTop (kPad).removeFromTop (24);
@@ -834,6 +1260,20 @@ void Sidebar::mouseMove (const juce::MouseEvent& e)
     const int c = categoryAt (e.getPosition());
     if (c != hover) { hover = c; repaint(); }
     setMouseCursor (c >= 0 ? juce::MouseCursor::PointingHandCursor : juce::MouseCursor::NormalCursor);
+}
+
+void Sidebar::mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& w)
+{
+    const float dy = w.isReversed ? -w.deltaY : w.deltaY;
+    if (maxScroll() == 0 || dy == 0.f || ! listArea().contains (e.getPosition()))
+    {
+        Component::mouseWheelMove (e, w);
+        return;
+    }
+    // same distance per notch as juce::Viewport with a 16 px step
+    const float px = dy * 14.f * 16.f;
+    setScroll (scrollY - juce::roundToInt (px < 0.f ? juce::jmin (px, -1.f) : juce::jmax (px, 1.f)));
+    mouseMove (e);   // a different row is under the pointer now
 }
 
 // ---------------------------------------------------------------------------

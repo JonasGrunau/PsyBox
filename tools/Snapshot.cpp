@@ -3,6 +3,7 @@
 //   psysynth_snapshot <out-dir> [category-index ...]
 // Setting PSYSNAP_TAB=n also switches every tab strip to tab n (clamped),
 // and PSYSNAP_LOCKS=1 locks a couple of parameters, to review those states.
+// PSYSNAP_ARP=1 generates with an arp; PSYSNAP_PATTERN=1 opens the pattern editor.
 
 #include "plugin/PluginEditor.h"
 #include "plugin/PluginProcessor.h"
@@ -17,6 +18,16 @@ static void selectTabs (juce::Component& c, int tab)
             if (t->onChange) t->onChange (t->getSelected());
         }
         selectTabs (*child, tab);
+    }
+}
+
+static void openPatternEditor (juce::Component& c)
+{
+    for (auto* child : c.getChildren())
+    {
+        if (auto* e = dynamic_cast<ArpPatternEditor*> (child))
+            e->open();
+        openPatternEditor (*child);
     }
 }
 
@@ -35,6 +46,7 @@ int main (int argc, char** argv)
     proc.prepareToPlay (48000.0, 512);
     std::unique_ptr<juce::AudioProcessorEditor> editor (proc.createEditor());
 
+    proc.setArpGeneration (std::getenv ("PSYSNAP_ARP") != nullptr);
     for (int c : cats)
     {
         proc.setCategory ((psy::Category) juce::jlimit (0, psy::kNumCategories - 1, c));
@@ -56,6 +68,8 @@ int main (int argc, char** argv)
         }
         if (auto* tab = std::getenv ("PSYSNAP_TAB"))
             selectTabs (*editor, juce::String (tab).getIntValue());
+        if (std::getenv ("PSYSNAP_PATTERN") != nullptr)
+            openPatternEditor (*editor);
         juce::MessageManager::getInstance()->runDispatchLoopUntil (400);
 
         const auto img = editor->createComponentSnapshot (editor->getLocalBounds(), true, 2.f);

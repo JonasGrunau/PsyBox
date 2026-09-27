@@ -3,7 +3,7 @@
 **Generated:** 2026-09-27 · **Updated:** 2026-09-27
 
 ## Purpose
-PsySynth is a psytrance sound-design synthesizer (VST3 / AU / Standalone, JUCE 8). You pick one of 19 categories (Acid, Zap, Rolling Bass…), press **Generate**, and a seeded recipe fills every parameter. Each parameter stays editable afterwards. The code is split in two. `src/core` is JUCE-free C++20 (DSP, engine, generator) that builds and tests in seconds. `src/plugin` + `src/ui` wrap it in a JUCE processor and editor.
+PsySynth is a psytrance sound-design synthesizer (VST3 / AU / Standalone, JUCE 8). You pick one of 24 categories (Acid, Zap, Rolling Bass…), press **Generate**, and a seeded recipe fills every parameter. Each parameter stays editable afterwards. The code is split in two. `src/core` is JUCE-free C++20 (DSP, engine, generator) that builds and tests in seconds. `src/plugin` + `src/ui` wrap it in a JUCE processor and editor.
 
 ## Key Files
 | File | Description |

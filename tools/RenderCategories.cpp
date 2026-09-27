@@ -56,9 +56,19 @@ namespace
                     p.push_back ({ i * 0.25, (i % 3 == 0) ? 0.3 : 0.2, line[i % 16], (i % 4 == 2) ? 1.f : 0.7f });
                 break;
             }
-            case Category::Riser: case Category::Downlifter: case Category::NoiseFx:
+            case Category::Riser: case Category::Uplifter: case Category::Downlifter: case Category::NoiseFx:
             case Category::Atmos: case Category::Drone:
                 p.push_back ({ 0.0, 12.0, 48, 0.8f });
+                break;
+            case Category::Impact:   // one boom every two bars, long enough to hear the tail
+                for (int bar = 0; bar < 4; bar += 2) p.push_back ({ bar * 4.0, 1.0, 36, 0.9f });
+                break;
+            case Category::Gate:     // held chords, so the chop is what moves
+                for (int k : { 60, 63, 67 })
+                    for (int half = 0; half < 2; ++half) p.push_back ({ half * 8.0, 7.5, k, 0.8f });
+                break;
+            case Category::Reverse:  // one swell per bar
+                for (int bar = 0; bar < 4; ++bar) p.push_back ({ bar * 4.0, 2.0, 60, 0.8f });
                 break;
             default:
             {
@@ -78,8 +88,9 @@ namespace
         {
             case Category::RollingBass: keys = { 36 }; break;
             case Category::Acid: case Category::Squelch: case Category::Gurgle: keys = { 36, 39, 43 }; break;
-            case Category::Riser: case Category::Downlifter: case Category::NoiseFx:
+            case Category::Riser: case Category::Uplifter: case Category::Downlifter: case Category::NoiseFx:
             case Category::Drone: case Category::Zap: case Category::Laser: keys = { 48 }; break;
+            case Category::Impact: keys = { 36 }; break;
             default: keys = { 60, 63, 67 }; break;
         }
         std::vector<Note> p;

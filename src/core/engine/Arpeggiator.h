@@ -25,9 +25,10 @@ struct ArpEvent
 
 struct ArpSettings
 {
-    int mode = 0, div = 12, octaves = 1, rhythm = 0;
+    int mode = 0, div = 12, octaves = 1;
     float gate = 0.5f, swing = 0.f;
     bool hold = false;
+    ArpPattern pattern = ArpPattern::parse ("x");
 
     static ArpSettings from (const ParamState& p) noexcept;
 };
@@ -85,6 +86,7 @@ public:
     int numPhysicalKeys() const noexcept;
     int physicalKey (int i) const noexcept;   // i-th key that is physically down
     bool isRunning() const noexcept { return numKeys > 0 || current >= 0; }
+    int currentStep() const noexcept { return isRunning() ? lastStep : -1; }   // pattern position, for the UI
 
 private:
     static constexpr double kIdle = 1.0e18;
@@ -101,7 +103,7 @@ private:
     double toStep = kIdle, toOff = -1.0;
     int64_t stepIndex = 0, lastFired = INT64_MIN;
     uint64_t seqPos = 0;
-    int current = -1, lastRandom = -1;
+    int current = -1, lastRandom = -1, lastStep = -1;
     bool releasePending = false;
     dsp::Rng rng { 0xA59u };
 
@@ -117,10 +119,10 @@ private:
     void playStep (Sink& sink) noexcept
     {
         lastFired = stepIndex;
-        const auto mask = arpRhythmMask (set.rhythm);
-        const int len = std::max (1, mask.length);
-        const bool plays = mask.steps[(size_t) (((stepIndex % len) + len) % len)] == 'x';
-        if (! plays)
+        const int len = std::clamp (set.pattern.length, 1, kArpSteps);
+        const int pos = (int) (((stepIndex % len) + len) % len);
+        lastStep = pos;
+        if (! set.pattern.has (pos, ArpPattern::On))
         {
             if (current >= 0)
             {
@@ -133,16 +135,21 @@ private:
 
         float vel = 0.f;
         const int note = nextNote (vel);
-        // Still sounding means the gate is 100 % or longer: a tie. The voice
-        // slides to the new note with its envelopes running (303 slides,
-        // risers and pads keep swelling); the same pitch just keeps sounding.
+        // The pattern owns the accent: accented steps hit full velocity, the
+        // others stay under the engine's accent threshold.
+        vel = set.pattern.has (pos, ArpPattern::Accent) ? 1.f : std::min (vel, 0.75f);
+
+        // Still sounding means the last step was tied (slide flag, or a gate of
+        // 100 % or more). The voice slides to the new note with its envelopes
+        // running (303 slides, risers and pads keep swelling); the same pitch
+        // just keeps sounding.
         if (current < 0)
             sink (ArpEvent { true, note, vel });
         else if (note != current)
             sink (ArpEvent { true, note, vel, current });
         current = note;
-        const double gateLen = (double) set.gate * stepSamples;
-        toOff = set.gate >= 1.f ? -1.0 : std::max (1.0, gateLen);
+        const bool tie = set.gate >= 1.f || set.pattern.has (pos, ArpPattern::Slide);
+        toOff = tie ? -1.0 : std::max (1.0, (double) set.gate * stepSamples);
     }
 };
 

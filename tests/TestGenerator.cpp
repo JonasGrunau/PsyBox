@@ -70,6 +70,30 @@ TEST_CASE ("Mutate stays near the recipe's ranges", "[generator]")
     }
 }
 
+TEST_CASE ("Risers climb in pitch, uplifters sweep noise", "[generator]")
+{
+    const auto routesTo = [] (const ParamState& p, ModSrc src, ModDst dst) {
+        for (int s = 0; s < kNumModSlots; ++s)
+            if ((src == ModSrc::None || p.geti (modSrcParam (s)) == (int) src) && p.geti (modDstParam (s)) == (int) dst)
+                return true;
+        return false;
+    };
+    Generator g;
+    for (uint32_t seed = 1; seed <= 50; ++seed)
+    {
+        const auto riser = g.generate (Category::Riser, seed, ParamState(), LockSet());
+        INFO ("seed " << seed);
+        CHECK (routesTo (riser, ModSrc::ModEnv, ModDst::PitchAll));
+        CHECK (riser.get (P::NoiseLevel) <= 0.1f);
+
+        const auto up = g.generate (Category::Uplifter, seed, ParamState(), LockSet());
+        CHECK (up.get (P::NoiseLevel) >= 0.8f);
+        CHECK ((up.geti (P::OscAOn) == 0 || up.get (P::OscALevel) <= 0.15f));
+        CHECK_FALSE (routesTo (up, ModSrc::None, ModDst::PitchAll));
+        CHECK (routesTo (up, ModSrc::ModEnv, ModDst::F1Cutoff));
+    }
+}
+
 TEST_CASE ("Parameter mappings round-trip", "[params]")
 {
     for (const auto& d : paramDefs())
@@ -132,5 +156,88 @@ TEST_CASE ("Arp recipes vary with the seed and Mutate keeps them in the category
         CHECK (p.on (P::ArpOn));
         CHECK (p.geti (P::ArpDiv) == 12);   // rolling basses stay on 1/16
         CHECK (p.get (P::ArpGate) <= 0.6f + 0.25f * 0.15f + 1e-3f);
+    }
+}
+
+TEST_CASE ("Generated arp patterns change with the seed and keep each category's rules", "[generator][arp]")
+{
+    Generator g;
+    const auto pattern = [&] (Category c, uint32_t seed) {
+        return ArpPattern::from (g.generate (c, seed, ParamState(), LockSet(), true));
+    };
+    for (auto c : { Category::Acid, Category::Bubble, Category::RollingBass, Category::Pluck, Category::Zap })
+    {
+        int distinct = 0;
+        const auto first = pattern (c, 1);
+        for (uint32_t seed = 2; seed < 30; ++seed)
+            distinct += pattern (c, seed) == first ? 0 : 1;
+        INFO ("category " << (int) c);
+        CHECK (distinct > 10);
+    }
+    for (uint32_t seed = 1; seed < 60; ++seed)
+    {
+        const auto p = pattern (Category::RollingBass, seed);
+        for (int beat = 0; beat < 4; ++beat)
+            CHECK_FALSE (p.has (beat * 4, ArpPattern::On));   // the kick owns the beat
+        const auto sweep = pattern (Category::Riser, seed);
+        for (int i = 0; i < sweep.length; ++i)
+            CHECK ((sweep.has (i, ArpPattern::On) && sweep.has (i, ArpPattern::Slide)));
+        const auto acid = pattern (Category::Acid, seed);
+        CHECK (acid.has (0, ArpPattern::On));
+    }
+}
+
+TEST_CASE ("A new arp pattern leaves everything else alone", "[generator][arp]")
+{
+    Generator g;
+    const auto base = g.generate (Category::Acid, 5, ParamState(), LockSet(), true);
+    const auto next = g.generateArpPattern (Category::Acid, 77, base, LockSet());
+    CHECK_FALSE (ArpPattern::from (next) == ArpPattern::from (base));
+    for (int i = 0; i < kNumParams; ++i)
+    {
+        const bool isPattern = i == (int) P::ArpLength || (i >= (int) P::ArpStep1 && i <= (int) P::ArpSlide16);
+        if (! isPattern)
+            CHECK (next.v[(size_t) i] == base.v[(size_t) i]);
+    }
+    CHECK (ArpPattern::from (g.generateArpPattern (Category::Acid, 77, base, LockSet())) == ArpPattern::from (next));
+}
+
+TEST_CASE ("Generated arp patterns are composed: figures repeat, slides land, accents stay sparse", "[generator][arp]")
+{
+    Generator g;
+    for (int c = 0; c < kNumCategories; ++c)
+        for (uint32_t seed = 1; seed < 40; ++seed)
+        {
+            const auto p = ArpPattern::from (g.generate ((Category) c, seed, ParamState(), LockSet(), true));
+            INFO ("category " << c << " seed " << seed);
+            int notes = 0;
+            for (int i = 0; i < p.length; ++i)
+            {
+                notes += p.has (i, ArpPattern::On) ? 1 : 0;
+                if (p.has (i, ArpPattern::Slide))
+                    CHECK (p.has ((i + 1) % p.length, ArpPattern::On));   // every slide lands on a note
+            }
+            CHECK (notes > 0);
+        }
+
+    for (uint32_t seed = 1; seed < 60; ++seed)
+    {
+        INFO ("seed " << seed);
+        // rolling bass: beats 1 and 3 carry the same figure (AAAA, AAAB, ABAB)
+        const auto bass = ArpPattern::from (g.generate (Category::RollingBass, seed, ParamState(), LockSet(), true));
+        for (int i = 0; i < 4; ++i)
+            CHECK (bass.has (i, ArpPattern::On) == bass.has (i + 8, ArpPattern::On));
+
+        // acid: a line with a few accents and at most four slides
+        const auto acid = ArpPattern::from (g.generate (Category::Acid, seed, ParamState(), LockSet(), true));
+        int accents = 0, slides = 0;
+        for (int i = 0; i < acid.length; ++i)
+        {
+            accents += acid.has (i, ArpPattern::Accent) ? 1 : 0;
+            slides += acid.has (i, ArpPattern::Slide) ? 1 : 0;
+        }
+        CHECK (accents >= 1);
+        CHECK (accents <= 6);
+        CHECK (slides <= 4);
     }
 }

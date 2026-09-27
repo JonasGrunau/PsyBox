@@ -98,8 +98,8 @@ TEST_CASE ("Every category generates playable, finite, non-silent patches", "[en
         {
             const ParamState p = g.generate ((Category) c, seed, current, locks);
             const auto cat = (Category) c;
-            const bool sustained = cat == Category::Riser || cat == Category::Downlifter || cat == Category::NoiseFx
-                                || cat == Category::Atmos || cat == Category::Drone;
+            const bool sustained = cat == Category::Riser || cat == Category::Uplifter || cat == Category::Downlifter
+                                || cat == Category::NoiseFx || cat == Category::Atmos || cat == Category::Drone;
             const Render out = play (p, sustained ? 6.0 : 3.0, 48000.0, 256, sustained ? 40.0 : 0.6);
             INFO (categoryInfo()[(size_t) c].name << " seed " << seed << ": peak " << out.peak << " rms " << out.rmsDb << " dB");
             CHECK (out.peak <= 1.0f);

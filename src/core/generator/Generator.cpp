@@ -143,7 +143,19 @@ ParamState Generator::generate (Category c, uint32_t seed, const ParamState& cur
     RecipeBuilder arp (out, locks, arpRng, ranges);
     arp.on (P::ArpOn, withArp);
     if (withArp)
+    {
         arpRecipeFor (c) (arp);
+        arpPatternRecipeFor (c) (arp);
+    }
+    return out;
+}
+
+ParamState Generator::generateArpPattern (Category c, uint32_t seed, const ParamState& current, const LockSet& locks)
+{
+    ParamState out = current;
+    dsp::Rng rng (((uint64_t) seed << 8) ^ (uint64_t) ((int) c + 1) * 0xD6E8FEB86659FD93ULL ^ 0x50415454ULL);
+    RecipeBuilder b (out, locks, rng, ranges);
+    arpPatternRecipeFor (c) (b);
     return out;
 }
 
