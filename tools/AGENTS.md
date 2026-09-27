@@ -20,7 +20,7 @@ Developer executables that let you check sound and UI without a DAW.
 - Keep `RenderCategories.cpp` JUCE-free so it builds in `build-core`.
 
 ### Testing Requirements
-- Smoke-run after changes: `./build-core/psysynth_render /tmp/psy 1` and check that WAVs appear for all 24 categories.
+- Smoke-run after changes: `./build-core/psysynth_render /tmp/psy 1` and check that WAVs appear for all 29 categories (the five kicks play four on the floor on F, F, G and D#).
 
 ## Dependencies
 

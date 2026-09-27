@@ -4,6 +4,7 @@
 #include <array>
 #include <string_view>
 #include <cstdint>
+#include <vector>
 
 namespace psy
 {
@@ -12,7 +13,8 @@ enum class Category : int
 {
     Acid, Squelch, Zap, Laser, RollingBass, PsyLead, Pluck, Stab, Screech, AlienVoice,
     Bubble, Gurgle, Wobble, Metallic, Riser, Downlifter, NoiseFx, Atmos, Drone,
-    Uplifter, Impact, Gate, Glitch, Reverse, Count
+    Uplifter, Impact, Gate, Glitch, Reverse,
+    KickFullOn, KickGoa, KickDarkForest, KickHiTech, KickProgressive, Count
 };
 
 constexpr int kNumCategories = (int) Category::Count;
@@ -55,6 +57,13 @@ inline const std::array<CategoryInfo, kNumCategories>& categoryInfo() noexcept
         { "Gate",         "Gate",    0xE4D907, "Tempo-gated pads and chopped textures" },
         { "Glitch",       "Glitch",  0xC1DF0B, "Stuttered, bit-crushed digital chatter" },
         { "Reverse",      "Rev",     0x05B9ED, "Swells that cut off at the peak" },
+        // Kicks: their own five hues on the same lightness/chroma curve, half a
+        // step off the synth hues so no kick shares a synth's colour.
+        { "Full-On Kick",     "Full-On", 0x65DE54, "Punchy and bright, tight for 16th rolls" },
+        { "Goa Kick",         "Goa",     0x0BBDE2, "Round and boomy with a soft top" },
+        { "Dark Forest Kick", "Forest",  0xFE9C29, "Hard, distorted and short" },
+        { "Hi-Tech Kick",     "Hi-Tech", 0xA87EFE, "Very short, clicky and high" },
+        { "Progressive Kick", "Prog",    0xFF5A77, "Clean sine body with a deep knock" },
     } };
     return info;
 }
@@ -73,5 +82,29 @@ inline const std::array<Category, kNumCategories>& categoryDisplayOrder() noexce
     }();
     return order;
 }
+
+// Synth sounds and kicks are separate families: a kick category plays the
+// kick engine (EngineMode::Kick) and the sidebar lists one family at a time.
+enum class Family : int { Synth, Kick };
+
+constexpr Family familyOf (Category c) noexcept
+{
+    return (int) c >= (int) Category::KickFullOn ? Family::Kick : Family::Synth;
+}
+
+// One family's categories in sidebar (alphabetical) order.
+inline const std::vector<Category>& categoriesIn (Family f) noexcept
+{
+    static const auto lists = [] {
+        std::array<std::vector<Category>, 2> l;
+        for (Category c : categoryDisplayOrder())
+            l[(size_t) familyOf (c)].push_back (c);
+        return l;
+    }();
+    return lists[(size_t) f];
+}
+
+constexpr int kNumKickCategories = kNumCategories - (int) Category::KickFullOn;
+constexpr int kMaxFamilySize = std::max ((int) Category::KickFullOn, kNumKickCategories);
 
 } // namespace psy

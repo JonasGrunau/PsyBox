@@ -21,10 +21,12 @@ add_library(psysynth_core STATIC
     src/core/engine/Engine.cpp
     src/core/engine/Voice.cpp
     src/core/engine/Arpeggiator.cpp
+    src/core/engine/KickVoice.cpp
     src/core/dsp/Wavetable.cpp
     src/core/generator/Generator.cpp
     src/core/generator/Recipes.cpp
     src/core/generator/ArpRecipes.cpp
+    src/core/generator/KickRecipes.cpp
 )
 target_include_directories(psysynth_core PUBLIC src/core)
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
@@ -73,7 +75,8 @@ if(PSYSYNTH_BUILD_PLUGIN)
         src/ui/PsyLookAndFeel.cpp
         src/ui/Widgets.cpp
         src/ui/Panels.cpp
-        src/ui/Displays.cpp)
+        src/ui/Displays.cpp
+        src/ui/KickPanels.cpp)
 
     target_include_directories(PsySynth PRIVATE src)
 
@@ -104,7 +107,8 @@ if(PSYSYNTH_BUILD_PLUGIN)
         src/ui/PsyLookAndFeel.cpp
         src/ui/Widgets.cpp
         src/ui/Panels.cpp
-        src/ui/Displays.cpp)
+        src/ui/Displays.cpp
+        src/ui/KickPanels.cpp)
     target_include_directories(psysynth_snapshot PRIVATE src)
     target_compile_definitions(psysynth_snapshot PRIVATE
         JucePlugin_Name="PsySynth"
@@ -131,7 +135,8 @@ if(PSYSYNTH_BUILD_TESTS)
         tests/TestShapersAndFx.cpp
         tests/TestEngine.cpp
         tests/TestGenerator.cpp
-        tests/TestArp.cpp)
+        tests/TestArp.cpp
+        tests/TestKick.cpp)
     target_link_libraries(psysynth_tests PRIVATE psysynth_core Catch2::Catch2WithMain)
 
     add_executable(psysynth_render tools/RenderCategories.cpp)

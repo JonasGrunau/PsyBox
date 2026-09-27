@@ -2,8 +2,8 @@
 
 A synthesizer for psytrance sound design. Pick a category, press **Generate**,
 and you get a new sound of that kind. It could be an acid line, a zap, a rolling
-bass or a riser. Every knob stays live, so a generated patch is a starting point
-you can edit as far as you like.
+bass, a riser or a kick. Every knob stays live, so a generated patch is a
+starting point you can edit as far as you like.
 
 Builds as **VST3**, **Audio Unit** and **Standalone** (macOS).
 
@@ -20,7 +20,38 @@ Riser · Rolling Bass · Screech · Squelch · Stab · Uplifter · Wobble · Zap
 Riser is a synth tone climbing in pitch; Uplifter is a noise sweep that opens
 upward. The sidebar list scrolls when it is longer than the space it has.
 
-No drums. This is for the synth side of a track.
+### Kicks
+
+Five kick styles, under the **Kick** tab at the top of the sidebar:
+
+Dark Forest Kick · Full-On Kick · Goa Kick · Hi-Tech Kick · Progressive Kick
+
+A kick category switches the synth to a dedicated kick engine, and the upper
+sections of the window turn into the kick's Pitch, Amp, Click, Drive and wave
+views. The effects, output and arp stay where they are.
+
+- **Tuned to your key.** With **Key** on (the default), the kick's body lands on
+  the key you play. Any octave of the key gives the same kick, placed within
+  half an octave of **Tune**. Turn Key off and every note plays at Tune. The
+  **Tune to key** switch under Generate decides whether new kicks come with Key
+  on; it only shows in kick categories.
+- **Pitch** falls in two exponential stages: from **Start** to the **Knee** in
+  about 3 × **Snap**, then into the body in about 3 × **Sweep**. Both stages land
+  exactly on their target, so the body is in tune rather than slowly sagging.
+- **Amp**: **Attack**, **Hold** and **Decay** shape the body. **Punch** keeps the
+  first milliseconds at full level while the body fades in, which gives the
+  knock of a progressive kick.
+- **Click**: band-passed noise, a short tick or a falling blip, with level,
+  decay and tone.
+- **Drive**: Soft, Tube or Hard saturation on the body, oversampled with the
+  rest of the engine, plus a tone low-pass.
+- Every hit starts at the same phase, so repeated kicks are identical. A new hit
+  fades the previous one out over 3 ms instead of cutting it. Drag the scope out
+  to get the kick as a one-shot WAV.
+
+The Progressive recipe is tuned against measured progressive kicks. The pitch
+falls from about 2 kHz through a knee of about 330 Hz into a 38–53 Hz body. The
+body holds flat to about 160 ms and is down 30 dB by about 220 ms.
 
 ## How it works
 
@@ -33,7 +64,8 @@ No drums. This is for the synth side of a track.
   it alone.
 - Tick **Arp** next to Generate and every new sound comes with an arp in the
   style of its category: rolling 16ths for basses, tied 303 slides for acid,
-  random blips for bubbles, stepped sweeps for risers, each with a freshly
+  random blips for bubbles, stepped sweeps for risers, four on the floor with
+  the odd fill for kicks, each with a freshly
   generated step pattern. The sound itself is the same with or without it;
   only the arp settings differ.
 - The same category and seed always give the same sound. Double-click the seed

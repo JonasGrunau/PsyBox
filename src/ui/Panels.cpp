@@ -239,6 +239,15 @@ VoicePanel::VoicePanel (PsySynthProcessor& p)
     startTimerHz (30);   // the pattern grid follows the playing step
 }
 
+void VoicePanel::setKickMode (bool kick)
+{
+    if (kick == kickMode) return;
+    kickMode = kick;
+    tabs.setVisible (! kick);
+    title = kick ? "Arp" : "Voice";
+    show (kick ? 1 : tabs.getSelected());
+}
+
 void VoicePanel::show (int page)
 {
     current = page;
@@ -1027,6 +1036,12 @@ Sidebar::Sidebar (PsySynthProcessor& p) : proc (p)
     arpToggle.setTooltip ("Generate adds an arp in the style of the category");
     arpToggle.setStacked (true);
     arpToggle.onToggle = [this] (bool on) { proc.setArpGeneration (on); };
+    keyToggle.setTooltip ("Generate tunes the kick's body to the key you play (key tracking)");
+    keyToggle.setStacked (true);
+    keyToggle.onToggle = [this] (bool on) { proc.setKickKeyGeneration (on); };
+    addChildComponent (keyToggle);
+    familyTabs.onChange = [this] (int i) { showFamily ((psy::Family) i); };
+    addAndMakeVisible (familyTabs);
 
     mutateAmount.setSliderStyle (juce::Slider::LinearHorizontal);
     mutateAmount.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
@@ -1063,6 +1078,17 @@ void Sidebar::refresh()
 {
     seedLabel.setText (hexSeed (proc.getSeed()), juce::dontSendNotification);
     arpToggle.setOn (proc.getArpGeneration());
+    keyToggle.setOn (proc.getKickKeyGeneration());
+    if (keyToggle.isVisible() != proc.isKickCategory())
+    {
+        keyToggle.setVisible (proc.isKickCategory());
+        resized();
+    }
+    if (proc.getCategory() != lastCategory)
+    {
+        lastCategory = proc.getCategory();
+        showFamily (psy::familyOf (lastCategory));
+    }
     clearLocks.setVisible (proc.numLocks() > 0);
     clearLocks.setTooltip ("Unlock all " + juce::String (proc.numLocks()) + " locked parameters");
     if (proc.getCategory() != shownCategory && listH > 0)
@@ -1084,12 +1110,24 @@ juce::Rectangle<int> Sidebar::listArea() const
 // Everything below the category list, starting at the divider.
 juce::Rectangle<int> Sidebar::infoArea() const
 {
-    return getLocalBounds().withTrimmedTop (kListTop + listH + sp::lg);
+    return getLocalBounds().withTrimmedTop (kListTop + listH);
 }
 
 int Sidebar::maxScroll() const
 {
-    return juce::jmax (0, psy::kNumCategories * kItemH - listH);
+    return juce::jmax (0, (int) rows().size() * kItemH - listH);
+}
+
+void Sidebar::showFamily (psy::Family f)
+{
+    familyTabs.setSelected ((int) f);
+    if (f == viewFamily && shownCategory != psy::Category::Count) return;
+    viewFamily = f;
+    scrollY = 0;
+    hover = -1;
+    shownCategory = psy::Category::Count;
+    if (listH > 0) scrollToShow (proc.getCategory());
+    repaint();
 }
 
 void Sidebar::setScroll (int y)
@@ -1101,8 +1139,10 @@ void Sidebar::setScroll (int y)
 void Sidebar::scrollToShow (psy::Category c)
 {
     shownCategory = c;
-    const auto& order = psy::categoryDisplayOrder();
-    const int row = (int) (std::find (order.begin(), order.end(), c) - order.begin());
+    const auto& order = rows();
+    const auto it = std::find (order.begin(), order.end(), c);
+    if (it == order.end()) return;   // the other family is on screen
+    const int row = (int) (it - order.begin());
     const int top = row * kItemH;
     if (top < scrollY) setScroll (top);
     else if (top + kItemH > scrollY + listH) setScroll (top + kItemH - listH);
@@ -1112,8 +1152,9 @@ void Sidebar::scrollToShow (psy::Category c)
 int Sidebar::categoryAt (juce::Point<int> pt) const
 {
     if (! listArea().contains (pt)) return -1;
-    for (int i = 0; i < psy::kNumCategories; ++i)
-        if (rowBounds (i).contains (pt)) return (int) psy::categoryDisplayOrder()[(size_t) i];
+    const auto& order = rows();
+    for (int i = 0; i < (int) order.size(); ++i)
+        if (rowBounds (i).contains (pt)) return (int) order[(size_t) i];
     return -1;
 }
 
@@ -1124,19 +1165,19 @@ void Sidebar::paint (juce::Graphics& g)
     g.fillRect (getWidth() - 1, 0, 1, getHeight());
 
     const juce::Rectangle<int> head (kPad, kPad, getWidth() - 2 * kPad, kHeaderH);
-    drawHeading (g, "Sound", head);
     g.setColour (col::textFaint);
     g.setFont (mono (10.f));
-    g.drawText (juce::String (psy::kNumCategories), head, juce::Justification::centredRight);
+    g.drawText (juce::String ((int) rows().size()), head, juce::Justification::centredRight);
 
     const int sel = (int) proc.getCategory();
     const auto& info = psy::categoryInfo();
     const auto list = listArea();
     g.saveState();   // clip the rows (and their scroll hints) to the list window
     g.reduceClipRegion (list);
-    for (int row = 0; row < psy::kNumCategories; ++row)
+    const auto& order = rows();
+    for (int row = 0; row < (int) order.size(); ++row)
     {
-        const int i = (int) psy::categoryDisplayOrder()[(size_t) row];
+        const int i = (int) order[(size_t) row];
         const auto r = rowBounds (row);
         if (! r.intersects (list)) continue;
         const auto c = juce::Colour ((juce::uint32) (0xff000000 | info[(size_t) i].colour));
@@ -1176,7 +1217,7 @@ void Sidebar::paint (juce::Graphics& g)
             g.setGradientFill ({ col::panel, 0.f, bottom, col::panel.withAlpha (0.f), 0.f, bottom - kFade, false });
             g.fillRect (list.withTrimmedTop (list.getHeight() - (int) kFade));
         }
-        const int contentH = psy::kNumCategories * kItemH;
+        const int contentH = (int) order.size() * kItemH;
         const int thumbH = juce::jmax (24, listH * listH / contentH);
         const int thumbY = list.getY() + (listH - thumbH) * scrollY / maxScroll();
         g.setColour (col::textFaint.withAlpha (0.5f));
@@ -1206,11 +1247,15 @@ void Sidebar::paint (juce::Graphics& g)
     g.drawText ("AMOUNT", cap, juce::Justification::centredLeft, false);
     g.drawText ("SEED", seedCaption, juce::Justification::centredLeft, false);
     g.drawText ("ARP", arpCaption, juce::Justification::centredLeft, false);
+    if (keyToggle.isVisible())
+        g.drawText ("TUNE TO KEY", keyCaption, juce::Justification::centredLeft, false);
 
 }
 
 void Sidebar::resized()
 {
+    familyTabs.setBounds (kPad, kPad, familyTabs.idealWidth(), kHeaderH);
+
     // Built from the bottom edge up so the buttons sit on the window's padding.
     auto a = getLocalBounds().reduced (kPad);
     // "SEED" caption left, value right: same pattern as AMOUNT / 25% above
@@ -1225,6 +1270,16 @@ void Sidebar::resized()
     arpToggle.setBounds (arpRow.removeFromRight (26));
     a.removeFromBottom (sp::sm);
 
+    // "TUNE TO KEY" (kick categories): whether Generate key-tracks the kick
+    keyCaption = {};
+    if (keyToggle.isVisible())
+    {
+        auto keyRow = a.removeFromBottom (kLabelH);
+        keyCaption = keyRow;
+        keyToggle.setBounds (keyRow.removeFromRight (26));
+        a.removeFromBottom (sp::sm);
+    }
+
     auto r = a.removeFromBottom (32);   // mutate + amount
     mutateButton.setBounds (r.removeFromLeft ((r.getWidth() - sp::md) / 2));
     r.removeFromLeft (sp::md);
@@ -1233,9 +1288,8 @@ void Sidebar::resized()
 
     generateButton.setBounds (a.removeFromBottom (44));
 
-    // The list gets the whole rows that fit above the info block; the rest scroll.
-    const int listSpace = generateButton.getY() - sp::sm - kInfoH - sp::lg - kListTop;
-    listH = juce::jmax (1, listSpace / kItemH) * kItemH;
+    // The list runs down to the divider above the info block; the rest scroll.
+    listH = juce::jmax (kItemH, generateButton.getY() - sp::sm - kInfoH - kListTop);
     setScroll (scrollY);
     scrollToShow (proc.getCategory());
 
@@ -1264,7 +1318,8 @@ void Sidebar::mouseMove (const juce::MouseEvent& e)
 
 void Sidebar::mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& w)
 {
-    const float dy = w.isReversed ? -w.deltaY : w.deltaY;
+    // deltaY already follows the OS scroll direction; isReversed only reports it (Viewport ignores it too)
+    const float dy = w.deltaY;
     if (maxScroll() == 0 || dy == 0.f || ! listArea().contains (e.getPosition()))
     {
         Component::mouseWheelMove (e, w);

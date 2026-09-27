@@ -257,6 +257,16 @@ namespace
         b.pick (P::ArpOctaves, { 1, 2 });
         gate (b, 1.2f, 1.5f);
     }
+    // Kicks: straight 16ths so the pattern owns the groove; short gates, no
+    // swing. The kick engine never ties steps (see ArpSettings::from).
+    void kick (B& b)
+    {
+        b.pick (P::ArpDiv, { D1_16 });
+        b.pick (P::ArpMode, { Order });
+        b.pick (P::ArpOctaves, { 1 });
+        gate (b, 0.3f, 0.5f);
+    }
+
     // ---- patterns ---------------------------------------------------------------
     //
     // Patterns are composed, not rolled per step: each category has a small
@@ -573,6 +583,16 @@ namespace
 
     // One boom on the one (quarter-note steps), now and then every two bars
     // or with a pickup into the next bar.
+    // Four on the floor, sometimes with a fill in the last beat. No accents
+    // (every kick at the same level) and no slides.
+    void kickPattern (B& b)
+    {
+        const char* fills[] = { "x---", "x-x-", "x--x", "x-xx" };
+        const std::string fill = choose (b, fills, { 0.4f, 0.25f, 0.2f, 0.15f });
+        const char* shapes[] = { "AAAA", "AAAB" };
+        write (b, ArpPattern::parse (form (choose (b, shapes, { 0.6f, 0.4f }), "x---", fill)));
+    }
+
     void impactPattern (B& b)
     {
         const char* bars[] = { "X---", "X-------", "X------x", "X-----x-" };
@@ -657,6 +677,11 @@ Recipe arpPatternRecipeFor (Category c) noexcept
         case Category::NoiseFx:
         case Category::Atmos:
         case Category::Drone:       return sweepPattern;
+        case Category::KickFullOn:
+        case Category::KickGoa:
+        case Category::KickDarkForest:
+        case Category::KickHiTech:
+        case Category::KickProgressive: return kickPattern;
         case Category::Count:       break;
     }
     return acidPattern;
@@ -690,6 +715,11 @@ Recipe arpRecipeFor (Category c) noexcept
         case Category::Gate:        return gated;
         case Category::Glitch:      return glitch;
         case Category::Reverse:     return reverse;
+        case Category::KickFullOn:
+        case Category::KickGoa:
+        case Category::KickDarkForest:
+        case Category::KickHiTech:
+        case Category::KickProgressive: return kick;
         case Category::Count:       break;
     }
     return acid;

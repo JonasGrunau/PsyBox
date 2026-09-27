@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Arpeggiator.h"
+#include "KickVoice.h"
 #include "Params.h"
 #include "Voice.h"
 #include "dsp/Effects.h"
@@ -65,6 +66,11 @@ private:
     uint64_t ageCounter = 0, noteSeed = 1;
     VoiceContext ctx;
 
+    // Kick mode: two one-shot kicks, so a retrigger can fade the old hit out.
+    std::array<KickVoice, 2> kicks;
+    int lastKick = 0;
+    int engineMode = -1;   // last mode seen; -1 after a reset
+
     // mono / legato note stack
     std::array<int, 32> held {};
     std::array<bool, 32> heldAccent {};
@@ -108,6 +114,9 @@ private:
     void voiceNoteOff (int note) noexcept;
     void voiceSlide (int from, int to, float velocity) noexcept;
     void allNotesOff() noexcept;
+    bool kickMode() const noexcept { return cur.geti (P::EngineMode) == (int) EngineMode::Kick; }
+    void kickNoteOn (int note, float velocity) noexcept;
+    void followEngineMode() noexcept;
     Voice& allocateVoice (bool& stolen) noexcept;
     void renderVoices (int offset, int n) noexcept;
     void processFx (float* l, float* r, int n, double bpm) noexcept;

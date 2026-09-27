@@ -1001,6 +1001,11 @@ Recipe recipeFor (Category c) noexcept
         case Category::Gate:        return gate;
         case Category::Glitch:      return glitch;
         case Category::Reverse:     return reverse;
+        case Category::KickFullOn:
+        case Category::KickGoa:
+        case Category::KickDarkForest:
+        case Category::KickHiTech:
+        case Category::KickProgressive: return kickRecipeFor (c);
         default:                    return acid;
     }
 }

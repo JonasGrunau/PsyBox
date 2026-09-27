@@ -12,6 +12,8 @@ static void selectTabs (juce::Component& c, int tab)
 {
     for (auto* child : c.getChildren())
     {
+        if (dynamic_cast<Sidebar*> (child) != nullptr)
+            continue;   // its tabs pick the family list, not a page
         if (auto* t = dynamic_cast<TabStrip*> (child))
         {
             t->setSelected (tab);

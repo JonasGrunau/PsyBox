@@ -17,6 +17,13 @@ ArpSettings ArpSettings::from (const ParamState& p) noexcept
     s.gate = p.get (P::ArpGate);
     s.swing = p.get (P::ArpSwing);
     s.hold = p.on (P::ArpHold);
+    if (p.geti (P::EngineMode) == (int) EngineMode::Kick)
+    {
+        // a tie would swallow the next kick: every step is a fresh hit
+        s.gate = std::min (s.gate, 0.95f);
+        for (int i = 0; i < kArpSteps; ++i)
+            s.pattern.setFlag (i, ArpPattern::Slide, false);
+    }
     return s;
 }
 

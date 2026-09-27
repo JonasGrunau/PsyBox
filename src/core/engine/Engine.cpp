@@ -32,6 +32,8 @@ void Engine::prepare (double sampleRate, int maxBlockSize)
 
     for (auto& v : voices)
         v.prepare ((float) fs, (float) fs * 4.f);
+    for (auto& k : kicks)
+        k.prepare ((float) fs, (float) fs * 2.f);
 
     for (int i = 0; i < kNumLfos; ++i)
     {
@@ -61,6 +63,8 @@ void Engine::applyQuality()
     const float osRate = (float) fs * (float) osFactor;
     for (auto& v : voices)
         v.setRates ((float) fs, osRate);
+    for (auto& k : kicks)
+        k.setRates ((float) fs, osRate);
     ctx.baseRate = (float) fs;
     ctx.osRate = osRate;
     ctx.osFactor = osFactor;
@@ -73,6 +77,8 @@ void Engine::applyQuality()
 void Engine::reset()
 {
     for (auto& v : voices) v.kill();
+    for (auto& k : kicks) k.kill();
+    engineMode = -1;
     numHeld = 0;
     sustained.fill (false);
     sustainPedal = false;
@@ -96,6 +102,8 @@ int Engine::activeVoices() const noexcept
     int n = 0;
     for (const auto& v : voices)
         n += v.isActive() ? 1 : 0;
+    for (const auto& k : kicks)
+        n += k.isActive() ? 1 : 0;
     return n;
 }
 
@@ -229,8 +237,9 @@ void Engine::updateArp() noexcept
         arp.allOff();
         fireArp();   // releases the arp's note
         arpActive = false;
-        for (int i = 0; i < n; ++i)
-            voiceNoteOn (keys[(size_t) i], 0.8f);
+        if (! kickMode())   // held keys would fire a kick off the grid
+            for (int i = 0; i < n; ++i)
+                voiceNoteOn (keys[(size_t) i], 0.8f);
     }
 }
 
@@ -294,6 +303,14 @@ void Engine::voiceNoteOn (int note, float velocity) noexcept
     }
     sustained[(size_t) note] = false;
 
+    if (kickMode())
+    {
+        kickNoteOn (note, velocity);
+        lastNote = note;
+        lastPitch = (float) note;
+        return;
+    }
+
     if (mode == VoiceMode::Poly)
     {
         bool stolen = false;
@@ -340,6 +357,8 @@ void Engine::voiceNoteOff (int note) noexcept
         }
         --numHeld;
     }
+    if (kickMode())
+        return;   // kicks are one-shots
 
     const auto mode = (VoiceMode) cur.geti (P::VoiceMode);
     if (mode == VoiceMode::Poly)
@@ -371,6 +390,37 @@ void Engine::voiceNoteOff (int note) noexcept
     {
         v.release();
     }
+}
+
+// A new hit takes the quieter kick and fades the other one out. Hits within
+// a millisecond of each other (a chord, re-sent held notes) are one hit.
+void Engine::kickNoteOn (int note, float velocity) noexcept
+{
+    auto& last = kicks[(size_t) lastKick];
+    if (last.isActive() && last.samplesSinceTrigger() < (int) (0.001 * fs))
+    {
+        last.raiseVelocity (velocity);
+        return;
+    }
+    const int next = kicks[0].level() <= kicks[1].level() ? 0 : 1;
+    kicks[(size_t) (1 - next)].choke();
+    kicks[(size_t) next].trigger (note, velocity, ctx);
+    lastKick = next;
+}
+
+// Synth and kick voices never sound together: a mode change (a new patch)
+// releases the synth voices and fades out the kicks.
+void Engine::followEngineMode() noexcept
+{
+    const int mode = cur.geti (P::EngineMode);
+    if (mode == engineMode)
+        return;
+    if (engineMode >= 0)
+    {
+        for (auto& v : voices) v.release();
+        for (auto& k : kicks) k.choke();
+    }
+    engineMode = mode;
 }
 
 void Engine::allNotesOff() noexcept
@@ -417,12 +467,23 @@ void Engine::renderVoices (int offset, int n) noexcept
     for (auto& v : voices)
         if (v.isActive())
             v.render (osL.data(), osR.data(), offset, n, ctx);
+    for (auto& k : kicks)
+        if (k.isActive())
+            k.render (osL.data(), osR.data(), offset, n, ctx);
 }
 
 void Engine::process (float* left, float* right, int numSamples, const MidiEvent* events, int numEvents, const Transport& transport) noexcept
 {
     const double bpm = transport.bpm > 0.0 ? transport.bpm : 120.0;
     arp.sync (transport.ppq, bpm, transport.playing);
+
+    // After a reset (a patch swap) the first notes must play the new patch,
+    // so the smoothed state jumps before any event is handled.
+    if (firstBlock)
+    {
+        cur = target;
+        firstBlock = false;
+    }
 
     const int wantFactor = factorForQuality (target.geti (P::Quality));
     if (wantFactor != osFactor)
@@ -443,6 +504,7 @@ void Engine::process (float* left, float* right, int numSamples, const MidiEvent
         while (pos < blockN)
         {
             // events due now
+            followEngineMode();
             updateArp();
             while (ev < numEvents && events[ev].offset <= done + pos)
                 handleEvent (events[ev++]);

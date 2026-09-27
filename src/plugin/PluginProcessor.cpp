@@ -31,7 +31,9 @@ juce::AudioProcessorValueTreeState::ParameterLayout PsySynthProcessor::createLay
             juce::StringArray items;
             for (const auto& c : *d.choices)
                 items.add (c);
-            layout.add (std::make_unique<juce::AudioParameterChoice> (id, name, items, (int) d.def));
+            // The engine mode belongs to the category, not to host automation.
+            const auto attrs = juce::AudioParameterChoiceAttributes().withAutomatable (std::string_view (d.id) != "engine_mode");
+            layout.add (std::make_unique<juce::AudioParameterChoice> (id, name, items, (int) d.def, attrs));
         }
         else if (d.mapping == Mapping::Toggle)
         {
@@ -120,6 +122,7 @@ void PsySynthProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
             e.type = MidiEvent::NoteOn; e.number = m.getNoteNumber(); e.value = m.getFloatVelocity();
             lastPlayedNote.store (e.number, std::memory_order_relaxed);
             heldVelocity[(size_t) e.number] = std::max (0.01f, e.value);
+            if (swap == Swap::FadingOut) pressedInFade[(size_t) e.number] = true;
         }
         else if (m.isNoteOff()) { e.type = MidiEvent::NoteOff; e.number = m.getNoteNumber(); heldVelocity[(size_t) e.number] = 0.f; }
         else if (m.isPitchWheel()) { e.type = MidiEvent::PitchBend; e.value = (float) (m.getPitchWheelValue() - 8192) / 8192.f; }
@@ -148,10 +151,15 @@ void PsySynthProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
     lastBpm.store (bpm, std::memory_order_relaxed);
 
     // First block after a reset: the new patch starts clean, held notes come back.
-    if (swap == Swap::Restart)
+    // A kick is a one-shot: only keys pressed during the fade are played again
+    // (unless the arp owns the keys), and it starts without a fade-in so the
+    // transient stays sharp.
+    const bool oneShot = audioParams.geti (P::EngineMode) == (int) EngineMode::Kick && ! audioParams.on (P::ArpOn);
+    if (swap == Swap::Restart && fadePos == 0)
     {
         for (int note = 0; note < 128; ++note)
-            if (heldVelocity[(size_t) note] > 0.f && midiEvents.size() < midiEvents.capacity())
+            if (heldVelocity[(size_t) note] > 0.f && (! oneShot || pressedInFade[(size_t) note])
+                && midiEvents.size() < midiEvents.capacity())
             {
                 MidiEvent e;
                 e.type = MidiEvent::NoteOn;
@@ -159,6 +167,8 @@ void PsySynthProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
                 e.value = heldVelocity[(size_t) note];
                 midiEvents.insert (midiEvents.begin(), e);
             }
+        pressedInFade.fill (false);
+        if (oneShot) swap = Swap::None;
     }
 
     buffer.clear();
@@ -227,8 +237,12 @@ void PsySynthProcessor::copyScope (float* dest, int num) const noexcept
 // Generator
 // ---------------------------------------------------------------------------
 
-void PsySynthProcessor::applyState (const ParamState& s)
+void PsySynthProcessor::applyState (const ParamState& state)
 {
+    // Whatever the source (recipe, init, preset, undo), a kick category plays
+    // the kick engine and every other category the synth.
+    auto s = state;
+    s.set (P::EngineMode, (float) (isKickCategory() ? EngineMode::Kick : EngineMode::Synth));
     const auto& defs = paramDefs();
     for (size_t i = 0; i < (size_t) kNumParams; ++i)
     {
@@ -323,7 +337,7 @@ void PsySynthProcessor::generateWithSeed (uint32_t s)
 {
     beginPatchChange();
     seed = s;
-    applyState (generator.generate (category, seed, currentState(), locks, arpGeneration));
+    applyState (generator.generate (category, seed, currentState(), locks, arpGeneration, kickKeyGeneration));
     presetName = juce::String (categoryInfo()[(size_t) category].name) + " #" + juce::String::toHexString ((int) seed).toUpperCase().paddedLeft ('0', 6);
     pushHistory();
     sendChangeMessage();
@@ -332,6 +346,12 @@ void PsySynthProcessor::generateWithSeed (uint32_t s)
 void PsySynthProcessor::setArpGeneration (bool on)
 {
     arpGeneration = on;
+    sendChangeMessage();
+}
+
+void PsySynthProcessor::setKickKeyGeneration (bool on)
+{
+    kickKeyGeneration = on;
     sendChangeMessage();
 }
 
@@ -422,7 +442,7 @@ void PsySynthProcessor::redo()
 void PsySynthProcessor::restoreRanges()
 {
     Generator scratch;
-    scratch.generate (category, seed, ParamState(), LockSet(), plain (P::ArpOn) > 0.5f);
+    scratch.generate (category, seed, ParamState(), LockSet(), plain (P::ArpOn) > 0.5f, plain (P::KickKeyTrack) > 0.5f);
     generator.setRanges (scratch.lastRanges());
 }
 
@@ -469,7 +489,9 @@ juce::File PsySynthProcessor::bounceToFile()
 {
     constexpr double fs = 48000.0;
     constexpr int block = 512;
-    const auto st = currentState();
+    auto st = currentState();
+    if (st.geti (P::EngineMode) == (int) EngineMode::Kick)
+        st.set (P::ArpOn, 0.f);   // one hit: the WAV is a kick sample
     const double bpm = lastBpm.load();
     const int note = lastPlayedNote.load();
 
@@ -483,8 +505,8 @@ juce::File PsySynthProcessor::bounceToFile()
     const int maxLen = (int) (40.0 * fs);
 
     Engine e;
+    e.setParams (st);   // before prepare, so the first note and the latency see this patch
     e.prepare (fs, block);
-    e.setParams (st);
     const int latency = e.latencySamples();
 
     std::vector<float> L, R;
@@ -556,6 +578,7 @@ void PsySynthProcessor::getStateInformation (juce::MemoryBlock& destData)
     state.setProperty ("seed", (int) seed, nullptr);
     state.setProperty ("mutate", mutateAmount, nullptr);
     state.setProperty ("arpGen", arpGeneration, nullptr);
+    state.setProperty ("kickKeyGen", kickKeyGeneration, nullptr);
     state.setProperty ("presetName", presetName, nullptr);
     writeMacroNames (state);
     writeSlots (state);
@@ -588,6 +611,8 @@ void PsySynthProcessor::setStateInformation (const void* data, int sizeInBytes)
     seed = (uint32_t) (int) tree.getProperty ("seed", 0);
     mutateAmount = (float) tree.getProperty ("mutate", 0.25f);
     arpGeneration = (bool) tree.getProperty ("arpGen", false);
+    kickKeyGeneration = (bool) tree.getProperty ("kickKeyGen", true);
+    normaliseEngineMode();
     presetName = tree.getProperty ("presetName", "Init").toString();
     readMacroNames (tree);
     readSlots (tree);
@@ -601,6 +626,13 @@ void PsySynthProcessor::setStateInformation (const void* data, int sizeInBytes)
     historyIndex = -1;
     pushHistory();
     sendChangeMessage();
+}
+
+void PsySynthProcessor::normaliseEngineMode()
+{
+    const float want = (float) (isKickCategory() ? EngineMode::Kick : EngineMode::Synth);
+    if (std::abs (plain (P::EngineMode) - want) > 0.5f)
+        params[(size_t) P::EngineMode]->setValueNotifyingHost (def (P::EngineMode).toNorm (want));
 }
 
 juce::File PsySynthProcessor::presetFolder()

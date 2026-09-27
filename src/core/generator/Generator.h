@@ -74,6 +74,7 @@ using Recipe = void (*) (RecipeBuilder&);
 Recipe recipeFor (Category c) noexcept;
 Recipe arpRecipeFor (Category c) noexcept;          // arp settings (ArpRecipes.cpp)
 Recipe arpPatternRecipeFor (Category c) noexcept;   // the arp's 16 steps
+Recipe kickRecipeFor (Category c) noexcept;         // kick categories (KickRecipes.cpp)
 
 // Named starting points for the pattern editor (ArpPattern::parse notation).
 struct ArpTemplate { const char* name; const char* steps; };
@@ -85,8 +86,12 @@ public:
     // A new patch of the category. Locked parameters keep their current value;
     // everything else starts from the init patch, then the recipe runs.
     // withArp adds the category's arp on a separate random stream, so the
-    // sound itself is the same either way.
-    ParamState generate (Category c, uint32_t seed, const ParamState& current, const LockSet& locks, bool withArp = false);
+    // sound itself is the same either way. kickToKey makes a generated kick
+    // follow the played key (key tracking) instead of its fixed Tune; it
+    // draws no randomness, so the same seed gives the same kick either way.
+    // The engine mode always follows the category.
+    ParamState generate (Category c, uint32_t seed, const ParamState& current, const LockSet& locks, bool withArp = false,
+                         bool kickToKey = true);
 
     // Only a new arp pattern in the category's style; everything else stays.
     ParamState generateArpPattern (Category c, uint32_t seed, const ParamState& current, const LockSet& locks);

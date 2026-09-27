@@ -54,6 +54,11 @@ public:
     // "Arp" next to Generate: new patches come with the category's arp.
     bool getArpGeneration() const noexcept { return arpGeneration; }
     void setArpGeneration (bool on);
+    // "Key" next to Generate (kick categories): new kicks follow the played key.
+    bool getKickKeyGeneration() const noexcept { return kickKeyGeneration; }
+    void setKickKeyGeneration (bool on);
+    bool isKickCategory() const noexcept { return psy::familyOf (category) == psy::Family::Kick; }
+    int getLastPlayedNote() const noexcept { return lastPlayedNote.load (std::memory_order_relaxed); }
 
     // Arp pattern editing (message thread). The pattern is plain parameters;
     // these read and write it as one value.
@@ -117,6 +122,7 @@ private:
     psy::LockSet locks;
     float mutateAmount = 0.25f;
     bool arpGeneration = false;
+    bool kickKeyGeneration = true;
     juce::String presetName { "Init" };
     std::atomic<int> lastPlayedNote { 48 };
 
@@ -130,6 +136,7 @@ private:
     Swap swap = Swap::None;
     int fadePos = 0;
     std::array<float, 128> heldVelocity {};   // audio thread: notes currently down
+    std::array<bool, 128> pressedInFade {};   // audio thread: note-ons that arrived during the fade-out
     void beginPatchChange() noexcept { patchEpoch.fetch_add (1, std::memory_order_release); }
     static constexpr int kFadeOut = 480, kFadeIn = 128;   // 10 ms, ~3 ms at 48 kHz
     std::atomic<double> lastBpm { 120.0 };
@@ -159,6 +166,7 @@ private:
 
     static juce::AudioProcessorValueTreeState::ParameterLayout createLayout();
     psy::ParamState currentState() const;
+    void normaliseEngineMode();   // the engine mode follows the category
     void applyState (const psy::ParamState& s);
     void pushHistory();
     void restoreRanges();

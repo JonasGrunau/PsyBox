@@ -189,6 +189,8 @@ public:
     explicit VoicePanel (PsySynthProcessor&);
     void resized() override;
     std::function<void()> onEditPattern;   // the pattern grid was clicked
+    // Kick patches have no voice settings: only the arp page, titled "Arp".
+    void setKickMode (bool kick);
 
 private:
     PsySynthProcessor& proc;
@@ -202,6 +204,7 @@ private:
     ArpPatternView pattern;
     std::vector<ParamKnob*> arpKnobs;
     int current = 0;
+    bool kickMode = false;
     void show (int page);
     void timerCallback() override;
 };
@@ -337,9 +340,18 @@ private:
     psy::Category shownCategory = psy::Category::Count;   // last category scrolled into view
     juce::TextButton generateButton { "Generate" }, mutateButton { "Mutate" }, clearLocks { "Unlock" };
     ToggleDot arpToggle { juce::String() };   // switch only; the caption is painted like SEED
+    ToggleDot keyToggle { juce::String() };   // kick categories only: new kicks follow the played key
     juce::Slider mutateAmount;
     juce::Label seedLabel;
-    juce::Rectangle<int> seedCaption, arpCaption;
+    juce::Rectangle<int> seedCaption, arpCaption, keyCaption;
+
+    // Which family the list shows. Follows the category when it changes;
+    // the tabs only change the view, a click on a row switches the sound.
+    TabStrip familyTabs { { "Synth", "Kick" } };
+    psy::Family viewFamily = psy::Family::Synth;
+    psy::Category lastCategory = psy::Category::Count;
+    const std::vector<psy::Category>& rows() const { return psy::categoriesIn (viewFamily); }
+    void showFamily (psy::Family);
 
     static constexpr int kItemH = 25;
     static constexpr int kListTop = theme::kPad + theme::kHeaderH + theme::sp::sm;

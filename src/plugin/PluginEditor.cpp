@@ -6,23 +6,50 @@ namespace
 {
     constexpr int kTopH = 52;
     constexpr int kSideW = 196;
-    // Rows of the main grid: height and column widths (each row sums to 1084).
-    // Widths follow from content: padding + displays + whole knob cells.
-    struct RowSpec { int h; int w[3]; };
-    constexpr RowSpec kRows[4] = { { kRowH, { 384, 384, 316 } },
-                                   { kRowH, { 366, 366, 352 } },
-                                   { kRowH, { 352, 360, 372 } },
-                                   { kRowH, { 568, 136, 380 } } };
+    // Rows of the main grid: height, number of sections and their widths (each
+    // row sums to 1084). Widths follow from content: padding + displays + whole
+    // knob cells. Kick patches use their own rows 0-2; the Voice section (arp)
+    // keeps its place, and row 3 (FX, macros, output) is shared.
+    struct RowSpec { int h; int n; int w[3]; };
+    constexpr RowSpec kRows[4] = { { kRowH, 3, { 384, 384, 316 } },
+                                   { kRowH, 3, { 366, 366, 352 } },
+                                   { kRowH, 3, { 352, 360, 372 } },
+                                   { kRowH, 3, { 568, 136, 380 } } };
+    constexpr RowSpec kKickRows[4] = { { kRowH, 2, { 542, 542, 0 } },
+                                       { kRowH, 3, { 366, 366, 352 } },
+                                       { kRowH, 1, { 1084, 0, 0 } },
+                                       { kRowH, 3, { 568, 136, 380 } } };
     static_assert (kTopH + 4 * kRowH == PsySynthEditor::kH);
 } // namespace
 
 PsySynthEditor::Root::Root (PsySynthProcessor& p)
-    : top (p), side (p), oscA (p, false), oscB (p, true), mixer (p), f1 (p, 0), f2 (p, 1), voice (p), env (p),
-      lfo (p), matrix (p), fx (p), macros (p), output (p)
+    : proc (p), top (p), side (p), oscA (p, false), oscB (p, true), mixer (p), f1 (p, 0), f2 (p, 1), voice (p), env (p),
+      lfo (p), matrix (p), fx (p), macros (p), output (p), kickPitch (p), kickAmp (p), kickClick (p), kickDrive (p), kickWave (p)
 {
     for (juce::Component* c : std::initializer_list<juce::Component*> { &top, &side, &oscA, &oscB, &mixer, &f1, &f2, &voice,
                                                                          &env, &lfo, &matrix, &fx, &macros, &output })
         addAndMakeVisible (c);
+    for (juce::Component* c : std::initializer_list<juce::Component*> { &kickPitch, &kickAmp, &kickClick, &kickDrive, &kickWave })
+        addChildComponent (c);
+    updateMode();
+    startTimerHz (15);
+}
+
+void PsySynthEditor::Root::updateMode()
+{
+    const bool kick = proc.plain (psy::P::EngineMode) > 0.5f;
+    if (kick == kickLayout) return;
+    kickLayout = kick;
+    for (juce::Component* c : std::initializer_list<juce::Component*> { &oscA, &oscB, &mixer, &f1, &f2, &env, &lfo, &matrix })
+        c->setVisible (! kick);
+    for (juce::Component* c : std::initializer_list<juce::Component*> { &kickPitch, &kickAmp, &kickClick, &kickDrive, &kickWave })
+        c->setVisible (kick);
+    voice.setKickMode (kick);
+    // the macros drive mod-matrix targets, and the kick has none
+    macros.setAlpha (kick ? 0.35f : 1.f);
+    macros.setInterceptsMouseClicks (! kick, ! kick);
+    resized();
+    repaint();
 }
 
 void PsySynthEditor::Root::paint (juce::Graphics& g)
@@ -33,18 +60,19 @@ void PsySynthEditor::Root::paint (juce::Graphics& g)
 void PsySynthEditor::Root::paintOverChildren (juce::Graphics& g)
 {
     // hairline grid between sections
+    const auto& rows = kickLayout ? kKickRows : kRows;
     g.setColour (col::line);
     int y = kTopH;
     for (int r = 0; r < 4; ++r)
     {
         if (r > 0) g.fillRect (kSideW, y, kW - kSideW, 1);
         int x = kSideW;
-        for (int c = 0; c < 2; ++c)
+        for (int c = 0; c < rows[r].n - 1; ++c)
         {
-            x += kRows[r].w[c];
-            g.fillRect (x, y + kPad, 1, kRows[r].h - 2 * kPad);
+            x += rows[r].w[c];
+            g.fillRect (x, y + kPad, 1, rows[r].h - 2 * kPad);
         }
-        y += kRows[r].h;
+        y += rows[r].h;
     }
 }
 
@@ -53,17 +81,21 @@ void PsySynthEditor::Root::resized()
     top.setBounds (0, 0, kW, kTopH);
     side.setBounds (0, kTopH, kSideW, kH - kTopH);
 
-    juce::Component* grid[4][3] = { { &oscA, &oscB, &mixer }, { &f1, &f2, &voice }, { &env, &lfo, &matrix }, { &fx, &macros, &output } };
+    juce::Component* synth[4][3] = { { &oscA, &oscB, &mixer }, { &f1, &f2, &voice }, { &env, &lfo, &matrix }, { &fx, &macros, &output } };
+    juce::Component* kick[4][3] = { { &kickPitch, &kickAmp, nullptr }, { &kickClick, &kickDrive, &voice },
+                                    { &kickWave, nullptr, nullptr }, { &fx, &macros, &output } };
+    const auto& rows = kickLayout ? kKickRows : kRows;
+    auto& grid = kickLayout ? kick : synth;
     int y = kTopH;
     for (int r = 0; r < 4; ++r)
     {
         int x = kSideW;
-        for (int c = 0; c < 3; ++c)
+        for (int c = 0; c < rows[r].n; ++c)
         {
-            grid[r][c]->setBounds (x, y, kRows[r].w[c], kRows[r].h);
-            x += kRows[r].w[c];
+            grid[r][c]->setBounds (x, y, rows[r].w[c], rows[r].h);
+            x += rows[r].w[c];
         }
-        y += kRows[r].h;
+        y += rows[r].h;
     }
 }
 
@@ -191,5 +223,6 @@ void PsySynthEditor::updateAccent()
 
 void PsySynthEditor::changeListenerCallback (juce::ChangeBroadcaster*)
 {
+    root.updateMode();   // before the accent repaint, so a new kick never flashes the synth layout
     updateAccent();
 }

@@ -70,6 +70,11 @@ namespace
             case Category::Reverse:  // one swell per bar
                 for (int bar = 0; bar < 4; ++bar) p.push_back ({ bar * 4.0, 2.0, 60, 0.8f });
                 break;
+            case Category::KickFullOn: case Category::KickGoa: case Category::KickDarkForest:
+            case Category::KickHiTech: case Category::KickProgressive:
+                // four on the floor; the key changes every bar (F, F, G, D#) to hear the tracking
+                for (int b = 0; b < 16; ++b) p.push_back ({ (double) b, 0.25, (b / 4) == 2 ? 31 : ((b / 4) == 3 ? 27 : 29), 0.9f });
+                break;
             default:
             {
                 static const int mel[8] = { 60, 63, 67, 70, 72, 67, 63, 58 };
@@ -91,6 +96,8 @@ namespace
             case Category::Riser: case Category::Uplifter: case Category::Downlifter: case Category::NoiseFx:
             case Category::Drone: case Category::Zap: case Category::Laser: keys = { 48 }; break;
             case Category::Impact: keys = { 36 }; break;
+            case Category::KickFullOn: case Category::KickGoa: case Category::KickDarkForest:
+            case Category::KickHiTech: case Category::KickProgressive: keys = { 29 }; break;
             default: keys = { 60, 63, 67 }; break;
         }
         std::vector<Note> p;

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "PluginProcessor.h"
+#include "ui/KickPanels.h"
 #include "ui/Panels.h"
 #include "ui/PsyLookAndFeel.h"
 
@@ -23,7 +24,7 @@ public:
     void changeListenerCallback (juce::ChangeBroadcaster*) override;
 
 private:
-    class Root : public juce::Component
+    class Root : public juce::Component, private juce::Timer
     {
     public:
         explicit Root (PsySynthProcessor&);
@@ -31,8 +32,12 @@ private:
         void paint (juce::Graphics&) override;
         void paintOverChildren (juce::Graphics&) override;
         void resized() override;
+        // Kick patches swap the synth sections for the kick sections.
+        void updateMode();
 
     private:
+        PsySynthProcessor& proc;
+        bool kickLayout = false;
         TopBar top;
         Sidebar side;
         OscPanel oscA, oscB;
@@ -45,6 +50,12 @@ private:
         FxPanel fx;
         MacroPanel macros;
         OutputPanel output;
+        KickPitchPanel kickPitch;
+        KickAmpPanel kickAmp;
+        KickClickPanel kickClick;
+        KickDrivePanel kickDrive;
+        KickWavePanel kickWave;
+        void timerCallback() override { updateMode(); }   // automation / state loads
     };
 
     // Flat keys in the theme: dark white keys, black keys, accent when held.

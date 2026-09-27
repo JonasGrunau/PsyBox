@@ -89,6 +89,81 @@ private:
     uint64_t fingerprint() const override;
 };
 
+// ---------------------------------------------------------------------------
+// Kick displays. They read the patch the way the kick engine does, and the
+// envelope, click and wave views render a real hit offline, for the key last
+// played (key tracking moves the whole sweep).
+// ---------------------------------------------------------------------------
+class KickDisplay : public DisplayBase
+{
+public:
+    explicit KickDisplay (PsySynthProcessor& p) : DisplayBase (p) {}
+
+protected:
+    psy::ParamState patch() const;
+    int note() const { return proc.getLastPlayedNote(); }
+    uint64_t fingerprint() const override;
+};
+
+// Pitch over time on a log-frequency axis: start, knee and the tuned body.
+class KickPitchDisplay : public KickDisplay
+{
+public:
+    using KickDisplay::KickDisplay;
+
+private:
+    void paintContent (juce::Graphics&, juce::Rectangle<float>) override;
+};
+
+// Amp envelope of one hit: punch, attack, hold, decay.
+class KickEnvDisplay : public KickDisplay
+{
+public:
+    using KickDisplay::KickDisplay;
+
+private:
+    std::vector<float> env;
+    uint64_t cached = 0;
+    void paintContent (juce::Graphics&, juce::Rectangle<float>) override;
+};
+
+// The click layer on its own, over its first milliseconds.
+class KickClickDisplay : public KickDisplay
+{
+public:
+    using KickDisplay::KickDisplay;
+
+private:
+    std::vector<float> click;
+    uint64_t cached = 0;
+    void paintContent (juce::Graphics&, juce::Rectangle<float>) override;
+};
+
+// The body saturator's transfer curve at the current drive.
+class KickDriveDisplay : public KickDisplay
+{
+public:
+    using KickDisplay::KickDisplay;
+
+private:
+    void paintContent (juce::Graphics&, juce::Rectangle<float>) override;
+};
+
+// The whole hit as a waveform with a time ruler and the pitch sweep on top.
+class KickWaveDisplay : public KickDisplay
+{
+public:
+    using KickDisplay::KickDisplay;
+    float lengthMs() const { ensure(); return length; }   // to -60 dB below the body
+
+private:
+    mutable std::vector<float> wave, hz;
+    mutable uint64_t cached = 0;
+    mutable float length = 0.f, totalMs = 0.f;
+    void ensure() const;   // re-renders the hit when the patch or key changed
+    void paintContent (juce::Graphics&, juce::Rectangle<float>) override;
+};
+
 // Output oscilloscope with zero-crossing trigger, plus a peak meter.
 // Click and drag out of it to drop the current sound as a WAV file.
 class Scope : public DisplayBase, public juce::SettableTooltipClient

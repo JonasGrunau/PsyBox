@@ -1,6 +1,8 @@
 #include "Displays.h"
 
 #include "dsp/Filters.h"
+#include "dsp/Shapers.h"
+#include "engine/KickVoice.h"
 #include "dsp/Wavetable.h"
 
 #include <cstring>
@@ -454,4 +456,243 @@ void Scope::paintContent (juce::Graphics& g, juce::Rectangle<float> r)
         g.drawText (dragging ? "DROP TO EXPORT WAV" : "DRAG TO EXPORT WAV", r.reduced ((float) theme::sp::sm).toNearestInt(),
                     juce::Justification::topLeft, false);
     }
+}
+
+// ---------------------------------------------------------------------------
+// Kick displays
+// ---------------------------------------------------------------------------
+psy::ParamState KickDisplay::patch() const
+{
+    psy::ParamState s;
+    for (int i = 0; i < psy::kNumParams; ++i)
+        s.v[(size_t) i] = proc.plain ((P) i);
+    return s;
+}
+
+uint64_t KickDisplay::fingerprint() const
+{
+    uint64_t h = hashParams ({ P::VelSens }) ^ ((uint64_t) note() * 0x9E3779B97F4A7C15ULL);
+    for (int i = (int) P::KickTune; i <= (int) P::KickTone; ++i)
+    {
+        float v = proc.plain ((P) i);
+        uint32_t bits;
+        std::memcpy (&bits, &v, 4);
+        h = (h ^ bits) * 1099511628211ULL;
+    }
+    return h;
+}
+
+namespace
+{
+    constexpr float kKickFs = 48000.f;
+
+    juce::String hzText (float hz)
+    {
+        return hz >= 1000.f ? juce::String (hz / 1000.f, 1) + "k" : juce::String (juce::roundToInt (hz));
+    }
+
+    // Min/max per pixel column, drawn as a filled band around the centre line.
+    void drawWave (juce::Graphics& g, const std::vector<float>& x, int count, juce::Rectangle<float> r, float scale)
+    {
+        const int cols = juce::jmax (1, (int) r.getWidth());
+        juce::Path p;
+        std::vector<float> lo ((size_t) cols), hi ((size_t) cols);
+        for (int c = 0; c < cols; ++c)
+        {
+            const int a = c * count / cols, b = juce::jmax (a + 1, (c + 1) * count / cols);
+            float mn = 0.f, mx = 0.f;
+            for (int i = a; i < b && i < count; ++i) { mn = std::min (mn, x[(size_t) i]); mx = std::max (mx, x[(size_t) i]); }
+            lo[(size_t) c] = mn;
+            hi[(size_t) c] = mx;
+        }
+        const float cy = r.getCentreY(), half = r.getHeight() * 0.5f * scale;
+        p.startNewSubPath (r.getX(), cy - hi[0] * half);
+        for (int c = 1; c < cols; ++c) p.lineTo (r.getX() + (float) c, cy - hi[(size_t) c] * half);
+        for (int c = cols - 1; c >= 0; --c) p.lineTo (r.getX() + (float) c, cy - lo[(size_t) c] * half);
+        p.closeSubPath();
+        g.setColour (accent().withAlpha (0.75f));
+        g.fillPath (p);
+    }
+} // namespace
+
+void KickPitchDisplay::paintContent (juce::Graphics& g, juce::Rectangle<float> r)
+{
+    const auto s = psy::KickSettings::from (patch());
+    const int n = note();
+    const float body = psy::kickBodyHz (s, n);
+    const float totalMs = juce::jlimit (40.f, 400.f, 3.6f * s.sweepMs);
+    auto area = r.reduced (6.f, 8.f);
+    const float lo = std::log (20.f), hiF = std::log (12000.f);
+    const auto X = [&] (float ms) { return area.getX() + area.getWidth() * std::sqrt (ms / totalMs); };   // the drop is fast
+    const auto Y = [&] (float hz) { return area.getBottom() - area.getHeight() * (std::log (hz) - lo) / (hiF - lo); };
+
+    g.setFont (mono (9.f));
+    for (float f : { 50.f, 100.f, 200.f, 500.f, 1000.f, 2000.f, 5000.f })
+    {
+        g.setColour (col::grid);
+        g.fillRect (r.getX(), Y (f), r.getWidth(), 1.f);
+        g.setColour (col::textFaint);
+        g.drawText (hzText (f), juce::Rectangle<float> (r.getRight() - 32.f, Y (f) - 11.f, 28.f, 10.f), juce::Justification::centredRight, false);
+    }
+
+    juce::Path p;
+    for (int i = 0; i <= 160; ++i)
+    {
+        const float ms = totalMs * (float) (i * i) / (160.f * 160.f);
+        const float y = Y (juce::jlimit (20.f, 12000.f, psy::kickPitchAt (s, n, ms * 0.001f)));
+        if (i == 0) p.startNewSubPath (X (ms), y);
+        else p.lineTo (X (ms), y);
+    }
+    strokeCurve (g, p, area, true);
+
+    // start, knee and body markers
+    const float r0 = body / s.tuneHz;
+    const float start = s.startHz * r0, knee = juce::jlimit (body, std::max (start, body), s.kneeHz * r0);
+    const float kneeMs = 3.f * s.snapMs;
+    g.setColour (accent());
+    for (auto pt : { juce::Point<float> (X (0.f), Y (start)), juce::Point<float> (X (kneeMs), Y (psy::kickPitchAt (s, n, kneeMs * 0.001f))),
+                     juce::Point<float> (X (3.f * s.sweepMs), Y (body)) })
+        g.fillEllipse (pt.x - 2.5f, pt.y - 2.5f, 5.f, 5.f);
+    g.setColour (col::textDim);
+    g.drawText (hzText (start), juce::Rectangle<float> (X (0.f) + 6.f, Y (start) - 16.f, 40.f, 10.f), juce::Justification::centredLeft, false);
+    g.drawText (hzText (knee), juce::Rectangle<float> (X (kneeMs) + 6.f, Y (knee) - 12.f, 40.f, 10.f), juce::Justification::centredLeft, false);
+}
+
+void KickEnvDisplay::paintContent (juce::Graphics& g, juce::Rectangle<float> r)
+{
+    const auto st = patch();
+    const auto s = psy::KickSettings::from (st);
+    const float totalMs = juce::jlimit (60.f, 1500.f, (s.attackMs + s.holdMs + s.decayMs) * 1.1f + 10.f);
+    constexpr float fs = 8000.f;   // plenty for an envelope
+    const int count = (int) (totalMs * 0.001f * fs);
+    if (fingerprint() != cached || (int) env.size() != count)
+    {
+        env.assign ((size_t) count, 0.f);
+        psy::KickVoice::renderOffline (st, note(), 1.f, fs, count, nullptr, env.data());
+        cached = fingerprint();
+    }
+    drawGrid (g, r, 6, 2);
+    auto area = r.reduced (4.f, 8.f);
+    const auto X = [&] (int i) { return area.getX() + area.getWidth() * (float) i / (float) juce::jmax (1, count - 1); };
+    const auto Y = [&] (float v) { return area.getBottom() - area.getHeight() * v; };
+    juce::Path p;
+    p.startNewSubPath (X (0), Y (0.f));
+    for (int i = 0; i < count; i += 2) p.lineTo (X (i), Y (env[(size_t) i]));
+    p.lineTo (X (count - 1), Y (0.f));
+    strokeCurve (g, p, area, true);
+
+    // where the hold ends and the decay starts
+    const float holdEnd = (s.attackMs + s.holdMs) / totalMs;
+    g.setColour (col::textFaint);
+    g.fillRect (area.getX() + area.getWidth() * holdEnd, area.getY(), 1.f, area.getHeight());
+}
+
+void KickClickDisplay::paintContent (juce::Graphics& g, juce::Rectangle<float> r)
+{
+    auto st = patch();
+    const auto s = psy::KickSettings::from (st);
+    const float ms = juce::jlimit (3.f, 40.f, s.clickMs * 1.2f);
+    const int count = (int) (ms * 0.001f * kKickFs);
+    if (fingerprint() != cached || (int) click.size() != count)
+    {
+        // the click alone: the hit with it minus the hit without it
+        std::vector<float> without ((size_t) count);
+        click.assign ((size_t) count, 0.f);
+        psy::KickVoice::renderOffline (st, note(), 1.f, kKickFs, count, click.data());
+        st.set (P::KickClickLevel, 0.f);
+        psy::KickVoice::renderOffline (st, note(), 1.f, kKickFs, count, without.data());
+        for (int i = 0; i < count; ++i) click[(size_t) i] -= without[(size_t) i];
+        cached = fingerprint();
+    }
+    drawGrid (g, r, 4, 2);
+    if (s.clickLevel <= 0.f)
+    {
+        g.setColour (col::textFaint);
+        g.setFont (label (10.f));
+        g.drawText ("NO CLICK", r, juce::Justification::centred, false);
+        return;
+    }
+    // scaled to its own peak: this view is about the shape, Level sets the loudness
+    float pk = 1e-6f;
+    for (float v : click) pk = std::max (pk, std::abs (v));
+    drawWave (g, click, count, r.reduced (4.f, 6.f), 0.9f / pk);
+}
+
+void KickDriveDisplay::paintContent (juce::Graphics& g, juce::Rectangle<float> r)
+{
+    const auto s = psy::KickSettings::from (patch());
+    drawGrid (g, r, 4, 4);
+    auto area = r.reduced (8.f);
+    g.setColour (col::lineStrong);
+    g.drawLine (area.getX(), area.getBottom(), area.getRight(), area.getY(), 1.f);   // clean
+    const double gain = psy::dsp::dbToGain (s.driveDb);
+    const double makeup = 1.0 / std::max ({ std::abs (psy::dsp::AdaaShaper::f (gain, s.shaper)), std::abs (psy::dsp::AdaaShaper::f (-gain, s.shaper)), 1e-6 });
+    juce::Path p;
+    for (int i = 0; i <= 100; ++i)
+    {
+        const double x = -1.0 + 2.0 * i / 100.0;
+        const float y = (float) (psy::dsp::AdaaShaper::f (x * gain, s.shaper) * makeup);
+        const float px = area.getX() + area.getWidth() * (float) i / 100.f;
+        const float py = area.getCentreY() - area.getHeight() * 0.5f * juce::jlimit (-1.f, 1.f, y);
+        if (i == 0) p.startNewSubPath (px, py);
+        else p.lineTo (px, py);
+    }
+    strokeCurve (g, p, area, false);
+}
+
+void KickWaveDisplay::ensure() const
+{
+    if (fingerprint() == cached && ! wave.empty()) return;
+    const auto st = patch();
+    const auto s = psy::KickSettings::from (st);
+    totalMs = juce::jlimit (150.f, 1200.f, (s.attackMs + s.holdMs + s.decayMs) * 1.15f + 20.f);
+    const int count = (int) (totalMs * 0.001f * kKickFs);
+    wave.assign ((size_t) count, 0.f);
+    hz.assign ((size_t) count, 0.f);
+    psy::KickVoice::renderOffline (st, note(), 1.f, kKickFs, count, wave.data(), nullptr, hz.data());
+    int last = 0;
+    for (int i = 0; i < count; ++i)
+        if (std::abs (wave[(size_t) i]) > 0.0005f) last = i;   // -60 dB below the 0.5 body peak
+    length = (float) last * 1000.f / kKickFs;
+    cached = fingerprint();
+}
+
+void KickWaveDisplay::paintContent (juce::Graphics& g, juce::Rectangle<float> r)
+{
+    ensure();
+    const auto s = psy::KickSettings::from (patch());
+    const int count = (int) wave.size();
+
+    auto area = r.reduced (6.f, 6.f).withTrimmedBottom (12.f);
+    // time ruler
+    const float step = totalMs > 600.f ? 100.f : 50.f;
+    g.setFont (mono (9.f));
+    for (float t = step; t < totalMs; t += step)
+    {
+        const float x = area.getX() + area.getWidth() * t / totalMs;
+        g.setColour (col::grid);
+        g.fillRect (x, r.getY(), 1.f, area.getBottom() - r.getY());
+        g.setColour (col::textFaint);
+        g.drawText (juce::String (juce::roundToInt (t)), juce::Rectangle<float> (x - 20.f, area.getBottom() + 1.f, 40.f, 11.f),
+                    juce::Justification::centred, false);
+    }
+    g.setColour (col::grid);
+    g.fillRect (area.getX(), area.getCentreY(), area.getWidth(), 1.f);
+
+    drawWave (g, wave, count, area, 1.9f);
+
+    // pitch sweep on a log axis over the wave, faint
+    const float lo = std::log (25.f), hiF = std::log (10000.f);
+    juce::Path p;
+    const int cols = juce::jmax (2, (int) area.getWidth());
+    for (int c = 0; c < cols; ++c)
+    {
+        const int i = c * (count - 1) / (cols - 1);
+        const float f = juce::jlimit (25.f, 10000.f, hz[(size_t) i] > 0.f ? hz[(size_t) i] : psy::kickBodyHz (s, note()));
+        const float y = area.getBottom() - area.getHeight() * (std::log (f) - lo) / (hiF - lo);
+        if (c == 0) p.startNewSubPath (area.getX(), y);
+        else p.lineTo (area.getX() + (float) c, y);
+    }
+    g.setColour (col::text.withAlpha (0.35f));
+    g.strokePath (p, juce::PathStrokeType (1.f));
 }

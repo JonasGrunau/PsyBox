@@ -38,6 +38,9 @@ namespace choices
     const std::vector<std::string> distType { "Soft", "Hard", "Fold", "Tube", "Rectify" };
     const std::vector<std::string> chorusMode { "Chorus", "Flanger" };
     const std::vector<std::string> arpMode { "Up", "Down", "Up/Down", "Random", "Order" };
+    const std::vector<std::string> engineMode { "Synth", "Kick" };
+    const std::vector<std::string> kickClick { "Noise", "Tick", "Blip" };
+    const std::vector<std::string> kickDrive { "Soft", "Tube", "Hard" };
 } // namespace choices
 
 float syncDivBeats (int index) noexcept

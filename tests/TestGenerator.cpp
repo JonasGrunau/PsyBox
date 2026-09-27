@@ -241,3 +241,98 @@ TEST_CASE ("Generated arp patterns are composed: figures repeat, slides land, ac
         CHECK (slides <= 4);
     }
 }
+
+TEST_CASE ("Every category has a name, a short name and a blurb", "[generator]")
+{
+    for (const auto& info : categoryInfo())
+    {
+        REQUIRE (info.name != nullptr);
+        REQUIRE (info.shortName != nullptr);
+        REQUIRE (info.blurb != nullptr);
+        CHECK (std::string_view (info.name).find ('/') == std::string_view::npos);   // names are preset folders
+    }
+    CHECK ((int) categoriesIn (Family::Synth).size() + (int) categoriesIn (Family::Kick).size() == kNumCategories);
+    CHECK ((int) categoriesIn (Family::Kick).size() == kNumKickCategories);
+}
+
+TEST_CASE ("The engine mode always follows the category, even when locked", "[generator][kick]")
+{
+    Generator g;
+    LockSet locks;
+    locks.set ((size_t) P::EngineMode);
+    ParamState kickNow, synthNow;
+    kickNow.set (P::EngineMode, (float) EngineMode::Kick);
+    for (int c = 0; c < kNumCategories; ++c)
+    {
+        const auto cat = (Category) c;
+        const int want = familyOf (cat) == Family::Kick ? (int) EngineMode::Kick : (int) EngineMode::Synth;
+        INFO (categoryInfo()[(size_t) c].name);
+        CHECK (g.generate (cat, 5, kickNow, locks).geti (P::EngineMode) == want);
+        CHECK (g.generate (cat, 5, synthNow, locks).geti (P::EngineMode) == want);
+        auto m = g.generate (cat, 5, synthNow, LockSet());
+        for (uint32_t s = 0; s < 20; ++s)
+            m = g.mutate (1.f, s, m, LockSet());
+        CHECK (m.geti (P::EngineMode) == want);
+    }
+}
+
+TEST_CASE ("Kick and synth patches keep to their own parameters", "[generator][kick]")
+{
+    Generator g;
+    const ParamState init;
+    const auto& defs = paramDefs();
+    auto group = [&] (int i) { return std::string_view (defs[(size_t) i].group); };
+    for (int c = 0; c < kNumCategories; ++c)
+        for (uint32_t seed : { 1u, 9u, 333u })
+        {
+            const auto cat = (Category) c;
+            const auto p = g.generate (cat, seed, init, LockSet(), true);
+            for (int i = 0; i < kNumParams; ++i)
+            {
+                const bool kickParam = group (i).substr (0, 4) == "Kick";
+                const bool shared = group (i) == "Engine" || group (i) == "Arp" || group (i) == "Distortion"
+                                 || group (i) == "Reverb" || i == (int) P::VelSens;
+                INFO (categoryInfo()[(size_t) c].name << " seed " << seed << " param " << defs[(size_t) i].id);
+                if (familyOf (cat) == Family::Kick && ! kickParam && ! shared)
+                    CHECK (p.v[(size_t) i] == init.v[(size_t) i]);
+                if (familyOf (cat) == Family::Synth && kickParam)
+                    CHECK (p.v[(size_t) i] == init.v[(size_t) i]);
+            }
+        }
+}
+
+TEST_CASE ("The key toggle only switches key tracking", "[generator][kick]")
+{
+    Generator g;
+    for (Category c : categoriesIn (Family::Kick))
+        for (uint32_t seed = 1; seed < 10; ++seed)
+        {
+            const auto toKey = g.generate (c, seed, ParamState(), LockSet(), false, true);
+            const auto fixed = g.generate (c, seed, ParamState(), LockSet(), false, false);
+            CHECK (toKey.on (P::KickKeyTrack));
+            CHECK_FALSE (fixed.on (P::KickKeyTrack));
+            for (int i = 0; i < kNumParams; ++i)
+                if (i != (int) P::KickKeyTrack)
+                    CHECK (toKey.v[(size_t) i] == fixed.v[(size_t) i]);
+        }
+}
+
+TEST_CASE ("Kick arps are four on the floor, never tied or accented", "[generator][kick][arp]")
+{
+    Generator g;
+    for (Category c : categoriesIn (Family::Kick))
+        for (uint32_t seed = 1; seed < 30; ++seed)
+        {
+            const auto p = g.generate (c, seed, ParamState(), LockSet(), true);
+            const auto pattern = ArpPattern::from (p);
+            INFO (categoryInfo()[(size_t) c].name << " seed " << seed);
+            CHECK (p.get (P::ArpGate) < 1.f);
+            for (int beat = 0; beat < 3; ++beat)
+                CHECK (pattern.has (beat * 4, ArpPattern::On));
+            for (int i = 0; i < kArpSteps; ++i)
+            {
+                CHECK_FALSE (pattern.has (i, ArpPattern::Slide));
+                CHECK_FALSE (pattern.has (i, ArpPattern::Accent));
+            }
+        }
+}

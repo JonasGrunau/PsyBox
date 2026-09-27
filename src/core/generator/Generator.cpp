@@ -123,7 +123,8 @@ void RecipeBuilder::lfoSync (int index, LfoShape shape, std::initializer_list<in
 // Generator
 // ---------------------------------------------------------------------------
 
-ParamState Generator::generate (Category c, uint32_t seed, const ParamState& current, const LockSet& locks, bool withArp)
+ParamState Generator::generate (Category c, uint32_t seed, const ParamState& current, const LockSet& locks, bool withArp,
+                                bool kickToKey)
 {
     ParamState out;  // init patch
     for (int i = 0; i < kNumParams; ++i)
@@ -138,6 +139,8 @@ ParamState Generator::generate (Category c, uint32_t seed, const ParamState& cur
     dsp::Rng rng (((uint64_t) seed << 8) ^ (uint64_t) ((int) c + 1) * 0x9E3779B97F4A7C15ULL);
     RecipeBuilder b (out, locks, rng, ranges);
     recipeFor (c) (b);
+    if (familyOf (c) == Family::Kick)
+        b.on (P::KickKeyTrack, kickToKey);
 
     dsp::Rng arpRng (((uint64_t) seed << 8) ^ (uint64_t) ((int) c + 1) * 0xC2B2AE3D27D4EB4FULL ^ 0x41525050ULL);
     RecipeBuilder arp (out, locks, arpRng, ranges);
@@ -147,6 +150,9 @@ ParamState Generator::generate (Category c, uint32_t seed, const ParamState& cur
         arpRecipeFor (c) (arp);
         arpPatternRecipeFor (c) (arp);
     }
+
+    // Not the recipe's to decide and not lockable: a kick category is a kick.
+    out.set (P::EngineMode, (float) (familyOf (c) == Family::Kick ? EngineMode::Kick : EngineMode::Synth));
     return out;
 }
 
@@ -174,7 +180,7 @@ ParamState Generator::mutate (float amount, uint32_t seed, const ParamState& cur
         const float u = rng.uniform();
         if (locks.test ((size_t) i) || ! r.touched)
             continue;
-        if (i == (int) P::Quality || i == (int) P::MasterVol)
+        if (i == (int) P::Quality || i == (int) P::MasterVol || i == (int) P::EngineMode)
             continue;
 
         if (d.mapping == Mapping::Choice || d.mapping == Mapping::Toggle || d.unit == Unit::Int)

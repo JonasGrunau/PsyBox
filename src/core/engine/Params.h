@@ -54,7 +54,7 @@ namespace choices
 {
     extern const std::vector<std::string> voiceMode, glideMode, quality, oscType, wavetable,
         subOct, subShape, noiseType, penvDest, filterType, filterRouting, lfoShape, syncDiv,
-        modSrc, modDst, distType, chorusMode, arpMode;
+        modSrc, modDst, distType, chorusMode, arpMode, engineMode, kickClick, kickDrive;
 }
 
 // Sync divisions expressed in beats (quarter notes), index-aligned with choices::syncDiv.
@@ -65,6 +65,10 @@ enum class OscType : int { Analog, Supersaw, Wavetable, FM };
 enum class LfoShape : int { Sine, Triangle, SawUp, SawDown, Square, SampleHold, SmoothRandom };
 enum class DistType : int { Soft, Hard, Fold, Tube, Rectify };
 enum class ArpMode : int { Up, Down, UpDown, Random, Order };
+// A patch is a synth sound or a kick; the category decides, never the recipe.
+enum class EngineMode : int { Synth, Kick };
+enum class KickClick : int { Noise, Tick, Blip };
+enum class KickDrive : int { Soft, Tube, Hard };
 
 enum class ModSrc : int
 {
@@ -269,7 +273,28 @@ enum class ModDst : int
     PSY_ARP_STEP (X, 1)  PSY_ARP_STEP (X, 2)  PSY_ARP_STEP (X, 3)  PSY_ARP_STEP (X, 4) \
     PSY_ARP_STEP (X, 5)  PSY_ARP_STEP (X, 6)  PSY_ARP_STEP (X, 7)  PSY_ARP_STEP (X, 8) \
     PSY_ARP_STEP (X, 9)  PSY_ARP_STEP (X, 10) PSY_ARP_STEP (X, 11) PSY_ARP_STEP (X, 12) \
-    PSY_ARP_STEP (X, 13) PSY_ARP_STEP (X, 14) PSY_ARP_STEP (X, 15) PSY_ARP_STEP (X, 16)
+    PSY_ARP_STEP (X, 13) PSY_ARP_STEP (X, 14) PSY_ARP_STEP (X, 15) PSY_ARP_STEP (X, 16) \
+    \
+    X(EngineMode,  "engine_mode",  "Engine",      "Engine", Choice, 0, 1, 0, 1.f, None, &choices::engineMode, false) \
+    \
+    X(KickTune,    "kick_tune",    "Tune",        "Kick Pitch", Exp, 30.f, 90.f, 44.f, 1.f, Hz, nullptr, false) \
+    X(KickKeyTrack,"kick_keytrack","Key Track",   "Kick Pitch", Toggle, 0, 1, 1, 1.f, None, nullptr, false) \
+    X(KickStart,   "kick_start",   "Start",       "Kick Pitch", Exp, 200.f, 8000.f, 2000.f, 1.f, Hz, nullptr, false) \
+    X(KickSnap,    "kick_snap",    "Snap",        "Kick Pitch", Power, 0.3f, 20.f, 3.f, 2.f, Ms, nullptr, false) \
+    X(KickKnee,    "kick_knee",    "Knee",        "Kick Pitch", Exp, 60.f, 1500.f, 330.f, 1.f, Hz, nullptr, false) \
+    X(KickSweep,   "kick_sweep",   "Sweep",       "Kick Pitch", Power, 2.f, 300.f, 30.f, 2.f, Ms, nullptr, false) \
+    X(KickAttack,  "kick_attack",  "Attack",      "Kick Amp", Power, 0.f, 50.f, 40.f, 2.f, Ms, nullptr, false) \
+    X(KickHold,    "kick_hold",    "Hold",        "Kick Amp", Power, 0.f, 1000.f, 120.f, 2.f, Ms, nullptr, false) \
+    X(KickDecay,   "kick_decay",   "Decay",       "Kick Amp", Power, 10.f, 3000.f, 120.f, 2.f, Ms, nullptr, false) \
+    X(KickPunch,   "kick_punch",   "Punch",       "Kick Amp", Linear, 0.f, 1.f, 1.f, 1.f, Percent, nullptr, false) \
+    X(KickPunchLen,"kick_punch_len","Punch Len",  "Kick Amp", Power, 1.f, 60.f, 6.f, 2.f, Ms, nullptr, false) \
+    X(KickClickType, "kick_click_type", "Type",   "Kick Click", Choice, 0, 2, 0, 1.f, None, &choices::kickClick, false) \
+    X(KickClickLevel,"kick_click_level","Level",  "Kick Click", Linear, 0.f, 1.f, 0.15f, 1.f, Percent, nullptr, false) \
+    X(KickClickDecay,"kick_click_decay","Decay",  "Kick Click", Power, 0.3f, 40.f, 12.f, 2.f, Ms, nullptr, false) \
+    X(KickClickTone, "kick_click_tone", "Tone",   "Kick Click", Exp, 300.f, 16000.f, 4000.f, 1.f, Hz, nullptr, false) \
+    X(KickDriveType, "kick_drive_type", "Type",   "Kick Drive", Choice, 0, 2, 1, 1.f, None, &choices::kickDrive, false) \
+    X(KickDrive,   "kick_drive",   "Drive",       "Kick Drive", Linear, -30.f, 30.f, -27.f, 1.f, Db, nullptr, false) \
+    X(KickTone,    "kick_tone",    "Tone",        "Kick Drive", Exp, 200.f, 20000.f, 20000.f, 1.f, Hz, nullptr, false)
 
 // One step of the arp pattern: plays, accented, slides into the next step.
 #define PSY_ARP_STEP(X, n) \
