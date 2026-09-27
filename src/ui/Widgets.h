@@ -15,7 +15,7 @@ class ParamKnob : public juce::Component,
                   private juce::Timer
 {
 public:
-    ParamKnob (PsySynthProcessor&, psy::P, const juce::String& labelOverride = {});
+    ParamKnob (PsyBoxProcessor&, psy::P, const juce::String& labelOverride = {});
 
     void resized() override;
     void paint (juce::Graphics&) override;
@@ -31,7 +31,7 @@ public:
     void mouseDoubleClick (const juce::MouseEvent&) override;
 
 private:
-    PsySynthProcessor& proc;
+    PsyBoxProcessor& proc;
     psy::P param;
     juce::String labelText;
     juce::Slider slider;
@@ -52,7 +52,7 @@ class Segmented : public juce::Component,
                   public juce::SettableTooltipClient
 {
 public:
-    Segmented (PsySynthProcessor&, psy::P, juce::StringArray labels = {});
+    Segmented (PsyBoxProcessor&, psy::P, juce::StringArray labels = {});
 
     void paint (juce::Graphics&) override;
     void mouseDown (const juce::MouseEvent&) override;
@@ -63,7 +63,7 @@ public:
     std::function<void (int)> onChange;
 
 private:
-    PsySynthProcessor& proc;
+    PsyBoxProcessor& proc;
     psy::P param;
     juce::StringArray labels;
     int selected = 0, hover = -1;
@@ -80,7 +80,7 @@ class ToggleDot : public juce::Component,
                   public juce::SettableTooltipClient
 {
 public:
-    ToggleDot (PsySynthProcessor&, psy::P, const juce::String& text);
+    ToggleDot (PsyBoxProcessor&, psy::P, const juce::String& text);
     explicit ToggleDot (const juce::String& text);
     void setOn (bool shouldBeOn) { if (on != shouldBeOn) { on = shouldBeOn; repaint(); } }
     std::function<void (bool)> onToggle;
@@ -108,7 +108,7 @@ private:
 class ParamCombo : public juce::Component
 {
 public:
-    ParamCombo (PsySynthProcessor&, psy::P, const juce::String& caption = {});
+    ParamCombo (PsyBoxProcessor&, psy::P, const juce::String& caption = {});
     void resized() override;
     void paint (juce::Graphics&) override;
 
@@ -124,7 +124,7 @@ private:
 class AmountSlider : public juce::Component
 {
 public:
-    AmountSlider (PsySynthProcessor&, psy::P);
+    AmountSlider (PsyBoxProcessor&, psy::P);
     void resized() override { slider.setBounds (getLocalBounds()); }
 
 private:
@@ -147,7 +147,6 @@ public:
     int getSelected() const noexcept { return selected; }
     void setSelected (int i);
     int idealWidth() const;
-    void setGap (int px) { gap = px; }   // space between tabs
     std::function<void (int)> onChange;
     std::function<bool (int)> isLit;  // draws a state dot before the name
     std::function<bool (int)> hasLed; // with isLit: which tabs get a dot (all when unset)
@@ -155,7 +154,6 @@ public:
 private:
     juce::StringArray names;
     int selected = 0, hover = -1;
-    int gap = theme::sp::lg;
     std::vector<juce::Rectangle<int>> tabBounds() const;
     bool ledOn (int i) const { return isLit && (! hasLed || hasLed (i)); }
 };

@@ -17,9 +17,17 @@ namespace
             [&d] (float, float, float v) { return d.snap (v); });
         return r;
     }
+
+    // Accepts state saved under the working title "PsySynth" and renames its tag to ours.
+    bool adoptStateTag (juce::XmlElement* xml, const juce::Identifier& type)
+    {
+        if (xml == nullptr) return false;
+        if (xml->hasTagName ("PsySynth")) xml->setTagName (type);
+        return xml->hasTagName (type);
+    }
 } // namespace
 
-juce::AudioProcessorValueTreeState::ParameterLayout PsySynthProcessor::createLayout()
+juce::AudioProcessorValueTreeState::ParameterLayout PsyBoxProcessor::createLayout()
 {
     juce::AudioProcessorValueTreeState::ParameterLayout layout;
     for (const auto& d : paramDefs())
@@ -51,9 +59,9 @@ juce::AudioProcessorValueTreeState::ParameterLayout PsySynthProcessor::createLay
     return layout;
 }
 
-PsySynthProcessor::PsySynthProcessor()
+PsyBoxProcessor::PsyBoxProcessor()
     : AudioProcessor (BusesProperties().withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
-      apvts (*this, nullptr, "PsySynth", createLayout())
+      apvts (*this, nullptr, "PsyBox", createLayout())
 {
     resetMacroNames();
     const auto& defs = paramDefs();
@@ -68,12 +76,12 @@ PsySynthProcessor::PsySynthProcessor()
     pushHistory();
 }
 
-bool PsySynthProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
+bool PsyBoxProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
 {
     return layouts.getMainOutputChannelSet() == juce::AudioChannelSet::stereo();
 }
 
-void PsySynthProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
+void PsyBoxProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 {
     engine.setParams (currentState());
     engine.prepare (sampleRate, samplesPerBlock);
@@ -84,7 +92,7 @@ void PsySynthProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
     heldVelocity.fill (0.f);
 }
 
-ParamState PsySynthProcessor::currentState() const
+ParamState PsyBoxProcessor::currentState() const
 {
     ParamState s;
     for (size_t i = 0; i < (size_t) kNumParams; ++i)
@@ -92,7 +100,7 @@ ParamState PsySynthProcessor::currentState() const
     return s;
 }
 
-void PsySynthProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi)
+void PsyBoxProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi)
 {
     juce::ScopedNoDenormals noDenormals;
     const int n = buffer.getNumSamples();
@@ -221,8 +229,21 @@ void PsySynthProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
         w = (w + 1) & (kScopeSize - 1);
     }
     scopeWrite.store (w, std::memory_order_release);
-    peakLevel.store (std::max (engine.lastPeak(), peakLevel.load (std::memory_order_relaxed) * 0.9f), std::memory_order_relaxed);
-    activeVoices.store (engine.activeVoices(), std::memory_order_relaxed);
+    const float rmsCoef = 1.f - std::exp (-(float) n / (0.3f * (float) getSampleRate()));
+    for (size_t c = 0; c < 2; ++c)
+    {
+        const float* x = c == 0 ? l : r;
+        float pk = 0.f, sq = 0.f;
+        for (int i = 0; i < n; ++i)
+        {
+            pk = std::max (pk, std::abs (x[i]));
+            sq += x[i] * x[i];
+        }
+        meanSquare[c] += rmsCoef * (sq / (float) std::max (n, 1) - meanSquare[c]);
+        outMeanSquare[c].store (meanSquare[c], std::memory_order_relaxed);
+        if (pk > outPeak[c].load (std::memory_order_relaxed))   // only the GUI lowers it (takeOutLevel)
+            outPeak[c].store (pk, std::memory_order_relaxed);
+    }
     arpStep.store (engine.arpStep(), std::memory_order_relaxed);
 
     const auto& cm = engine.compMeter();
@@ -236,7 +257,7 @@ void PsySynthProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mi
     }
 }
 
-void PsySynthProcessor::copyScope (float* dest, int num) const noexcept
+void PsyBoxProcessor::copyScope (float* dest, int num) const noexcept
 {
     const int w = scopeWrite.load (std::memory_order_acquire);
     for (int i = 0; i < num; ++i)
@@ -247,12 +268,15 @@ void PsySynthProcessor::copyScope (float* dest, int num) const noexcept
 // Generator
 // ---------------------------------------------------------------------------
 
-void PsySynthProcessor::applyState (const ParamState& state)
+void PsyBoxProcessor::applyState (const ParamState& state)
 {
     // Whatever the source (recipe, init, preset, undo), a kick category plays
-    // the kick engine and every other category the synth.
+    // the kick engine and every other category the synth, and only synth
+    // categories keep an arp (old basses and kicks may have one switched on).
     auto s = state;
     s.set (P::EngineMode, (float) (isKickCategory() ? EngineMode::Kick : EngineMode::Synth));
+    if (! hasArp (familyOf (category)))
+        s.set (P::ArpOn, 0.f);
     const auto& defs = paramDefs();
     for (size_t i = 0; i < (size_t) kNumParams; ++i)
     {
@@ -266,7 +290,7 @@ void PsySynthProcessor::applyState (const ParamState& state)
     }
 }
 
-void PsySynthProcessor::setCategory (Category c)
+void PsyBoxProcessor::setCategory (Category c)
 {
     if (c == category) return;
     switchCategory (c);
@@ -281,12 +305,12 @@ void PsySynthProcessor::setCategory (Category c)
     }
 }
 
-void PsySynthProcessor::saveSlot()
+void PsyBoxProcessor::saveSlot()
 {
     slots[(size_t) category] = { true, currentState(), seed, presetName };
 }
 
-void PsySynthProcessor::switchCategory (Category c)
+void PsyBoxProcessor::switchCategory (Category c)
 {
     beginPatchChange();
     saveSlot();
@@ -302,7 +326,7 @@ void PsySynthProcessor::switchCategory (Category c)
     restoreRanges();
 }
 
-void PsySynthProcessor::writeSlots (juce::ValueTree& t) const
+void PsyBoxProcessor::writeSlots (juce::ValueTree& t) const
 {
     juce::ValueTree all ("Slots");
     const auto& defs = paramDefs();
@@ -322,7 +346,7 @@ void PsySynthProcessor::writeSlots (juce::ValueTree& t) const
     t.appendChild (all, nullptr);
 }
 
-void PsySynthProcessor::readSlots (const juce::ValueTree& t)
+void PsyBoxProcessor::readSlots (const juce::ValueTree& t)
 {
     for (auto& slot : slots) slot = {};
     const auto& defs = paramDefs();
@@ -338,12 +362,12 @@ void PsySynthProcessor::readSlots (const juce::ValueTree& t)
     }
 }
 
-void PsySynthProcessor::generate()
+void PsyBoxProcessor::generate()
 {
     generateWithSeed ((uint32_t) random.nextInt() & 0xFFFFFFu);
 }
 
-void PsySynthProcessor::generateWithSeed (uint32_t s)
+void PsyBoxProcessor::generateWithSeed (uint32_t s)
 {
     beginPatchChange();
     seed = s;
@@ -353,19 +377,19 @@ void PsySynthProcessor::generateWithSeed (uint32_t s)
     sendChangeMessage();
 }
 
-void PsySynthProcessor::setArpGeneration (bool on)
+void PsyBoxProcessor::setArpGeneration (bool on)
 {
     arpGeneration = on;
     sendChangeMessage();
 }
 
-void PsySynthProcessor::setKickKeyGeneration (bool on)
+void PsyBoxProcessor::setKickKeyGeneration (bool on)
 {
     kickKeyGeneration = on;
     sendChangeMessage();
 }
 
-void PsySynthProcessor::setArpPattern (const ArpPattern& p)
+void PsyBoxProcessor::setArpPattern (const ArpPattern& p)
 {
     auto s = currentState();
     p.writeTo (s);
@@ -373,7 +397,7 @@ void PsySynthProcessor::setArpPattern (const ArpPattern& p)
 }
 
 // No patch-swap fade here: the sound stays, only the steps change.
-void PsySynthProcessor::generateArpPattern()
+void PsyBoxProcessor::generateArpPattern()
 {
     applyState (generator.generateArpPattern (category, (uint32_t) random.nextInt(), currentState(), locks));
     if (! presetName.endsWith ("*"))
@@ -382,7 +406,7 @@ void PsySynthProcessor::generateArpPattern()
     sendChangeMessage();
 }
 
-void PsySynthProcessor::mutate()
+void PsyBoxProcessor::mutate()
 {
     beginPatchChange();
     applyState (generator.mutate (mutateAmount, (uint32_t) random.nextInt(), currentState(), locks));
@@ -392,19 +416,19 @@ void PsySynthProcessor::mutate()
     sendChangeMessage();
 }
 
-void PsySynthProcessor::setLocked (P p, bool shouldLock)
+void PsyBoxProcessor::setLocked (P p, bool shouldLock)
 {
     locks.set ((size_t) p, shouldLock);
     sendChangeMessage();
 }
 
-void PsySynthProcessor::clearLocks()
+void PsyBoxProcessor::clearLocks()
 {
     locks.reset();
     sendChangeMessage();
 }
 
-void PsySynthProcessor::pushHistory()
+void PsyBoxProcessor::pushHistory()
 {
     if (historyIndex + 1 < (int) history.size())
         history.erase (history.begin() + historyIndex + 1, history.end());
@@ -414,7 +438,7 @@ void PsySynthProcessor::pushHistory()
     historyIndex = (int) history.size() - 1;
 }
 
-void PsySynthProcessor::undo()
+void PsyBoxProcessor::undo()
 {
     if (! canUndo()) return;
     beginPatchChange();
@@ -431,7 +455,7 @@ void PsySynthProcessor::undo()
     sendChangeMessage();
 }
 
-void PsySynthProcessor::redo()
+void PsyBoxProcessor::redo()
 {
     if (! canRedo()) return;
     beginPatchChange();
@@ -449,39 +473,39 @@ void PsySynthProcessor::redo()
 // Mutate needs the recipe's ranges; they are a pure function of category and
 // seed (plus whether the patch has an arp), so re-run the recipe on a scratch
 // patch instead of storing them.
-void PsySynthProcessor::restoreRanges()
+void PsyBoxProcessor::restoreRanges()
 {
     Generator scratch;
     scratch.generate (category, seed, ParamState(), LockSet(), plain (P::ArpOn) > 0.5f, plain (P::KickKeyTrack) > 0.5f);
     generator.setRanges (scratch.lastRanges());
 }
 
-void PsySynthProcessor::setMacroName (int i, const juce::String& name)
+void PsyBoxProcessor::setMacroName (int i, const juce::String& name)
 {
     const auto n = name.trim().substring (0, 12);
     macroNames[(size_t) i] = n.isEmpty() ? "Macro " + juce::String (i + 1) : n;
     sendChangeMessage();
 }
 
-void PsySynthProcessor::resetMacroNames()
+void PsyBoxProcessor::resetMacroNames()
 {
     for (int i = 0; i < kNumMacros; ++i)
         macroNames[(size_t) i] = "Macro " + juce::String (i + 1);
 }
 
-void PsySynthProcessor::writeMacroNames (juce::ValueTree& t) const
+void PsyBoxProcessor::writeMacroNames (juce::ValueTree& t) const
 {
     for (int i = 0; i < kNumMacros; ++i)
         t.setProperty ("macro" + juce::String (i + 1), macroNames[(size_t) i], nullptr);
 }
 
-void PsySynthProcessor::readMacroNames (const juce::ValueTree& t)
+void PsyBoxProcessor::readMacroNames (const juce::ValueTree& t)
 {
     for (int i = 0; i < kNumMacros; ++i)
         macroNames[(size_t) i] = t.getProperty ("macro" + juce::String (i + 1), "Macro " + juce::String (i + 1)).toString();
 }
 
-void PsySynthProcessor::initPatch()
+void PsyBoxProcessor::initPatch()
 {
     beginPatchChange();
     applyState (ParamState());
@@ -495,7 +519,7 @@ void PsySynthProcessor::initPatch()
 // Bounce
 // ---------------------------------------------------------------------------
 
-juce::File PsySynthProcessor::bounceToFile()
+juce::File PsyBoxProcessor::bounceToFile()
 {
     constexpr double fs = 48000.0;
     constexpr int block = 512;
@@ -558,7 +582,7 @@ juce::File PsySynthProcessor::bounceToFile()
     if (const float pk = out.getMagnitude (0, len); pk > 1e-5f)
         out.applyGain (juce::Decibels::decibelsToGain (-1.f) / pk);
 
-    auto dir = juce::File::getSpecialLocation (juce::File::userMusicDirectory).getChildFile ("PsySynth").getChildFile ("Bounces");
+    auto dir = juce::File::getSpecialLocation (juce::File::userMusicDirectory).getChildFile ("PsyBox").getChildFile ("Bounces");
     dir.createDirectory();
     const auto noteName = juce::MidiMessage::getMidiNoteName (note, true, true, 4);
     const auto base = juce::File::createLegalFileName (presetName.trimCharactersAtEnd ("*") + " " + noteName);
@@ -581,7 +605,7 @@ juce::File PsySynthProcessor::bounceToFile()
 // State & presets
 // ---------------------------------------------------------------------------
 
-void PsySynthProcessor::getStateInformation (juce::MemoryBlock& destData)
+void PsyBoxProcessor::getStateInformation (juce::MemoryBlock& destData)
 {
     auto state = apvts.copyState();
     state.setProperty ("category", (int) category, nullptr);
@@ -601,10 +625,10 @@ void PsySynthProcessor::getStateInformation (juce::MemoryBlock& destData)
         copyXmlToBinary (*xml, destData);
 }
 
-void PsySynthProcessor::setStateInformation (const void* data, int sizeInBytes)
+void PsyBoxProcessor::setStateInformation (const void* data, int sizeInBytes)
 {
     auto xml = getXmlFromBinary (data, sizeInBytes);
-    if (xml == nullptr || ! xml->hasTagName (apvts.state.getType()))
+    if (! adoptStateTag (xml.get(), apvts.state.getType()))
         return;
     auto tree = juce::ValueTree::fromXml (*xml);
     // Sessions saved before a parameter existed (the arp) get its default.
@@ -622,7 +646,7 @@ void PsySynthProcessor::setStateInformation (const void* data, int sizeInBytes)
     mutateAmount = (float) tree.getProperty ("mutate", 0.25f);
     arpGeneration = (bool) tree.getProperty ("arpGen", false);
     kickKeyGeneration = (bool) tree.getProperty ("kickKeyGen", true);
-    normaliseEngineMode();
+    normaliseFamily();
     presetName = tree.getProperty ("presetName", "Init").toString();
     readMacroNames (tree);
     readSlots (tree);
@@ -638,28 +662,30 @@ void PsySynthProcessor::setStateInformation (const void* data, int sizeInBytes)
     sendChangeMessage();
 }
 
-void PsySynthProcessor::normaliseEngineMode()
+void PsyBoxProcessor::normaliseFamily()
 {
     const float want = (float) (isKickCategory() ? EngineMode::Kick : EngineMode::Synth);
     if (std::abs (plain (P::EngineMode) - want) > 0.5f)
         params[(size_t) P::EngineMode]->setValueNotifyingHost (def (P::EngineMode).toNorm (want));
+    if (! hasArp (familyOf (category)) && plain (P::ArpOn) > 0.5f)
+        params[(size_t) P::ArpOn]->setValueNotifyingHost (0.f);
 }
 
-juce::File PsySynthProcessor::presetFolder()
+juce::File PsyBoxProcessor::presetFolder()
 {
-    auto dir = juce::File::getSpecialLocation (juce::File::userMusicDirectory).getChildFile ("PsySynth").getChildFile ("Presets");
+    auto dir = juce::File::getSpecialLocation (juce::File::userMusicDirectory).getChildFile ("PsyBox").getChildFile ("Presets");
     dir.createDirectory();
     return dir;
 }
 
-juce::Array<juce::File> PsySynthProcessor::listPresets() const
+juce::Array<juce::File> PsyBoxProcessor::listPresets() const
 {
     auto files = presetFolder().findChildFiles (juce::File::findFiles, true, "*.psyp");
     files.sort();
     return files;
 }
 
-bool PsySynthProcessor::savePreset (const juce::String& name)
+bool PsyBoxProcessor::savePreset (const juce::String& name)
 {
     auto state = apvts.copyState();
     state.setProperty ("category", (int) category, nullptr);
@@ -677,10 +703,10 @@ bool PsySynthProcessor::savePreset (const juce::String& name)
     return true;
 }
 
-bool PsySynthProcessor::loadPreset (const juce::File& file)
+bool PsyBoxProcessor::loadPreset (const juce::File& file)
 {
     auto xml = juce::XmlDocument::parse (file);
-    if (xml == nullptr || ! xml->hasTagName (apvts.state.getType()))
+    if (! adoptStateTag (xml.get(), apvts.state.getType()))
         return false;
     const auto tree = juce::ValueTree::fromXml (*xml);
     beginPatchChange();
@@ -706,7 +732,7 @@ bool PsySynthProcessor::loadPreset (const juce::File& file)
     return true;
 }
 
-void PsySynthProcessor::stepPreset (int delta)
+void PsyBoxProcessor::stepPreset (int delta)
 {
     const auto files = listPresets();
     if (files.isEmpty()) return;
@@ -717,12 +743,12 @@ void PsySynthProcessor::stepPreset (int delta)
     loadPreset (files[idx]);
 }
 
-juce::AudioProcessorEditor* PsySynthProcessor::createEditor()
+juce::AudioProcessorEditor* PsyBoxProcessor::createEditor()
 {
-    return new PsySynthEditor (*this);
+    return new PsyBoxEditor (*this);
 }
 
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()
 {
-    return new PsySynthProcessor();
+    return new PsyBoxProcessor();
 }

@@ -16,7 +16,7 @@ All product source, in three layers with one-way dependencies: `core` → `plugi
 ## For AI Agents
 
 ### Working In This Directory
-- Include paths differ by target. `psysynth_core` exposes `src/core`, so core code includes `"engine/Params.h"` or `"dsp/Filters.h"`. Plugin/UI targets add `src`, so they include `"ui/Panels.h"` and also reach core headers via `src/core`.
+- Include paths differ by target. `psybox_core` exposes `src/core`, so core code includes `"engine/Params.h"` or `"dsp/Filters.h"`. Plugin/UI targets add `src`, so they include `"ui/Panels.h"` and also reach core headers via `src/core`.
 - Dependency direction is strict: `ui` → `plugin` → `core`. Nothing in `core` includes from `plugin` or `ui`.
 
 ### Common Patterns

@@ -1,6 +1,6 @@
 // Renders the editor offscreen to PNGs, one per requested category, so the UI
 // can be reviewed without a DAW or screen-recording permission.
-//   psysynth_snapshot <out-dir> [category-index ...]
+//   psybox_snapshot <out-dir> [category-index ...]
 // Setting PSYSNAP_TAB=n also switches every tab strip to tab n (clamped),
 // and PSYSNAP_LOCKS=1 locks a couple of parameters, to review those states.
 // PSYSNAP_ARP=1 generates with an arp; PSYSNAP_PATTERN=1 opens the pattern editor.
@@ -44,8 +44,8 @@ int main (int argc, char** argv)
     for (int i = 2; i < argc; ++i) cats.push_back (juce::String (argv[i]).getIntValue());
     if (cats.empty()) cats = { 0 };
 
-    PsySynthEditor::forceKeyboard = std::getenv ("PSYSNAP_KEYS") != nullptr;
-    PsySynthProcessor proc;
+    PsyBoxEditor::forceKeyboard = std::getenv ("PSYSNAP_KEYS") != nullptr;
+    PsyBoxProcessor proc;
     proc.prepareToPlay (48000.0, 512);
     std::unique_ptr<juce::AudioProcessorEditor> editor (proc.createEditor());
 

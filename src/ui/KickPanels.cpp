@@ -22,7 +22,7 @@ namespace
 } // namespace
 
 // ---------------------------------------------------------------------------
-KickPitchPanel::KickPitchPanel (PsySynthProcessor& p)
+KickPitchPanel::KickPitchPanel (PsyBoxProcessor& p)
     : Section ("Pitch"), proc (p), display (p), keyTrack (p, P::KickKeyTrack, "Key")
 {
     addAndMakeVisible (display);
@@ -77,7 +77,7 @@ void KickPitchPanel::resized()
 }
 
 // ---------------------------------------------------------------------------
-KickAmpPanel::KickAmpPanel (PsySynthProcessor& p) : Section ("Amp"), display (p)
+KickAmpPanel::KickAmpPanel (PsyBoxProcessor& p) : Section ("Amp"), display (p)
 {
     addAndMakeVisible (display);
     ks.add (*this, p, P::KickAttack);
@@ -99,7 +99,7 @@ void KickAmpPanel::resized()
 }
 
 // ---------------------------------------------------------------------------
-KickClickPanel::KickClickPanel (PsySynthProcessor& p) : Section ("Click"), type (p, P::KickClickType), display (p)
+KickClickPanel::KickClickPanel (PsyBoxProcessor& p) : Section ("Click"), type (p, P::KickClickType), display (p)
 {
     addAndMakeVisible (type);
     type.setTooltip ("Noise: band-passed noise. Tick: a short knock. Blip: a falling sine");
@@ -123,7 +123,7 @@ void KickClickPanel::resized()
 }
 
 // ---------------------------------------------------------------------------
-KickDrivePanel::KickDrivePanel (PsySynthProcessor& p) : Section ("Drive"), type (p, P::KickDriveType), display (p)
+KickDrivePanel::KickDrivePanel (PsyBoxProcessor& p) : Section ("Drive"), type (p, P::KickDriveType), display (p)
 {
     addAndMakeVisible (type);
     type.setTooltip ("Saturation on the body: Tube adds even harmonics, Soft and Hard odd ones");
@@ -145,7 +145,7 @@ void KickDrivePanel::resized()
 }
 
 // ---------------------------------------------------------------------------
-KickWavePanel::KickWavePanel (PsySynthProcessor& p) : Section ("Kick"), display (p)
+KickWavePanel::KickWavePanel (PsyBoxProcessor& p) : Section ("Kick"), display (p)
 {
     addAndMakeVisible (display);
     startTimerHz (8);

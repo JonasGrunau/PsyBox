@@ -57,7 +57,7 @@ protected:
 struct KnobSet
 {
     std::vector<std::unique_ptr<ParamKnob>> knobs;
-    ParamKnob* add (juce::Component& parent, PsySynthProcessor& p, psy::P prm, const juce::String& label = {})
+    ParamKnob* add (juce::Component& parent, PsyBoxProcessor& p, psy::P prm, const juce::String& label = {})
     {
         knobs.push_back (std::make_unique<ParamKnob> (p, prm, label));
         parent.addAndMakeVisible (*knobs.back());
@@ -69,11 +69,11 @@ struct KnobSet
 class OscPanel : public Section, private juce::Timer
 {
 public:
-    OscPanel (PsySynthProcessor&, bool isB);
+    OscPanel (PsyBoxProcessor&, bool isB);
     void resized() override;
 
 private:
-    PsySynthProcessor& proc;
+    PsyBoxProcessor& proc;
     bool isB;
     ToggleDot onToggle;
     Segmented type;
@@ -90,7 +90,7 @@ private:
 class MixerPanel : public Section
 {
 public:
-    explicit MixerPanel (PsySynthProcessor&);
+    explicit MixerPanel (PsyBoxProcessor&);
     void resized() override;
 
 private:
@@ -104,11 +104,11 @@ private:
 class FilterPanel : public Section, private juce::Timer
 {
 public:
-    FilterPanel (PsySynthProcessor&, int slot);
+    FilterPanel (PsyBoxProcessor&, int slot);
     void resized() override;
 
 private:
-    PsySynthProcessor& proc;
+    PsyBoxProcessor& proc;
     int slot;
     ParamCombo type;
     FilterDisplay display;
@@ -124,7 +124,7 @@ class ArpPatternView : public juce::Component,
                        public juce::SettableTooltipClient
 {
 public:
-    explicit ArpPatternView (PsySynthProcessor&);
+    explicit ArpPatternView (PsyBoxProcessor&);
     void paint (juce::Graphics&) override;
     void mouseUp (const juce::MouseEvent&) override;
     void mouseEnter (const juce::MouseEvent&) override { repaint(); }
@@ -132,7 +132,7 @@ public:
     std::function<void()> onClick;
 
 private:
-    PsySynthProcessor& proc;
+    PsyBoxProcessor& proc;
 };
 
 // Step editor for the arp pattern, shown over the whole UI: step, accent and
@@ -140,7 +140,7 @@ private:
 class ArpPatternEditor : public juce::Component, private juce::Timer
 {
 public:
-    explicit ArpPatternEditor (PsySynthProcessor&);
+    explicit ArpPatternEditor (PsyBoxProcessor&);
     void open();
     void close();
     void paint (juce::Graphics&) override;
@@ -151,7 +151,7 @@ private:
     class Grid : public juce::Component
     {
     public:
-        explicit Grid (PsySynthProcessor& p) : proc (p) {}
+        explicit Grid (PsyBoxProcessor& p) : proc (p) {}
         void paint (juce::Graphics&) override;
         void mouseDown (const juce::MouseEvent&) override;
         void mouseDrag (const juce::MouseEvent&) override;
@@ -159,7 +159,7 @@ private:
         void mouseExit (const juce::MouseEvent&) override { hover = {}; repaint(); }
 
     private:
-        PsySynthProcessor& proc;
+        PsyBoxProcessor& proc;
         enum class Row { None, Ruler, On, Accent, Slide };
         struct Hit { Row row = Row::None; int step = -1; };
         Hit hover, drag;
@@ -170,7 +170,7 @@ private:
         void apply (Hit);
     };
 
-    PsySynthProcessor& proc;
+    PsyBoxProcessor& proc;
     Grid grid;
     juce::TextButton templates { "Templates" }, clear { "Clear" }, done { "Done" }, dice { "Generate" };
     ToggleDot arpOn;
@@ -187,14 +187,14 @@ private:
 class VoicePanel : public Section, private juce::Timer
 {
 public:
-    explicit VoicePanel (PsySynthProcessor&);
+    explicit VoicePanel (PsyBoxProcessor&);
     void resized() override;
     std::function<void()> onEditPattern;   // the pattern grid was clicked
-    // Kick patches have no voice settings: only the arp page, titled "Arp".
-    void setKickMode (bool kick);
+    // Basses have no arp: the Voice page only, without tabs.
+    void setArpAllowed (bool allowed);
 
 private:
-    PsySynthProcessor& proc;
+    PsyBoxProcessor& proc;
     TabStrip tabs { { "Voice", "Arp" } };
     Segmented mode, glideMode;
     KnobSet ks;
@@ -205,7 +205,7 @@ private:
     ArpPatternView pattern;
     std::vector<ParamKnob*> arpKnobs;
     int current = 0;
-    bool kickMode = false;
+    bool arpAllowed = true;
     void show (int page);
     void timerCallback() override;
 };
@@ -213,7 +213,7 @@ private:
 class EnvPanel : public Section
 {
 public:
-    explicit EnvPanel (PsySynthProcessor&);
+    explicit EnvPanel (PsyBoxProcessor&);
     void resized() override;
 
 private:
@@ -230,11 +230,11 @@ private:
 class LfoPanel : public Section, private juce::Timer
 {
 public:
-    explicit LfoPanel (PsySynthProcessor&);
+    explicit LfoPanel (PsyBoxProcessor&);
     void resized() override;
 
 private:
-    PsySynthProcessor& proc;
+    PsyBoxProcessor& proc;
     TabStrip tabs { { "1", "2", "3" } };
     LfoDisplay display;
     KnobSet ks;
@@ -254,7 +254,7 @@ private:
 class ModMatrixPanel : public Section
 {
 public:
-    explicit ModMatrixPanel (PsySynthProcessor&);
+    explicit ModMatrixPanel (PsyBoxProcessor&);
     void resized() override;
 
 private:
@@ -269,14 +269,14 @@ private:
 class FxPanel : public Section, private juce::Timer
 {
 public:
-    explicit FxPanel (PsySynthProcessor&);
+    explicit FxPanel (PsyBoxProcessor&);
     void resized() override;
 
 private:
     // Pages in signal-chain order.
     enum Fx : int { Dist, Crush, Shift, Phaser, Chorus, Comp, Delay, Reverb, Width, kNumFx };
-    PsySynthProcessor& proc;
-    TabStrip tabs { { "Dist", "Crush", "Shift", "Phase", "Chorus", "Comp", "Delay", "Verb", "Width" } };
+    PsyBoxProcessor& proc;
+    TabStrip tabs { { "Distortion", "Crush", "Shift", "Phaser", "Chorus", "Comp", "Delay", "Reverb", "Width" } };
     struct Page
     {
         std::unique_ptr<ToggleDot> on;
@@ -301,28 +301,14 @@ private:
 class MacroPanel : public Section, public juce::ChangeListener
 {
 public:
-    explicit MacroPanel (PsySynthProcessor&);
+    explicit MacroPanel (PsyBoxProcessor&);
     ~MacroPanel() override;
     void resized() override;
     void changeListenerCallback (juce::ChangeBroadcaster*) override;
 
 private:
-    PsySynthProcessor& proc;
+    PsyBoxProcessor& proc;
     KnobSet ks;
-};
-
-class OutputPanel : public Section, private juce::Timer
-{
-public:
-    explicit OutputPanel (PsySynthProcessor&);
-    void resized() override;
-    void paint (juce::Graphics&) override;
-
-private:
-    PsySynthProcessor& proc;
-    Scope scope;
-    int lastVoices = -1;
-    void timerCallback() override;
 };
 
 // ---------------------------------------------------------------------------
@@ -331,7 +317,7 @@ private:
 class Sidebar : public juce::Component, public juce::ChangeListener
 {
 public:
-    explicit Sidebar (PsySynthProcessor&);
+    explicit Sidebar (PsyBoxProcessor&);
     ~Sidebar() override;
     void paint (juce::Graphics&) override;
     void resized() override;
@@ -343,20 +329,20 @@ public:
     void changeListenerCallback (juce::ChangeBroadcaster*) override;
 
 private:
-    PsySynthProcessor& proc;
+    PsyBoxProcessor& proc;
     int hover = -1;
     int scrollY = 0, listH = 0;                            // the category list scrolls inside listH
     psy::Category shownCategory = psy::Category::Count;   // last category scrolled into view
     juce::TextButton generateButton { "Generate" }, mutateButton { "Mutate" }, clearLocks { "Unlock" };
-    ToggleDot arpToggle { juce::String() };   // switch only; the caption is painted like SEED
+    ToggleDot arpToggle { juce::String() };   // synth categories only; the caption is painted like SEED
     ToggleDot keyToggle { juce::String() };   // kick categories only: new kicks follow the played key
     juce::Slider mutateAmount;
     juce::Label seedLabel;
     juce::Rectangle<int> seedCaption, arpCaption, keyCaption;
 
     // Which family the list shows. Follows the category when it changes;
-    // the tabs only change the view, a click on a row switches the sound.
-    TabStrip familyTabs { { "Synth", "Kick" } };
+    // a tab switches to its family's first category.
+    TabStrip familyTabs { { "Synth", "Bass", "Kick" } };
     psy::Family viewFamily = psy::Family::Synth;
     psy::Category lastCategory = psy::Category::Count;
     const std::vector<psy::Category>& rows() const { return psy::categoriesIn (viewFamily); }
@@ -378,14 +364,14 @@ private:
 class TopBar : public juce::Component, public juce::ChangeListener
 {
 public:
-    explicit TopBar (PsySynthProcessor&);
+    explicit TopBar (PsyBoxProcessor&);
     ~TopBar() override;
     void paint (juce::Graphics&) override;
     void resized() override;
     void changeListenerCallback (juce::ChangeBroadcaster*) override;
 
 private:
-    PsySynthProcessor& proc;
+    PsyBoxProcessor& proc;
     IconButton undoButton { IconButton::Icon::Undo, "Undo" };
     IconButton redoButton { IconButton::Icon::Redo, "Redo" };
     IconButton prev { IconButton::Icon::Left, "Previous preset" };
@@ -394,7 +380,9 @@ private:
     IconButton save { IconButton::Icon::Save, "Save preset" };
     Segmented quality;
     ParamKnob volume;
+    Scope output;   // scope + level meter; drag it out to export a WAV
     juce::Rectangle<int> presetArea, qualityCaption, volumeCaption;
+    static juce::Font wordmarkFont();
     void showPresetMenu();
     void savePresetDialog();
     std::unique_ptr<juce::AlertWindow> saveWindow;

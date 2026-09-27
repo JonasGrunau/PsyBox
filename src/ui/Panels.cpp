@@ -31,7 +31,7 @@ int Section::titleWidth() const
 //   row 1: coarse, fine (, A>B FM, sync)
 // Levels live in the mixer.
 // ---------------------------------------------------------------------------
-OscPanel::OscPanel (PsySynthProcessor& p, bool b)
+OscPanel::OscPanel (PsyBoxProcessor& p, bool b)
     : Section (b ? "Osc B" : "Osc A"), proc (p), isB (b),
       onToggle (p, b ? P::OscBOn : P::OscAOn, "On"),
       type (p, b ? P::OscBType : P::OscAType, { "Analog", "Super", "Wave", "FM" }),
@@ -115,7 +115,7 @@ void OscPanel::resized()
 // ---------------------------------------------------------------------------
 // MixerPanel: source levels on top, their options below.
 // ---------------------------------------------------------------------------
-MixerPanel::MixerPanel (PsySynthProcessor& p)
+MixerPanel::MixerPanel (PsyBoxProcessor& p)
     : Section ("Mixer"),
       subOct (p, P::SubOct, { "-1", "-2" }),
       subShape (p, P::SubShape, "Sub Wave"), noiseType (p, P::NoiseType, "Noise Type"),
@@ -152,7 +152,7 @@ void MixerPanel::resized()
 // ---------------------------------------------------------------------------
 // FilterPanel: response on the left, a 3 x 2 grid on the right.
 // ---------------------------------------------------------------------------
-FilterPanel::FilterPanel (PsySynthProcessor& p, int s)
+FilterPanel::FilterPanel (PsyBoxProcessor& p, int s)
     : Section (s == 0 ? "Filter 1" : "Filter 2"), proc (p), slot (s),
       type (p, s == 0 ? P::F1Type : P::F2Type), display (p, s)
 {
@@ -214,7 +214,7 @@ void FilterPanel::resized()
 // ---------------------------------------------------------------------------
 // VoicePanel: modes on top, six knobs below.
 // ---------------------------------------------------------------------------
-VoicePanel::VoicePanel (PsySynthProcessor& p)
+VoicePanel::VoicePanel (PsyBoxProcessor& p)
     : Section ("Voice"), proc (p),
       mode (p, P::VoiceMode), glideMode (p, P::GlideMode, { "Always", "Legato" }),
       arpOn (p, P::ArpOn, "On"), arpHold (p, P::ArpHold, "Hold"),
@@ -244,13 +244,13 @@ VoicePanel::VoicePanel (PsySynthProcessor& p)
     startTimerHz (30);   // the pattern grid follows the playing step
 }
 
-void VoicePanel::setKickMode (bool kick)
+void VoicePanel::setArpAllowed (bool allowed)
 {
-    if (kick == kickMode) return;
-    kickMode = kick;
-    tabs.setVisible (! kick);
-    title = kick ? "Arp" : "Voice";
-    show (kick ? 1 : tabs.getSelected());
+    if (allowed == arpAllowed) return;
+    arpAllowed = allowed;
+    tabs.setVisible (allowed);
+    tabs.setSelected (0);
+    show (0);
 }
 
 void VoicePanel::show (int page)
@@ -319,7 +319,7 @@ namespace
     }
 } // namespace
 
-ArpPatternView::ArpPatternView (PsySynthProcessor& p) : proc (p)
+ArpPatternView::ArpPatternView (PsyBoxProcessor& p) : proc (p)
 {
     setMouseCursor (juce::MouseCursor::PointingHandCursor);
     setTooltip ("Click to edit the pattern");
@@ -364,7 +364,7 @@ void ArpPatternView::paint (juce::Graphics& g)
     }
 }
 
-ArpPatternEditor::ArpPatternEditor (PsySynthProcessor& p) : proc (p), grid (p), arpOn (p, P::ArpOn, "On")
+ArpPatternEditor::ArpPatternEditor (PsyBoxProcessor& p) : proc (p), grid (p), arpOn (p, P::ArpOn, "On")
 {
     for (juce::Component* c : std::initializer_list<juce::Component*> { &grid, &templates, &clear, &done, &dice,
                                                                          &shiftLeft, &shiftRight, &arpOn })
@@ -695,7 +695,7 @@ void ArpPatternEditor::Grid::paint (juce::Graphics& g)
 // EnvPanel: curve on the left, 2 x 2 knobs on the right. The pitch envelope
 // shares the panel as a fourth tab.
 // ---------------------------------------------------------------------------
-EnvPanel::EnvPanel (PsySynthProcessor& p)
+EnvPanel::EnvPanel (PsyBoxProcessor& p)
     : Section ("Envelopes"), display (p), pitchDisplay (p), pitchDest (p, P::PenvDest, "Target")
 {
     addAndMakeVisible (tabs);
@@ -755,7 +755,7 @@ void EnvPanel::resized()
 //   row 0: shape (2 cells), phase
 //   row 1: rate or division, sync, retrig
 // ---------------------------------------------------------------------------
-LfoPanel::LfoPanel (PsySynthProcessor& p) : Section ("LFO"), proc (p), display (p)
+LfoPanel::LfoPanel (PsyBoxProcessor& p) : Section ("LFO"), proc (p), display (p)
 {
     addAndMakeVisible (tabs);
     addAndMakeVisible (display);
@@ -827,7 +827,7 @@ void LfoPanel::resized()
 // ---------------------------------------------------------------------------
 // ModMatrixPanel: eight rows filling the body height.
 // ---------------------------------------------------------------------------
-ModMatrixPanel::ModMatrixPanel (PsySynthProcessor& p) : Section ("Mod Matrix")
+ModMatrixPanel::ModMatrixPanel (PsyBoxProcessor& p) : Section ("Mod Matrix")
 {
     for (int i = 0; i < psy::kNumModSlots; ++i)
     {
@@ -863,7 +863,7 @@ void ModMatrixPanel::resized()
 //   row 1: enabled, then the effect's selectors and switches
 // The compressor page lays itself out (knobs in both rows, display right).
 // ---------------------------------------------------------------------------
-FxPanel::FxPanel (PsySynthProcessor& p) : Section ("Effects"), proc (p)
+FxPanel::FxPanel (PsyBoxProcessor& p) : Section ("Effects"), proc (p)
 {
     addAndMakeVisible (tabs);
     static const P onIds[kNumFx] = { P::DistOn, P::CrushOn, P::FshiftOn, P::PhaserOn, P::ChorusOn, P::CompOn, P::DelayOn, P::ReverbOn, P::WidthOn };
@@ -985,12 +985,7 @@ void FxPanel::resized()
 {
     auto h = header();
     h.removeFromLeft (titleWidth());
-    for (int gap : { sp::lg, sp::md, sp::sm })   // nine tabs are tight: close the gaps until they fit
-    {
-        tabs.setGap (gap);
-        if (tabs.idealWidth() <= h.getWidth()) break;
-    }
-    tabs.setBounds (h.removeFromRight (juce::jmin (tabs.idealWidth(), h.getWidth())));
+    tabs.setBounds (h.removeFromRight (tabs.idealWidth()));
 
     const auto gr = grid();
     for (int i = 0; i < kNumFx; ++i)
@@ -1026,7 +1021,7 @@ void FxPanel::resized()
 }
 
 // ---------------------------------------------------------------------------
-MacroPanel::MacroPanel (PsySynthProcessor& p) : Section ("Macros"), proc (p)
+MacroPanel::MacroPanel (PsyBoxProcessor& p) : Section ("Macros"), proc (p)
 {
     const P ids[4] = { P::Macro1, P::Macro2, P::Macro3, P::Macro4 };
     for (int i = 0; i < 4; ++i)
@@ -1053,36 +1048,9 @@ void MacroPanel::resized()
 }
 
 // ---------------------------------------------------------------------------
-OutputPanel::OutputPanel (PsySynthProcessor& p) : Section ("Output"), proc (p), scope (p)
-{
-    addAndMakeVisible (scope);
-    startTimerHz (8);
-}
-
-void OutputPanel::timerCallback()
-{
-    const int v = proc.getActiveVoices();
-    if (v != lastVoices) { lastVoices = v; repaint (header()); }
-}
-
-void OutputPanel::paint (juce::Graphics& g)
-{
-    Section::paint (g);
-    g.setColour (col::textFaint);
-    g.setFont (mono (10.f));
-    const int v = std::max (0, lastVoices);
-    g.drawText (juce::String (v) + (v == 1 ? " VOICE" : " VOICES"), header(), juce::Justification::centredRight, false);
-}
-
-void OutputPanel::resized()
-{
-    scope.setBounds (body());
-}
-
-// ---------------------------------------------------------------------------
 // Sidebar
 // ---------------------------------------------------------------------------
-Sidebar::Sidebar (PsySynthProcessor& p) : proc (p)
+Sidebar::Sidebar (PsyBoxProcessor& p) : proc (p)
 {
     generateButton.getProperties().set ("primary", true);
     generateButton.setTooltip ("New sound in this category (locked knobs are kept)");
@@ -1092,12 +1060,20 @@ Sidebar::Sidebar (PsySynthProcessor& p) : proc (p)
     clearLocks.onClick = [this] { proc.clearLocks(); };
     arpToggle.setTooltip ("Generate adds an arp in the style of the category");
     arpToggle.setStacked (true);
+    addChildComponent (arpToggle);
     arpToggle.onToggle = [this] (bool on) { proc.setArpGeneration (on); };
     keyToggle.setTooltip ("Generate tunes the kick's body to the key you play (key tracking)");
     keyToggle.setStacked (true);
     keyToggle.onToggle = [this] (bool on) { proc.setKickKeyGeneration (on); };
     addChildComponent (keyToggle);
-    familyTabs.onChange = [this] (int i) { showFamily ((psy::Family) i); };
+    familyTabs.onChange = [this] (int i)
+    {
+        // switching family selects its first category
+        const auto f = (psy::Family) i;
+        if (psy::familyOf (proc.getCategory()) != f)
+            proc.setCategory (psy::categoriesIn (f).front());
+        showFamily (f);
+    };
     addAndMakeVisible (familyTabs);
 
     mutateAmount.setSliderStyle (juce::Slider::LinearHorizontal);
@@ -1121,7 +1097,7 @@ Sidebar::Sidebar (PsySynthProcessor& p) : proc (p)
     };
 
     for (juce::Component* c : { (juce::Component*) &generateButton, (juce::Component*) &mutateButton, (juce::Component*) &clearLocks,
-                                (juce::Component*) &mutateAmount, (juce::Component*) &seedLabel, (juce::Component*) &arpToggle })
+                                (juce::Component*) &mutateAmount, (juce::Component*) &seedLabel })
         addAndMakeVisible (c);
     proc.addChangeListener (this);
     refresh();
@@ -1136,9 +1112,12 @@ void Sidebar::refresh()
     seedLabel.setText (hexSeed (proc.getSeed()), juce::dontSendNotification);
     arpToggle.setOn (proc.getArpGeneration());
     keyToggle.setOn (proc.getKickKeyGeneration());
-    if (keyToggle.isVisible() != proc.isKickCategory())
+    // only the generator options that apply to the current category's family
+    const bool arp = psy::hasArp (psy::familyOf (proc.getCategory()));
+    if (keyToggle.isVisible() != proc.isKickCategory() || arpToggle.isVisible() != arp)
     {
         keyToggle.setVisible (proc.isKickCategory());
+        arpToggle.setVisible (arp);
         resized();
     }
     if (proc.getCategory() != lastCategory)
@@ -1303,7 +1282,8 @@ void Sidebar::paint (juce::Graphics& g)
     g.setFont (label (10.f));
     g.drawText ("AMOUNT", cap, juce::Justification::centredLeft, false);
     g.drawText ("SEED", seedCaption, juce::Justification::centredLeft, false);
-    g.drawText ("ARP", arpCaption, juce::Justification::centredLeft, false);
+    if (arpToggle.isVisible())
+        g.drawText ("ARP", arpCaption, juce::Justification::centredLeft, false);
     if (keyToggle.isVisible())
         g.drawText ("TUNE TO KEY", keyCaption, juce::Justification::centredLeft, false);
 
@@ -1329,12 +1309,16 @@ void Sidebar::resized()
     auto seedRow = a.removeFromBottom (kLabelH);
     seedCaption = seedRow;
     seedLabel.setBounds (seedRow.removeFromRight (100));
-    a.removeFromBottom (sp::sm);
 
-    // "ARP" caption left, switch right: whether Generate adds an arp
-    auto arpRow = a.removeFromBottom (kLabelH);
-    arpCaption = arpRow;
-    arpToggle.setBounds (arpRow.removeFromRight (26));
+    // "ARP" (synth categories): whether Generate adds an arp
+    arpCaption = {};
+    if (arpToggle.isVisible())
+    {
+        a.removeFromBottom (sp::sm);
+        auto arpRow = a.removeFromBottom (kLabelH);
+        arpCaption = arpRow;
+        arpToggle.setBounds (arpRow.removeFromRight (26));
+    }
 
     // "TUNE TO KEY" (kick categories): whether Generate key-tracks the kick
     keyCaption = {};
@@ -1392,12 +1376,13 @@ void Sidebar::mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelD
 // ---------------------------------------------------------------------------
 // TopBar
 // ---------------------------------------------------------------------------
-TopBar::TopBar (PsySynthProcessor& p)
-    : proc (p), quality (p, P::Quality, { "Eco", "2x", "4x" }), volume (p, P::MasterVol, "Vol")
+TopBar::TopBar (PsyBoxProcessor& p)
+    : proc (p), quality (p, P::Quality, { "Eco", "2x", "4x" }), volume (p, P::MasterVol, "Vol"), output (p)
 {
     for (juce::Component* c : { (juce::Component*) &undoButton, (juce::Component*) &redoButton,
                                 (juce::Component*) &prev, (juce::Component*) &next, (juce::Component*) &menu,
-                                (juce::Component*) &save, (juce::Component*) &quality, (juce::Component*) &volume })
+                                (juce::Component*) &save, (juce::Component*) &quality, (juce::Component*) &volume,
+                                (juce::Component*) &output })
         addAndMakeVisible (c);
     prev.onClick = [this] { proc.stepPreset (-1); };
     next.onClick = [this] { proc.stepPreset (1); };
@@ -1427,8 +1412,8 @@ void TopBar::paint (juce::Graphics& g)
 
     // wordmark
     g.setColour (col::text);
-    g.setFont (juce::Font (juce::FontOptions (heading (15.f).getTypefacePtr()).withHeight (15.f).withKerningFactor (0.32f)));
-    g.drawText ("PSYSYNTH", juce::Rectangle<int> (kPad, 0, 160, getHeight()), juce::Justification::centredLeft, false);
+    g.setFont (wordmarkFont());
+    g.drawText ("PSYBOX", juce::Rectangle<int> (kPad, 0, 160, getHeight()), juce::Justification::centredLeft, false);
 
     // preset display
     auto r = presetArea;
@@ -1449,7 +1434,7 @@ void TopBar::paint (juce::Graphics& g)
 
     g.setColour (col::textFaint);
     g.setFont (label (10.f));
-    g.drawText ("QUALITY", qualityCaption, juce::Justification::centredRight, false);
+    g.drawText ("QUALITY", qualityCaption, juce::Justification::centredLeft, false);
     g.drawText ("VOL", volumeCaption, juce::Justification::centredRight, false);
 }
 
@@ -1467,15 +1452,24 @@ void TopBar::resized()
     redoButton.setBounds (presetArea.getX() - sp::sm - 24, iconY, 24, 24);
     undoButton.setBounds (redoButton.getX() - sp::xs - 24, iconY, 24, 24);
 
+    // left: the wordmark, then oscillator quality
+    auto left = r.withTrimmedLeft (kPad + juce::GlyphArrangement::getStringWidthInt (wordmarkFont(), "PSYBOX") + sp::xl);
+    qualityCaption = left.removeFromLeft (juce::GlyphArrangement::getStringWidthInt (label (10.f), "QUALITY") + sp::sm);
+    quality.setBounds (left.removeFromLeft (cellsW (3)).withSizeKeepingCentre (cellsW (3), kCtrlH));
+
+    // right: the output window (as tall as the preset box), then volume
     auto right = r.reduced (kPad, 0);
     volume.setCompact (true);
     volume.setBounds (right.removeFromRight (28).withSizeKeepingCentre (28, 28));
     right.removeFromRight (sp::sm);
     volumeCaption = right.removeFromRight (24);
-    right.removeFromRight (sp::xl);
-    quality.setBounds (right.removeFromRight (cellsW (3)).withSizeKeepingCentre (cellsW (3), kCtrlH));
-    right.removeFromRight (sp::sm);
-    qualityCaption = right.removeFromRight (60);
+    right.removeFromRight (sp::lg);
+    output.setBounds (right.removeFromRight (256).withSizeKeepingCentre (256, presetArea.getHeight()));
+}
+
+juce::Font TopBar::wordmarkFont()
+{
+    return juce::Font (juce::FontOptions (heading (15.f).getTypefacePtr()).withHeight (15.f).withKerningFactor (0.32f));
 }
 
 void TopBar::showPresetMenu()
@@ -1496,7 +1490,7 @@ void TopBar::showPresetMenu()
     m.addItem (3, "Reveal preset folder");
     m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&menu), [this, files] (int res) {
         if (res == 1) proc.initPatch();
-        else if (res == 3) PsySynthProcessor::presetFolder().revealToUser();
+        else if (res == 3) PsyBoxProcessor::presetFolder().revealToUser();
         else if (res >= 100 && res - 100 < files.size()) proc.loadPreset (files[res - 100]);
     });
 }

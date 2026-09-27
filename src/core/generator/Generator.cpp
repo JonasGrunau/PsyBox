@@ -144,6 +144,7 @@ ParamState Generator::generate (Category c, uint32_t seed, const ParamState& cur
 
     dsp::Rng arpRng (((uint64_t) seed << 8) ^ (uint64_t) ((int) c + 1) * 0xC2B2AE3D27D4EB4FULL ^ 0x41525050ULL);
     RecipeBuilder arp (out, locks, arpRng, ranges);
+    withArp = withArp && hasArp (familyOf (c));   // basses and kicks play what you play
     arp.on (P::ArpOn, withArp);
     if (withArp)
     {

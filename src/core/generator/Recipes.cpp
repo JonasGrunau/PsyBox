@@ -64,6 +64,23 @@ namespace
         b.uni (P::MenvR, rLo, rHi);
     }
 
+    // Bass amp attack. Under ~1 ms the level jumps in one sample, a click at
+    // every note start (and from the release tail when a note retriggers);
+    // 1.5-4 ms keeps the front hard without it.
+    constexpr float kBassAttackLo = 1.5f, kBassAttackHi = 4.f;
+
+    // The knock at the start of a bass note: a fast, nearly linear pitch fall
+    // (a psy bass drops from ~1.5 octaves up to the note within 20-40 ms).
+    void bassKnock (B& b, float chance, float amtLo, float amtHi, float decLo, float decHi)
+    {
+        if (! b.chance (chance)) return;
+        b.set (P::PenvAttack, 0.f);
+        b.set (P::PenvDest, 0.f);
+        b.uni (P::PenvAmt, amtLo, amtHi);
+        b.uni (P::PenvDecay, decLo, decHi);
+        b.uni (P::PenvCurve, 0.f, 0.2f);
+    }
+
     // A plain 12 dB LP or HP request rolls its slope too, so the same recipe
     // yields soft 12 dB and steep 18/24 dB curves.
     void filter1 (B& b, int type, float cLo, float cHi, float rLo, float rHi, float eLo, float eHi)
@@ -240,6 +257,21 @@ namespace
         b.uni (P::CompOut, 4.f, 8.f);
     }
 
+    // The basses' glue: soft knee, gentle ratio, a few dB of gain reduction
+    // on the body and the make-up that puts them level with the kicks.
+    void fxCompBass (B& b)
+    {
+        b.on (P::CompOn, true);
+        b.set (P::CompMode, (float) CompMode::Normal);
+        b.uni (P::CompThresh, -24.f, -20.f);
+        b.uni (P::CompRatio, 3.f, 5.f);
+        b.uni (P::CompKnee, 6.f, 10.f);
+        b.uni (P::CompAttack, 3.f, 8.f);
+        b.uni (P::CompRelease, 50.f, 90.f);
+        b.set (P::CompMix, 1.f);
+        b.uni (P::CompOut, 10.f, 13.f);
+    }
+
     // =========================================================================
     // Recipes
     // =========================================================================
@@ -392,42 +424,38 @@ namespace
         fxChorus (b, 0.2f);
     }
 
-    void rollingBass (B& b)
+    // Psy bass for 16th rolls, modelled on sustained reference notes (C1-B2): one
+    // saw through two low-passes in series, an 18 dB one that follows the key
+    // and a 12 dB one fixed around 250 Hz, so low notes keep a soft top and
+    // high notes lose theirs faster. A filter burst through both and a pitch
+    // knock start every 16th; the body holds at full level and stops dead.
+    void psyBass (B& b)
     {
         monoVoice (b, false, 0.f, 0.f);
         b.set (P::Octave, -1.f);
         b.set (P::VelSens, 0.2f);
         b.set (P::Accent, 0.2f);
 
-        analogA (b, b.chance (0.7f) ? kSaw : b.rnd (2.4f, 3.f), 0.85f);
-        if (b.chance (0.4f))
-        {
-            analogB (b, kSaw, 0.4f, 0.7f);
-            b.uni (P::OscBFine, -12.f, 12.f);
-        }
-        b.pick (P::SubShape, { 0 });
-        b.uni (P::SubLevel, 0.2f, 0.5f);
+        analogA (b, kSaw, 0.85f);
+        b.set (P::F1Type, (float) ft (FilterType::LP18));
+        b.uni (P::F1Cutoff, 420.f, 520.f);
+        b.uni (P::F1Reso, 0.f, 0.1f);
+        b.uni (P::F1Key, 0.7f, 0.8f);
+        b.uni (P::F1Drive, 0.f, 0.2f);
+        b.uni (P::F1Env, 0.22f, 0.28f);
+        b.set (P::F2Type, (float) ft (FilterType::LP12));
+        b.set (P::FRouting, 0.f);
+        b.uni (P::F2Cutoff, 220.f, 290.f);
+        b.set (P::F2Key, 0.f);
+        b.uni (P::F2Env, 0.22f, 0.3f);
+        filterEnv (b, 0.f, 0.f, 220.f, 300.f, 0.f, 0.f, 20.f, 40.f);
+        ampEnv (b, kBassAttackLo, kBassAttackHi, 80.f, 150.f, 0.85f, 1.f, 12.f, 35.f);
+        bassKnock (b, 0.9f, 18.f, 24.f, 25.f, 35.f);
 
-        b.pick (P::F1Type, { ft (FilterType::Ladder24), ft (FilterType::LP24), ft (FilterType::LP12), ft (FilterType::LadderLP12), ft (FilterType::Diode303) },
-               { 0.4f, 0.2f, 0.15f, 0.1f, 0.15f });
-        b.uni (P::F1Cutoff, 90.f, 350.f);
-        b.uni (P::F1Reso, 0.1f, 0.4f);
-        b.uni (P::F1Env, 0.35f, 0.6f);
-        b.uni (P::F1Key, 0.5f, 1.f);
-        b.uni (P::F1Drive, 0.1f, 0.35f);
-        filterEnv (b, 0.f, 0.f, 70.f, 180.f, 0.f, 0.05f, 20.f, 60.f);
-        ampEnv (b, 0.f, 1.f, 130.f, 260.f, 0.f, 0.2f, 15.f, 50.f);
-
-        if (b.chance (0.5f))
-        {
-            b.set (P::PenvAttack, 0.f);
-            b.uni (P::PenvAmt, 5.f, 14.f);
-            b.uni (P::PenvDecay, 5.f, 25.f);
-            b.set (P::PenvCurve, 0.8f);
-        }
         b.route (S::Macro1, D::F1Cutoff, 0.2f, 0.35f);
+        b.route (S::Macro1, D::F2Cutoff, 0.2f, 0.35f);
         b.route (S::Macro2, D::FilterEnvAmt, 0.2f, 0.3f);
-        fxDist (b, 0.25f, { 0 }, 3.f, 8.f, 0.2f, 0.4f);
+        fxCompBass (b);
     }
 
     void psyLead (B& b)
@@ -1054,7 +1082,7 @@ namespace
         switch (shape)
         {
             case 0:
-                ampEnv (b, 0.f, 3.f, 200.f, 600.f, 0.85f, 1.f, 30.f, 120.f);
+                ampEnv (b, kBassAttackLo, kBassAttackHi, 200.f, 600.f, 0.85f, 1.f, 30.f, 120.f);
                 filterEnv (b, 0.f, 0.f, 60.f, 200.f, 0.2f, 0.5f, 40.f, 120.f);
                 b.uni (P::F1Env, 0.2f, 0.45f);
                 break;
@@ -1069,12 +1097,12 @@ namespace
                 b.uni (P::F1Env, 0.25f, 0.5f);
                 break;
             case 2:
-                ampEnv (b, 0.f, 2.f, 120.f, 300.f, 0.f, 0.3f, 60.f, 150.f);
+                ampEnv (b, kBassAttackLo, 3.f, 120.f, 300.f, 0.f, 0.3f, 60.f, 150.f);
                 filterEnv (b, 0.f, 0.f, 60.f, 150.f, 0.f, 0.1f, 40.f, 100.f);
                 b.uni (P::F1Env, 0.3f, 0.55f);
                 break;
             default:
-                ampEnv (b, 0.f, 2.f, 250.f, 500.f, 0.3f, 0.6f, 60.f, 150.f);
+                ampEnv (b, kBassAttackLo, 3.f, 250.f, 500.f, 0.3f, 0.6f, 60.f, 150.f);
                 filterEnv (b, 0.f, 0.f, 100.f, 250.f, 0.1f, 0.3f, 40.f, 100.f);
                 b.uni (P::F1Env, 0.3f, 0.5f);
                 break;
@@ -1114,6 +1142,62 @@ namespace
         }
         fxWidth (b, 0.85f, 0.35f, 0.6f);
     }
+
+    // Offbeat bass: one note between the kicks. Modelled on reference notes
+    // (C1-C2, one beat each): a big pitch knock, then an 18 dB low-pass that
+    // follows the key and closes from a bright pluck to almost a sine over
+    // ~300 ms. The level holds while the key is down and falls away slowly
+    // after (about -12 dB by the next kick). Mono and dry.
+    void offbeatBass (B& b)
+    {
+        monoVoice (b, false, 0.f, 0.f);
+        b.set (P::Octave, -1.f);
+        b.set (P::VelSens, 0.2f);
+        b.set (P::Accent, 0.f);
+
+        analogA (b, kSaw, 0.85f);
+        b.set (P::F1Type, (float) ft (FilterType::LP18));
+        b.uni (P::F1Cutoff, 130.f, 175.f);
+        b.uni (P::F1Reso, 0.15f, 0.3f);
+        b.uni (P::F1Key, 0.9f, 1.f);
+        b.uni (P::F1Drive, 0.4f, 0.55f);   // rounds the peaks without losing the even harmonics
+        b.uni (P::F1Env, 0.5f, 0.6f);
+        filterEnv (b, 0.f, 0.f, 700.f, 900.f, 0.f, 0.f, 60.f, 150.f);
+        ampEnv (b, kBassAttackLo, kBassAttackHi, 200.f, 400.f, 0.9f, 1.f, 500.f, 800.f);
+        bassKnock (b, 0.9f, 20.f, 26.f, 45.f, 60.f);
+
+        b.route (S::Macro1, D::F1Cutoff, 0.2f, 0.35f);
+        b.route (S::Macro2, D::FilterEnvAmt, 0.2f, 0.3f);
+        fxCompBass (b);
+    }
+
+    // Progressive bass: rounder and darker than the rolling psy bass. Modelled
+    // on sustained reference notes (C1-B2): one saw into a 12 dB low-pass with
+    // a little resonance, fixed near 120 Hz whatever the key, a filter burst
+    // and a knock at the start. Mono and dry.
+    void progBass (B& b)
+    {
+        monoVoice (b, false, 0.f, 0.f);
+        b.set (P::Octave, -1.f);
+        b.set (P::VelSens, 0.15f);
+        b.set (P::Accent, 0.f);
+
+        analogA (b, kSaw, 0.85f);
+        const int type = b.pick (P::F1Type, { ft (FilterType::LP12), ft (FilterType::LadderLP12) }, { 0.7f, 0.3f });
+        b.uni (P::F1Cutoff, 110.f, 135.f);
+        if (type == ft (FilterType::LP12)) b.uni (P::F1Reso, 0.25f, 0.35f);
+        else b.uni (P::F1Reso, 0.1f, 0.2f);
+        b.uni (P::F1Key, 0.f, 0.1f);
+        b.uni (P::F1Drive, 0.f, 0.2f);
+        b.uni (P::F1Env, 0.26f, 0.32f);
+        filterEnv (b, 0.f, 0.f, 220.f, 300.f, 0.f, 0.f, 20.f, 40.f);
+        ampEnv (b, kBassAttackLo, kBassAttackHi, 80.f, 150.f, 0.9f, 1.f, 15.f, 45.f);
+        bassKnock (b, 0.9f, 18.f, 24.f, 30.f, 42.f);
+
+        b.route (S::Macro1, D::F1Cutoff, 0.2f, 0.35f);
+        b.route (S::Macro2, D::FilterEnvAmt, 0.2f, 0.3f);
+        fxCompBass (b);
+    }
 } // namespace
 
 Recipe recipeFor (Category c) noexcept
@@ -1124,7 +1208,7 @@ Recipe recipeFor (Category c) noexcept
         case Category::Squelch:     return squelch;
         case Category::Zap:         return zap;
         case Category::Laser:       return laser;
-        case Category::RollingBass: return rollingBass;
+        case Category::PsyBass: return psyBass;
         case Category::PsyLead:     return psyLead;
         case Category::Pluck:       return pluck;
         case Category::Stab:        return stab;
@@ -1145,6 +1229,8 @@ Recipe recipeFor (Category c) noexcept
         case Category::Glitch:      return glitch;
         case Category::Reverse:     return reverse;
         case Category::BassShot:    return bassShot;
+        case Category::OffbeatBass: return offbeatBass;
+        case Category::ProgBass:    return progBass;
         case Category::KickFullOn:
         case Category::KickGoa:
         case Category::KickDarkForest:

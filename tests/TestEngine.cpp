@@ -196,6 +196,65 @@ TEST_CASE ("Bass Shot patches are loud, sub-heavy, compressed one-shots", "[engi
     CHECK (rmsRel[rmsRel.size() / 2] > -9.0);   // references: -7.5 dB median
 }
 
+TEST_CASE ("Psy, Prog and Offbeat basses are mono, dry, dense and level with the kicks", "[engine][generator]")
+{
+    // Traits measured on sustained reference notes (C1-B2): the fundamental's
+    // octave holds nearly all the energy, the body is almost as dense as a sine
+    // (crest 4-5 dB), no stereo and no tails. The glue comp's make-up puts
+    // them near the kicks' level.
+    Generator g;
+    const double fs = 44100.0;
+    const int total = (int) (fs * 0.4);
+    for (auto cat : { Category::PsyBass, Category::ProgBass, Category::OffbeatBass })
+        for (uint32_t seed = 1; seed <= 16; ++seed)
+        {
+            ParamState p = g.generate (cat, seed * 7919u, ParamState(), LockSet(), false);
+            INFO (categoryInfo()[(size_t) cat].name << " seed " << seed);
+            CHECK (p.on (P::CompOn));
+            for (auto fx : { P::DelayOn, P::ReverbOn, P::ChorusOn, P::WidthOn, P::ArpOn })
+                CHECK_FALSE (p.on (fx));
+            p.set (P::MasterVol, 0.f);
+
+            Engine e;
+            e.setParams (p);
+            e.prepare (fs, 256);
+            std::vector<float> l ((size_t) total), r ((size_t) total);
+            MidiEvent on { 0, MidiEvent::NoteOn, 40 + (int) (seed % 6), 0.9f };   // E1..A1 with the recipe's octave down
+            for (int pos = 0; pos < total; pos += 256)
+                e.process (l.data() + pos, r.data() + pos, std::min (256, total - pos), pos == 0 ? &on : nullptr, pos == 0 ? 1 : 0, 140.0);
+
+            float pk = 0.f;
+            double side = 0.0, mid = 0.0;
+            for (size_t i = 0; i < l.size(); ++i)
+            {
+                pk = std::max (pk, std::abs (l[i]));
+                side += (double) (l[i] - r[i]) * (l[i] - r[i]);
+                mid += (double) (l[i] + r[i]) * (l[i] + r[i]);
+            }
+            const double peakDb = 20.0 * std::log10 (pk);
+            CHECK (peakDb > -12.0);
+            CHECK (peakDb < -1.0);
+            CHECK (side < 1e-8 * mid);
+
+            std::vector<std::complex<double>> a (1 << 15);
+            for (size_t i = 0; i < l.size(); ++i) a[i] = l[i];
+            testutil::fft (a);
+            double low = 0.0, all = 0.0;
+            for (size_t i = 1; i < a.size() / 2; ++i)
+            {
+                const double pw = std::norm (a[i]);
+                all += pw;
+                if ((double) i * fs / (double) a.size() < 150.0) low += pw;
+            }
+            CHECK (low / all > 0.8);
+
+            const std::vector<float> body (l.begin() + (int) (0.08 * fs), l.end());
+            float bodyPk = 0.f;
+            for (float v : body) bodyPk = std::max (bodyPk, std::abs (v));
+            CHECK (20.0 * std::log10 (bodyPk / testutil::rms (body)) < 7.5);
+        }
+}
+
 TEST_CASE ("Noise Direct adds the noise after the filters", "[engine]")
 {
     // Noise only, through a dark low-pass: routed direct, its top end survives.

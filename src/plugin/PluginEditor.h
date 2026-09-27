@@ -7,7 +7,7 @@
 
 // The whole UI is laid out at a fixed logical size and scaled as one piece,
 // so every proportion survives resizing.
-class PsySynthEditor : public juce::AudioProcessorEditor,
+class PsyBoxEditor : public juce::AudioProcessorEditor,
                        public juce::ChangeListener,
                        private juce::Timer
 {
@@ -16,8 +16,8 @@ public:
     static constexpr int kKeysH = 64;   // keyboard strip under the panels (standalone only)
     static inline bool forceKeyboard = false;   // lets the snapshot tool render the strip
 
-    explicit PsySynthEditor (PsySynthProcessor&);
-    ~PsySynthEditor() override;
+    explicit PsyBoxEditor (PsyBoxProcessor&);
+    ~PsyBoxEditor() override;
 
     void paint (juce::Graphics&) override;
     void resized() override;
@@ -27,17 +27,18 @@ private:
     class Root : public juce::Component, private juce::Timer
     {
     public:
-        explicit Root (PsySynthProcessor&);
+        explicit Root (PsyBoxProcessor&);
         VoicePanel& voicePanel() noexcept { return voice; }
         void paint (juce::Graphics&) override;
         void paintOverChildren (juce::Graphics&) override;
         void resized() override;
-        // Kick patches swap the synth sections for the kick sections.
+        // Kick patches swap the synth sections for the kick sections; basses
+        // keep the synth sections without the arp.
         void updateMode();
 
     private:
-        PsySynthProcessor& proc;
-        bool kickLayout = false;
+        PsyBoxProcessor& proc;
+        bool kickLayout = false, arpLayout = true;
         TopBar top;
         Sidebar side;
         OscPanel oscA, oscB;
@@ -49,7 +50,6 @@ private:
         ModMatrixPanel matrix;
         FxPanel fx;
         MacroPanel macros;
-        OutputPanel output;
         KickPitchPanel kickPitch;
         KickAmpPanel kickAmp;
         KickClickPanel kickClick;
@@ -67,7 +67,7 @@ private:
         void drawBlackNote (int note, juce::Graphics&, juce::Rectangle<float>, bool down, bool over, juce::Colour) override;
     };
 
-    PsySynthProcessor& proc;
+    PsyBoxProcessor& proc;
     PsyLookAndFeel lnf;
     Root root;
     const bool withKeyboard;

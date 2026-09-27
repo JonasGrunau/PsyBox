@@ -56,7 +56,7 @@ TEST_CASE ("Locking one parameter does not reshuffle the others", "[generator]")
 TEST_CASE ("Mutate stays near the recipe's ranges", "[generator]")
 {
     Generator g;
-    const auto p = g.generate (Category::RollingBass, 7, ParamState(), LockSet());
+    const auto p = g.generate (Category::PsyBass, 7, ParamState(), LockSet());
     const auto& r = g.lastRanges().e[(size_t) P::F1Cutoff];
     REQUIRE (r.touched);
     auto m = p;
@@ -108,7 +108,7 @@ TEST_CASE ("Parameter mappings round-trip", "[params]")
         }
 }
 
-TEST_CASE ("Arp generation is off unless asked for, and on for every category when it is", "[generator][arp]")
+TEST_CASE ("Arp generation is off unless asked for, and on for every synth category when it is", "[generator][arp]")
 {
     Generator g;
     for (int c = 0; c < kNumCategories; ++c)
@@ -117,7 +117,7 @@ TEST_CASE ("Arp generation is off unless asked for, and on for every category wh
             INFO ("category " << c << " seed " << seed);
             CHECK_FALSE (g.generate ((Category) c, seed, ParamState(), LockSet()).on (P::ArpOn));
             const auto p = g.generate ((Category) c, seed, ParamState(), LockSet(), true);
-            CHECK (p.on (P::ArpOn));
+            CHECK (p.on (P::ArpOn) == hasArp (familyOf ((Category) c)));   // basses and kicks never get one
             CHECK_FALSE (p.on (P::ArpHold));   // a performance switch, never the recipe's
         }
 }
@@ -149,13 +149,13 @@ TEST_CASE ("Arp recipes vary with the seed and Mutate keeps them in the category
         differs = g.generate (Category::Bubble, seed, ParamState(), LockSet(), true).get (P::ArpGate) != a.get (P::ArpGate);
     CHECK (differs);
 
-    auto p = g.generate (Category::RollingBass, 3, ParamState(), LockSet(), true);
+    auto p = g.generate (Category::Acid, 3, ParamState(), LockSet(), true);
     for (uint32_t s = 0; s < 200; ++s)
     {
         p = g.mutate (1.f, s, p, LockSet());
         CHECK (p.on (P::ArpOn));
-        CHECK (p.geti (P::ArpDiv) == 12);   // rolling basses stay on 1/16
-        CHECK (p.get (P::ArpGate) <= 0.6f + 0.25f * 0.15f + 1e-3f);
+        CHECK (p.geti (P::ArpDiv) == 12);   // acid lines stay on 1/16
+        CHECK (p.get (P::ArpGate) <= 1.3f + 0.8f * 0.15f + 1e-3f);
     }
 }
 
@@ -165,7 +165,7 @@ TEST_CASE ("Generated arp patterns change with the seed and keep each category's
     const auto pattern = [&] (Category c, uint32_t seed) {
         return ArpPattern::from (g.generate (c, seed, ParamState(), LockSet(), true));
     };
-    for (auto c : { Category::Acid, Category::Bubble, Category::RollingBass, Category::Pluck, Category::Zap })
+    for (auto c : { Category::Acid, Category::Bubble, Category::Squelch, Category::Pluck, Category::Zap })
     {
         int distinct = 0;
         const auto first = pattern (c, 1);
@@ -176,9 +176,6 @@ TEST_CASE ("Generated arp patterns change with the seed and keep each category's
     }
     for (uint32_t seed = 1; seed < 60; ++seed)
     {
-        const auto p = pattern (Category::RollingBass, seed);
-        for (int beat = 0; beat < 4; ++beat)
-            CHECK_FALSE (p.has (beat * 4, ArpPattern::On));   // the kick owns the beat
         const auto sweep = pattern (Category::Riser, seed);
         for (int i = 0; i < sweep.length; ++i)
             CHECK ((sweep.has (i, ArpPattern::On) && sweep.has (i, ArpPattern::Slide)));
@@ -205,11 +202,11 @@ TEST_CASE ("A new arp pattern leaves everything else alone", "[generator][arp]")
 TEST_CASE ("Generated arp patterns are composed: figures repeat, slides land, accents stay sparse", "[generator][arp]")
 {
     Generator g;
-    for (int c = 0; c < kNumCategories; ++c)
+    for (Category c : categoriesIn (Family::Synth))
         for (uint32_t seed = 1; seed < 40; ++seed)
         {
-            const auto p = ArpPattern::from (g.generate ((Category) c, seed, ParamState(), LockSet(), true));
-            INFO ("category " << c << " seed " << seed);
+            const auto p = ArpPattern::from (g.generate (c, seed, ParamState(), LockSet(), true));
+            INFO (categoryInfo()[(size_t) c].name << " seed " << seed);
             int notes = 0;
             for (int i = 0; i < p.length; ++i)
             {
@@ -223,11 +220,6 @@ TEST_CASE ("Generated arp patterns are composed: figures repeat, slides land, ac
     for (uint32_t seed = 1; seed < 60; ++seed)
     {
         INFO ("seed " << seed);
-        // rolling bass: beats 1 and 3 carry the same figure (AAAA, AAAB, ABAB)
-        const auto bass = ArpPattern::from (g.generate (Category::RollingBass, seed, ParamState(), LockSet(), true));
-        for (int i = 0; i < 4; ++i)
-            CHECK (bass.has (i, ArpPattern::On) == bass.has (i + 8, ArpPattern::On));
-
         // acid: a line with a few accents and at most four slides
         const auto acid = ArpPattern::from (g.generate (Category::Acid, seed, ParamState(), LockSet(), true));
         int accents = 0, slides = 0;
@@ -251,8 +243,15 @@ TEST_CASE ("Every category has a name, a short name and a blurb", "[generator]")
         REQUIRE (info.blurb != nullptr);
         CHECK (std::string_view (info.name).find ('/') == std::string_view::npos);   // names are preset folders
     }
-    CHECK ((int) categoriesIn (Family::Synth).size() + (int) categoriesIn (Family::Kick).size() == kNumCategories);
-    CHECK ((int) categoriesIn (Family::Kick).size() == kNumKickCategories);
+    int listed = 0;
+    for (auto f : { Family::Synth, Family::Bass, Family::Kick })
+    {
+        CHECK ((int) categoriesIn (f).size() == familySize (f));
+        listed += (int) categoriesIn (f).size();
+    }
+    CHECK (listed == kNumCategories);
+    CHECK (familySize (Family::Bass) == 4);
+    CHECK (familySize (Family::Kick) == 5);
 }
 
 TEST_CASE ("The engine mode always follows the category, even when locked", "[generator][kick]")
@@ -295,7 +294,7 @@ TEST_CASE ("Kick and synth patches keep to their own parameters", "[generator][k
                 INFO (categoryInfo()[(size_t) c].name << " seed " << seed << " param " << defs[(size_t) i].id);
                 if (familyOf (cat) == Family::Kick && ! kickParam && ! shared)
                     CHECK (p.v[(size_t) i] == init.v[(size_t) i]);
-                if (familyOf (cat) == Family::Synth && kickParam)
+                if (familyOf (cat) != Family::Kick && kickParam)
                     CHECK (p.v[(size_t) i] == init.v[(size_t) i]);
             }
         }
@@ -317,22 +316,18 @@ TEST_CASE ("The key toggle only switches key tracking", "[generator][kick]")
         }
 }
 
-TEST_CASE ("Kick arps are four on the floor, never tied or accented", "[generator][kick][arp]")
+TEST_CASE ("Basses and kicks never get an arp", "[generator][arp]")
 {
     Generator g;
-    for (Category c : categoriesIn (Family::Kick))
-        for (uint32_t seed = 1; seed < 30; ++seed)
-        {
-            const auto p = g.generate (c, seed, ParamState(), LockSet(), true);
-            const auto pattern = ArpPattern::from (p);
-            INFO (categoryInfo()[(size_t) c].name << " seed " << seed);
-            CHECK (p.get (P::ArpGate) < 1.f);
-            for (int beat = 0; beat < 3; ++beat)
-                CHECK (pattern.has (beat * 4, ArpPattern::On));
-            for (int i = 0; i < kArpSteps; ++i)
+    for (auto f : { Family::Bass, Family::Kick })
+        for (Category c : categoriesIn (f))
+            for (uint32_t seed = 1; seed < 30; ++seed)
             {
-                CHECK_FALSE (pattern.has (i, ArpPattern::Slide));
-                CHECK_FALSE (pattern.has (i, ArpPattern::Accent));
+                INFO (categoryInfo()[(size_t) c].name << " seed " << seed);
+                const auto p = g.generate (c, seed, ParamState(), LockSet(), true);
+                CHECK_FALSE (p.on (P::ArpOn));
+                for (int i = 0; i < kNumParams; ++i)   // the arp settings stay at the init patch
+                    if (std::string_view (paramDefs()[(size_t) i].group) == "Arp")
+                        CHECK (p.v[(size_t) i] == ParamState().v[(size_t) i]);
             }
-        }
 }

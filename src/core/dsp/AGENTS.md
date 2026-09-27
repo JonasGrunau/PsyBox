@@ -30,7 +30,7 @@ Self-contained audio DSP primitives in namespace `psy::dsp`. Almost everything i
 - Header comments cite the source papers (Zavalishin, Simper, Parker et al.). Keep that style when adding algorithms.
 
 ### Testing Requirements
-- Oscillator/wavetable changes → `psysynth_tests "[osc],[blep],[wavetable]"`. These measure aliasing in dB via FFT (`tests/TestUtil.h`).
+- Oscillator/wavetable changes → `psybox_tests "[osc],[blep],[wavetable]"`. These measure aliasing in dB via FFT (`tests/TestUtil.h`).
 - Filter changes → `"[filter]"`. Shaper/FX/decimator/envelope changes → `"[shaper],[fx],[oversampling],[env]"`.
 - `[stress]` tests fuzz with extreme settings. New modules should get a finite/bounded stress test.
 

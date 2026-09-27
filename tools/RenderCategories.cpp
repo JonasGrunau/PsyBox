@@ -1,5 +1,5 @@
 // Renders a few generated patches per category to WAV files for listening
-// checks:  psysynth_render <out-dir> [seeds-per-category] [arp]
+// checks:  psybox_render <out-dir> [seeds-per-category] [arp]
 
 #include "engine/Engine.h"
 #include "generator/Generator.h"
@@ -44,7 +44,7 @@ namespace
         std::vector<Note> p;
         switch (c)
         {
-            case Category::RollingBass:
+            case Category::PsyBass:
                 for (int b = 0; b < 16; ++b)
                     for (int s = 1; s < 4; ++s) p.push_back ({ b + s * 0.25, 0.18, 36, 0.8f });
                 break;
@@ -76,6 +76,19 @@ namespace
                 for (int b = 0; b < 16; ++b) p.push_back ({ (double) b, 0.95, shots[b % 4], 0.9f });
                 break;
             }
+            case Category::ProgBass:   // the roll, E1 E1 G1 D1 by the bar (octave -1 in the recipe)
+            {
+                static const int bars[4] = { 40, 40, 43, 38 };
+                for (int b = 0; b < 16; ++b)
+                    for (int s = 1; s < 4; ++s) p.push_back ({ b + s * 0.25, 0.2, bars[b / 4], 0.8f });
+                break;
+            }
+            case Category::OffbeatBass:   // one note on every "and", same bar line
+            {
+                static const int bars[4] = { 40, 40, 43, 38 };
+                for (int b = 0; b < 16; ++b) p.push_back ({ b + 0.5, 0.4, bars[b / 4], 0.8f });
+                break;
+            }
             case Category::KickFullOn: case Category::KickGoa: case Category::KickDarkForest:
             case Category::KickHiTech: case Category::KickProgressive:
                 // four on the floor; the key changes every bar (F, F, G, D#) to hear the tracking
@@ -91,20 +104,17 @@ namespace
         return p;
     }
 
-    // With the arp on, hold keys for four bars and let the arp play them.
+    // With the arp on, hold keys for four bars and let the arp play them
+    // (synth categories only: basses and kicks keep their own pattern).
     std::vector<Note> arpPatternFor (Category c)
     {
         std::vector<int> keys;
         switch (c)
         {
-            case Category::RollingBass: keys = { 36 }; break;
             case Category::Acid: case Category::Squelch: case Category::Gurgle: keys = { 36, 39, 43 }; break;
             case Category::Riser: case Category::Uplifter: case Category::Downlifter: case Category::NoiseFx:
             case Category::Drone: case Category::Zap: case Category::Laser: keys = { 48 }; break;
             case Category::Impact: keys = { 36 }; break;
-            case Category::BassShot: keys = { 40 }; break;
-            case Category::KickFullOn: case Category::KickGoa: case Category::KickDarkForest:
-            case Category::KickHiTech: case Category::KickProgressive: keys = { 29 }; break;
             default: keys = { 60, 63, 67 }; break;
         }
         std::vector<Note> p;
@@ -130,7 +140,8 @@ int main (int argc, char** argv)
             Engine e;
             e.setParams (p);
             e.prepare (fs, 256);
-            const auto pattern = withArp ? arpPatternFor ((Category) c) : patternFor ((Category) c);
+            const bool arp = withArp && hasArp (familyOf ((Category) c));
+            const auto pattern = arp ? arpPatternFor ((Category) c) : patternFor ((Category) c);
             const int total = (int) (spb * 17);
             std::vector<float> l ((size_t) total), r ((size_t) total);
             std::vector<MidiEvent> all;
@@ -155,7 +166,7 @@ int main (int argc, char** argv)
             }
             std::string name = categoryInfo()[(size_t) c].name;
             for (auto& ch : name) if (ch == ' ') ch = '_';
-            const std::string path = dir + "/" + name + (withArp ? "_arp_" : "_") + std::to_string (s) + ".wav";
+            const std::string path = dir + "/" + name + (arp ? "_arp_" : "_") + std::to_string (s) + ".wav";
             writeWav (path, l, r, fs);
             std::printf ("%s\n", path.c_str());
         }

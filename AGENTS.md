@@ -1,14 +1,14 @@
-# psysynth
+# PsyBox
 
 **Generated:** 2026-09-27 · **Updated:** 2026-09-27
 
 ## Purpose
-PsySynth is a psytrance sound-design synthesizer (VST3 / AU / Standalone, JUCE 8). You pick one of 30 categories (25 synth sounds such as Acid, Zap and Rolling Bass, plus 5 kick styles), press **Generate**, and a seeded recipe fills every parameter. Each parameter stays editable afterwards. The code is split in two. `src/core` is JUCE-free C++20 (DSP, engine, generator) that builds and tests in seconds. `src/plugin` + `src/ui` wrap it in a JUCE processor and editor.
+PsyBox is a psytrance sound-design synthesizer (VST3 / AU / Standalone, JUCE 8). You pick one of 32 categories in three families (23 synth sounds such as Acid and Zap, 4 basses such as Psy Bass, 5 kick styles), press **Generate**, and a seeded recipe fills every parameter. Each parameter stays editable afterwards. The code is split in two. `src/core` is JUCE-free C++20 (DSP, engine, generator) that builds and tests in seconds. `src/plugin` + `src/ui` wrap it in a JUCE processor and editor.
 
 ## Key Files
 | File | Description |
 |------|-------------|
-| `CMakeLists.txt` | Targets: `psysynth_core` (static lib), `PsySynth` plugin, `psysynth_snapshot`, `psysynth_tests`, `psysynth_render`. Options `PSYSYNTH_BUILD_PLUGIN`, `PSYSYNTH_BUILD_TESTS` |
+| `CMakeLists.txt` | Targets: `psybox_core` (static lib), `PsyBox` plugin, `psybox_snapshot`, `psybox_tests`, `psybox_render`. Options `PSYBOX_BUILD_PLUGIN`, `PSYBOX_BUILD_TESTS` |
 | `README.md` | User-facing feature list, DSP summary, build commands |
 | `.gitignore` | Ignores `build*/`, `.DS_Store`, `.omc/`, `.cache/` |
 | `CLAUDE.md` | `@AGENTS.md` import so stock Claude Code loads this file |
@@ -28,18 +28,18 @@ Not source: `build/` (plugin build), `build-core/` (core-only build), `.cache/cl
 ### Working In This Directory
 - **Core-only loop is fastest.** Use it for any DSP/engine/generator change:
   ```sh
-  cmake -B build-core -G Ninja -DCMAKE_BUILD_TYPE=Release -DPSYSYNTH_BUILD_PLUGIN=OFF
-  cmake --build build-core && ./build-core/psysynth_tests
+  cmake -B build-core -G Ninja -DCMAKE_BUILD_TYPE=Release -DPSYBOX_BUILD_PLUGIN=OFF
+  cmake --build build-core && ./build-core/psybox_tests
   ```
 - Full plugin: `cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release && cmake --build build`. The build copies the plugin into `~/Library/Audio/Plug-Ins` (`COPY_PLUGIN_AFTER_BUILD`). JUCE 8.0.15 and Catch2 v3.7.1 come in through FetchContent. Pass `-DFETCHCONTENT_SOURCE_DIR_JUCE=...` to use a local JUCE checkout.
-- New `.cpp` files must be added to `CMakeLists.txt` by hand (no globbing). UI/plugin sources are listed **twice**: once for `PsySynth` and once for `psysynth_snapshot`.
+- New `.cpp` files must be added to `CMakeLists.txt` by hand (no globbing). UI/plugin sources are listed **twice**: once for `PsyBox` and once for `psybox_snapshot`.
 - Never include JUCE from `src/core`. That boundary is the reason the core target exists.
 - Don't edit `build*/` or `.cache/`.
 
 ### Testing Requirements
-- Run `./build-core/psysynth_tests` after every core change. Filter by tag, e.g. `psysynth_tests "[filter]"`.
-- UI changes: build `psysynth_snapshot` and render PNGs (see `tools/AGENTS.md`). You can review the UI without a DAW.
-- Sound changes: `./build-core/psysynth_render <out-dir> 3` writes WAVs per category.
+- Run `./build-core/psybox_tests` after every core change. Filter by tag, e.g. `psybox_tests "[filter]"`.
+- UI changes: build `psybox_snapshot` and render PNGs (see `tools/AGENTS.md`). You can review the UI without a DAW.
+- Sound changes: `./build-core/psybox_render <out-dir> 3` writes WAVs per category.
 
 ### Common Patterns
 - Namespaces: `psy` (engine/generator), `psy::dsp` (DSP), `theme` (UI tokens). Plugin/UI classes are global.

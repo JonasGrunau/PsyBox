@@ -28,8 +28,8 @@ Turns a `ParamState` plus MIDI events into stereo audio. `Params` is the single 
 - **Kick mode.** `voiceNoteOn` sends notes to the two `kicks` when `EngineMode` is Kick. Note-ons within 1 ms of a fresh hit merge into it, and note-off is ignored. `followEngineMode()` releases the synth voices and chokes the kicks when the mode changes. `ArpSettings::from` clamps the gate below 1 and drops slides in kick mode, because a tie would swallow a kick. After `reset()`, `process()` sets `cur = target` before handling any event, so re-sent notes play the new patch.
 
 ### Testing Requirements
-- `psysynth_tests "[engine]"`: init patch sound/silence, every category renders finite non-silent audio, all quality modes match, parameter fuzzing. `"[params]"` checks mapping round-trips.
-- `psysynth_tests "[kick]"`: identical hits, body on the played key, octave independence, the sweep landing, the punch envelope, one-shot, click-free retrigger, chord merge, mode switching, quality independence, no arp ties, fuzzing.
+- `psybox_tests "[engine]"`: init patch sound/silence, every category renders finite non-silent audio, all quality modes match, parameter fuzzing. `"[params]"` checks mapping round-trips.
+- `psybox_tests "[kick]"`: identical hits, body on the played key, octave independence, the sweep landing, the punch envelope, one-shot, click-free retrigger, chord merge, mode switching, quality independence, no arp ties, fuzzing.
 
 ### Common Patterns
 - Plain (denormalised) values live in `ParamState::v`. Use `get`, `geti`, `on`. `set` snaps discrete params.

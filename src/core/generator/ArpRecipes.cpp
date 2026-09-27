@@ -1,11 +1,12 @@
-// Arp recipes, one per category, used when "Arp" is ticked next to Generate.
+// Arp recipes, one per synth category, used when "Arp" is ticked next to
+// Generate. Basses and kicks have none.
 //
 // They run after the sound recipe on their own random stream and only touch
 // arp parameters, so a seed gives the same sound with or without an arp.
 // Each category has a settings recipe (rate, mode, gate...) and a pattern
 // recipe that builds its 16 steps. Patterns are written for a 138-148 BPM psy
-// grid: step 0 is the beat, so a rolling bass leaves steps 0, 4, 8, 12 to the
-// kick, and step 2 of a beat is the offbeat "and".
+// grid: step 0 is the beat (where the kick lands) and step 2 of a beat is the
+// offbeat "and".
 
 #include "Generator.h"
 
@@ -28,26 +29,7 @@ namespace
     void gate (B& b, float lo, float hi) { b.uni (P::ArpGate, lo, hi); }
     void swing (B& b, float hi) { b.uni (P::ArpSwing, 0.f, hi); }
 
-    // ---- basses and lines ----------------------------------------------------
-
-    // The psy roll: the kick owns the beat, the bass fills the other three 16ths.
-    void rollingBass (B& b)
-    {
-        b.pick (P::ArpDiv, { D1_16 });
-        b.pick (P::ArpMode, { Order });
-        b.pick (P::ArpOctaves, { 1, 2 }, { 0.85f, 0.15f });
-        gate (b, 0.35f, 0.6f);
-        swing (b, 0.06f);
-    }
-
-    // One long shot per step on the beat grid: every beat, every bar or halves.
-    void bassShot (B& b)
-    {
-        b.pick (P::ArpDiv, { D1_4 });
-        b.pick (P::ArpMode, { Order });
-        b.pick (P::ArpOctaves, { 1 });
-        gate (b, 0.8f, 1.f);
-    }
+    // ---- lines -----------------------------------------------------------------
 
     // 303 line: long gates tie into slides on the legato voice.
     void acid (B& b)
@@ -266,16 +248,6 @@ namespace
         b.pick (P::ArpOctaves, { 1, 2 });
         gate (b, 1.2f, 1.5f);
     }
-    // Kicks: straight 16ths so the pattern owns the groove; short gates, no
-    // swing. The kick engine never ties steps (see ArpSettings::from).
-    void kick (B& b)
-    {
-        b.pick (P::ArpDiv, { D1_16 });
-        b.pick (P::ArpMode, { Order });
-        b.pick (P::ArpOctaves, { 1 });
-        gate (b, 0.3f, 0.5f);
-    }
-
     // ---- patterns ---------------------------------------------------------------
     //
     // Patterns are composed, not rolled per step: each category has a small
@@ -408,22 +380,7 @@ namespace
         return p;
     }
 
-    // ---- basses and lines ----------------------------------------------------
-
-    // The kick owns every beat. Main figure: the roll (-xxx), sometimes the
-    // progressive offbeat bass (--x-); the last beat may turn around.
-    void rollingBassPattern (B& b)
-    {
-        const char* mains[] = { "-xxx", "--x-", "-x-x" };
-        const std::string main = choose (b, mains, { 0.8f, 0.12f, 0.08f });
-        const char* turns[] = { "-x-x", "--xx", "-xx-", "-xxX" };
-        const std::string turn = main == "--x-" ? std::string ("--xx") : std::string (choose (b, turns, { 0.35f, 0.25f, 0.2f, 0.2f }));
-        const char* shapes[] = { "AAAA", "AAAB", "ABAB" };
-        auto p = ArpPattern::parse (form (choose (b, shapes, { 0.5f, 0.4f, 0.1f }), main, turn));
-        const Accents rules[] = { Accents::None, Accents::Offbeats, Accents::BarEnd };
-        accent (p, choose (b, rules, { 0.55f, 0.3f, 0.15f }));
-        write (b, p);
-    }
+    // ---- lines -----------------------------------------------------------------
 
     // 303 line: an 8-step motif and its answer (A A', A B or A A), accents on
     // a rule (3 against 4, offbeats, motif starts), slides into accents and on
@@ -592,24 +549,6 @@ namespace
 
     // One boom on the one (quarter-note steps), now and then every two bars
     // or with a pickup into the next bar.
-    // Four on the floor, sometimes with a fill in the last beat. No accents
-    // (every kick at the same level) and no slides.
-    void kickPattern (B& b)
-    {
-        const char* fills[] = { "x---", "x-x-", "x--x", "x-xx" };
-        const std::string fill = choose (b, fills, { 0.4f, 0.25f, 0.2f, 0.15f });
-        const char* shapes[] = { "AAAA", "AAAB" };
-        write (b, ArpPattern::parse (form (choose (b, shapes, { 0.6f, 0.4f }), "x---", fill)));
-    }
-
-    // Steps are beats here (1/4): a shot on every beat, once a bar, on halves,
-    // or 3-3-2 across two bars.
-    void bassShotPattern (B& b)
-    {
-        const char* bars[] = { "x", "x---", "x-x-", "x--x--x-" };
-        write (b, ArpPattern::parse (choose (b, bars, { 0.4f, 0.3f, 0.2f, 0.1f })));
-    }
-
     void impactPattern (B& b)
     {
         const char* bars[] = { "X---", "X-------", "X------x", "X-----x-" };
@@ -647,6 +586,9 @@ namespace
 
     // Sweeps and beds: every step tied, so the envelopes run through.
     void sweepPattern (B& b) { riserPattern (b); }
+
+    // Basses and kicks never get an arp (hasArp): you play their rhythm.
+    void noArp (B&) {}
 } // namespace
 
 const std::vector<ArpTemplate>& arpTemplates() noexcept
@@ -674,7 +616,6 @@ Recipe arpPatternRecipeFor (Category c) noexcept
         case Category::Squelch:     return squelchPattern;
         case Category::Zap:         return zapPattern;
         case Category::Laser:       return laserPattern;
-        case Category::RollingBass: return rollingBassPattern;
         case Category::PsyLead:     return psyLeadPattern;
         case Category::Pluck:       return pluckPattern;
         case Category::Stab:        return stabPattern;
@@ -688,18 +629,21 @@ Recipe arpPatternRecipeFor (Category c) noexcept
         case Category::Gate:        return gatePattern;
         case Category::Glitch:      return glitchPattern;
         case Category::Reverse:     return reversePattern;
-        case Category::BassShot:    return bassShotPattern;
         case Category::Riser:
         case Category::Uplifter:
         case Category::Downlifter:
         case Category::NoiseFx:
         case Category::Atmos:
         case Category::Drone:       return sweepPattern;
+        case Category::PsyBass:
+        case Category::BassShot:
+        case Category::OffbeatBass:
+        case Category::ProgBass:
         case Category::KickFullOn:
         case Category::KickGoa:
         case Category::KickDarkForest:
         case Category::KickHiTech:
-        case Category::KickProgressive: return kickPattern;
+        case Category::KickProgressive: return noArp;
         case Category::Count:       break;
     }
     return acidPattern;
@@ -713,7 +657,6 @@ Recipe arpRecipeFor (Category c) noexcept
         case Category::Squelch:     return squelch;
         case Category::Zap:         return zap;
         case Category::Laser:       return laser;
-        case Category::RollingBass: return rollingBass;
         case Category::PsyLead:     return psyLead;
         case Category::Pluck:       return pluck;
         case Category::Stab:        return stab;
@@ -733,12 +676,15 @@ Recipe arpRecipeFor (Category c) noexcept
         case Category::Gate:        return gated;
         case Category::Glitch:      return glitch;
         case Category::Reverse:     return reverse;
-        case Category::BassShot:    return bassShot;
+        case Category::PsyBass:
+        case Category::BassShot:
+        case Category::OffbeatBass:
+        case Category::ProgBass:
         case Category::KickFullOn:
         case Category::KickGoa:
         case Category::KickDarkForest:
         case Category::KickHiTech:
-        case Category::KickProgressive: return kick;
+        case Category::KickProgressive: return noArp;
         case Category::Count:       break;
     }
     return acid;

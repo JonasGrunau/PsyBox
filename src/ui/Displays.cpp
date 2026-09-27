@@ -79,7 +79,7 @@ namespace
 // ---------------------------------------------------------------------------
 // WaveDisplay
 // ---------------------------------------------------------------------------
-WaveDisplay::WaveDisplay (PsySynthProcessor& p, bool b) : DisplayBase (p), isB (b) {}
+WaveDisplay::WaveDisplay (PsyBoxProcessor& p, bool b) : DisplayBase (p), isB (b) {}
 
 uint64_t WaveDisplay::fingerprint() const
 {
@@ -180,7 +180,7 @@ void WaveDisplay::paintContent (juce::Graphics& g, juce::Rectangle<float> r)
 // ---------------------------------------------------------------------------
 // FilterDisplay
 // ---------------------------------------------------------------------------
-FilterDisplay::FilterDisplay (PsySynthProcessor& p, int s) : DisplayBase (p), slot (s)
+FilterDisplay::FilterDisplay (PsyBoxProcessor& p, int s) : DisplayBase (p), slot (s)
 {
     fftData.resize (2 * 4096);
     magDb.resize (2048);
@@ -387,13 +387,41 @@ void LfoDisplay::paintContent (juce::Graphics& g, juce::Rectangle<float> r)
 }
 
 // ---------------------------------------------------------------------------
-Scope::Scope (PsySynthProcessor& p) : DisplayBase (p)
+namespace
+{
+    constexpr int kMeterFps = 40;
+    constexpr float kMeterFloorDb = -48.f;
+    constexpr float kMeterFallDb = 24.f / (float) kMeterFps;   // 24 dB/s
+    constexpr int kHoldFrames = kMeterFps * 3 / 2;             // 1.5 s
+    constexpr int kClipFrames = kMeterFps * 2;
+    constexpr float kMeterW = 92.f;                            // meter strip at the right of the window
+}
+
+Scope::Scope (PsyBoxProcessor& p) : DisplayBase (p)
 {
     buf.resize (2048);
     stopTimer();
-    startTimerHz (40);
+    startTimerHz (kMeterFps);
     setMouseCursor (juce::MouseCursor::DraggingHandCursor);
-    setTooltip ("Drag out to export this sound as a WAV file");
+    setTooltip ("Output. Drag out to export this sound as a WAV file");
+}
+
+void Scope::timerCallback()
+{
+    for (int c = 0; c < 2; ++c)
+    {
+        const auto lv = proc.takeOutLevel (c);
+        auto& m = meters[(size_t) c];
+        const float pk = juce::Decibels::gainToDecibels (lv.peak, -100.f);
+        m.peakDb = std::max (pk, m.peakDb - kMeterFallDb);
+        m.rmsDb = juce::Decibels::gainToDecibels (lv.rms, -100.f);
+        if (pk >= m.holdDb) { m.holdDb = pk; m.holdFrames = kHoldFrames; }
+        else if (m.holdFrames > 0) --m.holdFrames;
+        else m.holdDb -= kMeterFallDb;
+        if (lv.peak >= 1.f) m.clipFrames = kClipFrames;
+        else if (m.clipFrames > 0) --m.clipFrames;
+    }
+    repaint();
 }
 
 void Scope::mouseDrag (const juce::MouseEvent& e)
@@ -412,7 +440,25 @@ void Scope::mouseDrag (const juce::MouseEvent& e)
 
 void Scope::paintContent (juce::Graphics& g, juce::Rectangle<float> r)
 {
-    drawGrid (g, r, 6, 4);
+    auto meter = r.removeFromRight (kMeterW);
+    g.setColour (col::line);
+    g.fillRect (meter.getX(), meter.getY() + 4.f, 1.f, meter.getHeight() - 8.f);
+    paintMeter (g, meter.withTrimmedLeft (1.f));
+    paintWave (g, r);
+
+    if (isMouseOver() || dragging)
+    {
+        g.setColour (col::well.withAlpha (0.75f));
+        g.fillRect (r);
+        g.setColour (col::text.withAlpha (dragging ? 0.9f : 0.7f));
+        g.setFont (heading (9.5f));
+        g.drawText (dragging ? "DROP TO EXPORT WAV" : "DRAG TO EXPORT WAV", r.toNearestInt(), juce::Justification::centred, false);
+    }
+}
+
+void Scope::paintWave (juce::Graphics& g, juce::Rectangle<float> r)
+{
+    drawGrid (g, r, 6, 2);
     proc.copyScope (buf.data(), (int) buf.size());
 
     // trigger on the last rising zero crossing that leaves a full window
@@ -425,7 +471,7 @@ void Scope::paintContent (juce::Graphics& g, juce::Rectangle<float> r)
     for (int i = 0; i < win; ++i) pk = std::max (pk, std::abs (buf[(size_t) (start + i)]));
     const float gain = pk > 0.02f ? 0.9f / pk : 1.f;  // auto-scale, like a scope on auto
 
-    auto area = r.reduced (4.f, 6.f);
+    auto area = r.reduced (4.f, 3.f);
     juce::Path p;
     const int w = (int) area.getWidth();
     for (int px = 0; px <= w; ++px)
@@ -437,26 +483,49 @@ void Scope::paintContent (juce::Graphics& g, juce::Rectangle<float> r)
         else p.lineTo (area.getX() + (float) px, y);
     }
     g.setColour (accent().withAlpha (0.12f));
-    g.strokePath (p, juce::PathStrokeType (4.f));
+    g.strokePath (p, juce::PathStrokeType (3.f));
     g.setColour (accent());
     g.strokePath (p, juce::PathStrokeType (1.3f));
+}
 
-    // peak meter on the right edge
-    const float peak = proc.getPeak();
-    peakHold = std::max (peak, peakHold * 0.95f);
-    const float db = juce::Decibels::gainToDecibels (peakHold, -60.f);
-    const float h = r.getHeight() * juce::jlimit (0.f, 1.f, (db + 60.f) / 60.f);
-    auto meter = juce::Rectangle<float> (r.getRight() - 5.f, r.getBottom() - h, 3.f, h);
-    g.setColour (db > -1.f ? juce::Colour (0xffff5a4a) : col::text.withAlpha (0.7f));
-    g.fillRect (meter);
+// Two bars (L over R) on a -48..0 dB scale, the held peak of both as a number.
+void Scope::paintMeter (juce::Graphics& g, juce::Rectangle<float> r)
+{
+    const auto red = juce::Colour (0xffff5a4a);
+    auto area = r.reduced ((float) theme::sp::sm, 0.f);
+    const auto text = area.removeFromRight (28.f);
+    area.removeFromRight ((float) theme::sp::xs);
+    const auto xOf = [&] (float db) {
+        return area.getX() + area.getWidth() * juce::jlimit (0.f, 1.f, (db - kMeterFloorDb) / -kMeterFloorDb);
+    };
 
-    if (isMouseOver() || dragging)
+    constexpr float barH = 3.f, gap = 3.f;
+    float y = r.getCentreY() - barH - gap * 0.5f;
+    float hold = -100.f;
+    bool clip = false;
+    for (const auto& m : meters)
     {
-        g.setColour (col::text.withAlpha (dragging ? 0.9f : 0.6f));
-        g.setFont (heading (9.5f));
-        g.drawText (dragging ? "DROP TO EXPORT WAV" : "DRAG TO EXPORT WAV", r.reduced ((float) theme::sp::sm).toNearestInt(),
-                    juce::Justification::topLeft, false);
+        const juce::Rectangle<float> track (area.getX(), y, area.getWidth(), barH);
+        g.setColour (col::lineStrong);
+        g.fillRect (track);
+        g.setColour (accent().withAlpha (0.35f));
+        g.fillRect (track.withRight (xOf (m.peakDb)));
+        g.setColour (accent());
+        g.fillRect (track.withRight (xOf (m.rmsDb)));
+        if (m.holdDb > kMeterFloorDb)
+        {
+            g.setColour (m.clipFrames > 0 ? red : col::text.withAlpha (0.8f));
+            g.fillRect (juce::Rectangle<float> (std::min (xOf (m.holdDb), track.getRight() - 1.5f), y - 1.f, 1.5f, barH + 2.f));
+        }
+        hold = std::max (hold, m.holdDb);
+        clip = clip || m.clipFrames > 0;
+        y += barH + gap;
     }
+
+    g.setColour (clip ? red : col::textDim);
+    g.setFont (mono (9.5f));
+    g.drawText (hold > kMeterFloorDb ? juce::String (hold, 1) : juce::String ("-inf"), text.toNearestInt(),
+                juce::Justification::centredRight, false);
 }
 
 // ---------------------------------------------------------------------------

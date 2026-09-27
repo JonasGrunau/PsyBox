@@ -6,7 +6,7 @@ using psy::P;
 // ---------------------------------------------------------------------------
 // ParamKnob
 // ---------------------------------------------------------------------------
-ParamKnob::ParamKnob (PsySynthProcessor& p, P prm, const juce::String& labelOverride)
+ParamKnob::ParamKnob (PsyBoxProcessor& p, P prm, const juce::String& labelOverride)
     : proc (p), param (prm), labelText (labelOverride.isNotEmpty() ? labelOverride : juce::String (psy::def (prm).name))
 {
     const auto& d = psy::def (prm);
@@ -140,7 +140,7 @@ void ParamKnob::timerCallback()
 // ---------------------------------------------------------------------------
 // Segmented
 // ---------------------------------------------------------------------------
-Segmented::Segmented (PsySynthProcessor& p, P prm, juce::StringArray l)
+Segmented::Segmented (PsyBoxProcessor& p, P prm, juce::StringArray l)
     : proc (p), param (prm), labels (std::move (l)),
       attachment (*p.param (prm), [this] (float v) {
           selected = (int) std::lround (v);
@@ -205,7 +205,7 @@ void Segmented::mouseMove (const juce::MouseEvent& e)
 // ---------------------------------------------------------------------------
 // ToggleDot
 // ---------------------------------------------------------------------------
-ToggleDot::ToggleDot (PsySynthProcessor& p, P prm, const juce::String& t) : ToggleDot (t)
+ToggleDot::ToggleDot (PsyBoxProcessor& p, P prm, const juce::String& t) : ToggleDot (t)
 {
     attachment = std::make_unique<juce::ParameterAttachment> (*p.param (prm), [this] (float v) { on = v > 0.5f; repaint(); });
     attachment->sendInitialUpdate();
@@ -279,7 +279,7 @@ void ToggleDot::mouseDown (const juce::MouseEvent&)
 // ---------------------------------------------------------------------------
 // ParamCombo
 // ---------------------------------------------------------------------------
-ParamCombo::ParamCombo (PsySynthProcessor& p, P prm, const juce::String& cap) : caption (cap)
+ParamCombo::ParamCombo (PsyBoxProcessor& p, P prm, const juce::String& cap) : caption (cap)
 {
     const auto& d = psy::def (prm);
     // The filter list is long; group it by family in the popup.
@@ -327,7 +327,7 @@ void ParamCombo::paint (juce::Graphics& g)
 // ---------------------------------------------------------------------------
 // AmountSlider
 // ---------------------------------------------------------------------------
-AmountSlider::AmountSlider (PsySynthProcessor& p, P prm)
+AmountSlider::AmountSlider (PsyBoxProcessor& p, P prm)
 {
     slider.setSliderStyle (juce::Slider::LinearHorizontal);
     slider.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
@@ -348,7 +348,7 @@ TabStrip::TabStrip (juce::StringArray n) : names (std::move (n)) {}
 
 std::vector<juce::Rectangle<int>> TabStrip::tabBounds() const
 {
-    // Text runs flush with the strip edges; tabs are `gap` apart (sp::lg by default).
+    // Text runs flush with the strip edges; tabs are sp::lg apart.
     std::vector<juce::Rectangle<int>> out;
     int x = 0;
     const auto f = heading (9.5f);
@@ -356,7 +356,7 @@ std::vector<juce::Rectangle<int>> TabStrip::tabBounds() const
     {
         const int w = juce::GlyphArrangement::getStringWidthInt (f, names[i].toUpperCase()) + (ledOn (i) ? 11 : 0);
         out.push_back ({ x, 0, w, getHeight() });
-        x += w + gap;
+        x += w + sp::lg;
     }
     return out;
 }
@@ -373,18 +373,36 @@ void TabStrip::setSelected (int i)
     repaint();
 }
 
+// Horizontal ink extent of a line of text drawn at x = 0. The advance width
+// also counts the tracking after the last glyph, which pushes an underline
+// sized from it past the end of the word.
+static juce::Range<float> inkRange (const juce::Font& f, const juce::String& text)
+{
+    juce::GlyphArrangement ga;
+    ga.addLineOfText (f, text, 0.f, 0.f);
+    juce::Path p;
+    ga.createPath (p);
+    const auto b = p.getBounds();
+    return { b.getX(), b.getRight() };
+}
+
 void TabStrip::paint (juce::Graphics& g)
 {
     const auto tabs = tabBounds();
-    g.setFont (heading (9.5f));
+    const auto f = heading (9.5f);
+    g.setFont (f);
     for (int i = 0; i < names.size(); ++i)
     {
         auto r = tabs[(size_t) i];
         const bool sel = i == selected;
         if (sel)
         {
+            // spans the ink: from the LED (or first glyph) to the last glyph
+            const auto ink = inkRange (f, names[i].toUpperCase());
+            const float x0 = ledOn (i) ? (float) r.getX() : (float) r.getX() + ink.getStart();
+            const float x1 = (float) r.getX() + (ledOn (i) ? 11.f : 0.f) + ink.getEnd();
             g.setColour (accent());
-            g.fillRect (r.getX(), r.getBottom() - 2, r.getWidth(), 2);
+            g.fillRect (juce::Rectangle<float> (x0, (float) r.getBottom() - 2.f, x1 - x0, 2.f));
         }
         auto tr = r;
         if (ledOn (i))

@@ -6,12 +6,12 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_audio_utils/juce_audio_utils.h>
 
-class PsySynthProcessor : public juce::AudioProcessor,
+class PsyBoxProcessor : public juce::AudioProcessor,
                           public juce::ChangeBroadcaster
 {
 public:
-    PsySynthProcessor();
-    ~PsySynthProcessor() override = default;
+    PsyBoxProcessor();
+    ~PsyBoxProcessor() override = default;
 
     // ---- AudioProcessor -------------------------------------------------------
     void prepareToPlay (double sampleRate, int samplesPerBlock) override;
@@ -94,7 +94,7 @@ public:
 
     // Renders the current patch offline (one note: the last one played, held,
     // then released until the tail dies away) to a 24-bit WAV in
-    // ~/Music/PsySynth/Bounces and returns the file. Message thread.
+    // ~/Music/PsyBox/Bounces and returns the file. Message thread.
     juce::File bounceToFile();
 
     // On-screen / computer keyboard (standalone). Merged into the MIDI input.
@@ -104,8 +104,15 @@ public:
     // Mono scope ring buffer written by the audio thread, read by the GUI.
     static constexpr int kScopeSize = 4096;
     void copyScope (float* dest, int num) const noexcept;
-    float getPeak() const noexcept { return peakLevel.load (std::memory_order_relaxed); }
-    int getActiveVoices() const noexcept { return activeVoices.load (std::memory_order_relaxed); }
+    // Output level of one channel (0 = L, 1 = R), linear: the peak since the
+    // last call (so the GUI never misses one between repaints) and the RMS
+    // over ~300 ms. Message thread.
+    struct OutLevel { float peak = 0.f, rms = 0.f; };
+    OutLevel takeOutLevel (int channel) noexcept
+    {
+        return { outPeak[(size_t) channel].exchange (0.f, std::memory_order_relaxed),
+                 std::sqrt (outMeanSquare[(size_t) channel].load (std::memory_order_relaxed)) };
+    }
     // Compressor band readings in dB (band 0 only in Normal mode). The input
     // level holds its peaks and falls back at ~45 dB/s.
     struct CompReading { float inDb = -200.f, gainDb = 0.f, totalDb = 0.f; };
@@ -167,18 +174,18 @@ private:
 
     std::array<float, kScopeSize> scope {};
     std::atomic<int> scopeWrite { 0 };
-    std::atomic<float> peakLevel { 0.f };
-    std::atomic<int> activeVoices { 0 };
+    std::array<std::atomic<float>, 2> outPeak {}, outMeanSquare {};
+    std::array<float, 2> meanSquare {};   // audio thread
     std::atomic<int> arpStep { -1 };
     std::array<std::array<std::atomic<float>, 3>, 3> compMeters {};   // per band: in, gain, total
     juce::Random random;
 
     static juce::AudioProcessorValueTreeState::ParameterLayout createLayout();
     psy::ParamState currentState() const;
-    void normaliseEngineMode();   // the engine mode follows the category
+    void normaliseFamily();   // the engine mode and the arp follow the category
     void applyState (const psy::ParamState& s);
     void pushHistory();
     void restoreRanges();
 
-    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PsySynthProcessor)
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PsyBoxProcessor)
 };

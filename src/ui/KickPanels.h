@@ -11,12 +11,12 @@
 class KickPitchPanel : public Section, private juce::Timer
 {
 public:
-    explicit KickPitchPanel (PsySynthProcessor&);
+    explicit KickPitchPanel (PsyBoxProcessor&);
     void paint (juce::Graphics&) override;
     void resized() override;
 
 private:
-    PsySynthProcessor& proc;
+    PsyBoxProcessor& proc;
     KickPitchDisplay display;
     KnobSet ks;
     ToggleDot keyTrack;
@@ -27,7 +27,7 @@ private:
 class KickAmpPanel : public Section
 {
 public:
-    explicit KickAmpPanel (PsySynthProcessor&);
+    explicit KickAmpPanel (PsyBoxProcessor&);
     void resized() override;
 
 private:
@@ -38,7 +38,7 @@ private:
 class KickClickPanel : public Section
 {
 public:
-    explicit KickClickPanel (PsySynthProcessor&);
+    explicit KickClickPanel (PsyBoxProcessor&);
     void resized() override;
 
 private:
@@ -50,7 +50,7 @@ private:
 class KickDrivePanel : public Section
 {
 public:
-    explicit KickDrivePanel (PsySynthProcessor&);
+    explicit KickDrivePanel (PsyBoxProcessor&);
     void resized() override;
 
 private:
@@ -63,7 +63,7 @@ private:
 class KickWavePanel : public Section, private juce::Timer
 {
 public:
-    explicit KickWavePanel (PsySynthProcessor&);
+    explicit KickWavePanel (PsyBoxProcessor&);
     void paint (juce::Graphics&) override;
     void resized() override;
 

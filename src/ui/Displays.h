@@ -12,11 +12,11 @@ class DisplayBase : public juce::Component,
                     protected juce::Timer
 {
 public:
-    explicit DisplayBase (PsySynthProcessor& p) : proc (p) { startTimerHz (30); }
+    explicit DisplayBase (PsyBoxProcessor& p) : proc (p) { startTimerHz (30); }
     void paint (juce::Graphics&) override;
 
 protected:
-    PsySynthProcessor& proc;
+    PsyBoxProcessor& proc;
     virtual void paintContent (juce::Graphics&, juce::Rectangle<float>) = 0;
     virtual uint64_t fingerprint() const = 0;  // redraw when this changes
     void timerCallback() override;
@@ -30,7 +30,7 @@ protected:
 class WaveDisplay : public DisplayBase
 {
 public:
-    WaveDisplay (PsySynthProcessor&, bool oscB);
+    WaveDisplay (PsyBoxProcessor&, bool oscB);
 
 private:
     bool isB;
@@ -43,7 +43,7 @@ private:
 class FilterDisplay : public DisplayBase
 {
 public:
-    FilterDisplay (PsySynthProcessor&, int slot);
+    FilterDisplay (PsyBoxProcessor&, int slot);
 
 private:
     int slot;
@@ -58,7 +58,7 @@ private:
 class EnvDisplay : public DisplayBase
 {
 public:
-    explicit EnvDisplay (PsySynthProcessor& p) : DisplayBase (p) {}
+    explicit EnvDisplay (PsyBoxProcessor& p) : DisplayBase (p) {}
     void setEnvelope (int index) { env = index; lastPrint = 0; repaint(); }
 
 private:
@@ -70,7 +70,7 @@ private:
 class PitchEnvDisplay : public DisplayBase
 {
 public:
-    explicit PitchEnvDisplay (PsySynthProcessor& p) : DisplayBase (p) {}
+    explicit PitchEnvDisplay (PsyBoxProcessor& p) : DisplayBase (p) {}
 
 private:
     void paintContent (juce::Graphics&, juce::Rectangle<float>) override;
@@ -80,7 +80,7 @@ private:
 class LfoDisplay : public DisplayBase
 {
 public:
-    explicit LfoDisplay (PsySynthProcessor& p) : DisplayBase (p) {}
+    explicit LfoDisplay (PsyBoxProcessor& p) : DisplayBase (p) {}
     void setLfo (int index) { lfo = index; lastPrint = 0; repaint(); }
 
 private:
@@ -97,7 +97,7 @@ private:
 class KickDisplay : public DisplayBase
 {
 public:
-    explicit KickDisplay (PsySynthProcessor& p) : DisplayBase (p) {}
+    explicit KickDisplay (PsyBoxProcessor& p) : DisplayBase (p) {}
 
 protected:
     psy::ParamState patch() const;
@@ -164,23 +164,27 @@ private:
     void paintContent (juce::Graphics&, juce::Rectangle<float>) override;
 };
 
-// Output oscilloscope with zero-crossing trigger, plus a peak meter.
+// Output window: oscilloscope with zero-crossing trigger, plus a stereo level
+// meter (RMS bar over a peak bar, held peak tick and readout, red on clip).
 // Click and drag out of it to drop the current sound as a WAV file.
 class Scope : public DisplayBase, public juce::SettableTooltipClient
 {
 public:
-    explicit Scope (PsySynthProcessor& p);
+    explicit Scope (PsyBoxProcessor& p);
     void mouseEnter (const juce::MouseEvent&) override { repaint(); }
     void mouseExit (const juce::MouseEvent&) override { repaint(); }
     void mouseDrag (const juce::MouseEvent&) override;
     void mouseUp (const juce::MouseEvent&) override { dragging = false; repaint(); }
 
 private:
+    struct Meter { float peakDb = -100.f, rmsDb = -100.f, holdDb = -100.f; int holdFrames = 0, clipFrames = 0; };
     std::vector<float> buf;
-    float peakHold = 0.f;
+    std::array<Meter, 2> meters;
     bool dragging = false;
-    void timerCallback() override { repaint(); }
+    void timerCallback() override;
     void paintContent (juce::Graphics&, juce::Rectangle<float>) override;
+    void paintWave (juce::Graphics&, juce::Rectangle<float>);
+    void paintMeter (juce::Graphics&, juce::Rectangle<float>);
     uint64_t fingerprint() const override { return 0; }
 };
 
@@ -191,7 +195,7 @@ private:
 class CompDisplay : public DisplayBase
 {
 public:
-    explicit CompDisplay (PsySynthProcessor& p) : DisplayBase (p) {}
+    explicit CompDisplay (PsyBoxProcessor& p) : DisplayBase (p) {}
     void mouseMove (const juce::MouseEvent&) override;
     void mouseExit (const juce::MouseEvent&) override;
     void mouseDown (const juce::MouseEvent&) override;

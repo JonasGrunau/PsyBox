@@ -4,7 +4,7 @@
 **Generated:** 2026-09-27 · **Updated:** 2026-09-27
 
 ## Purpose
-The `psysynth_core` static library: plain C++20, no JUCE. It contains the DSP building blocks, the polyphonic engine that plays them, and the category generator that writes patches. It is also the include root for the target, so headers are referenced as `"dsp/…"`, `"engine/…"`, `"generator/…"`.
+The `psybox_core` static library: plain C++20, no JUCE. It contains the DSP building blocks, the polyphonic engine that plays them, and the category generator that writes patches. It is also the include root for the target, so headers are referenced as `"dsp/…"`, `"engine/…"`, `"generator/…"`.
 
 ## Subdirectories
 | Directory | Purpose |
@@ -22,7 +22,7 @@ The `psysynth_core` static library: plain C++20, no JUCE. It contains the DSP bu
 - Everything on the audio path must be real-time safe. No allocation, locks or I/O in `process`/`render`. Buffers get sized in `prepare`.
 
 ### Testing Requirements
-- Build with `-DPSYSYNTH_BUILD_PLUGIN=OFF` and run `psysynth_tests` (see `../../tests/AGENTS.md`).
+- Build with `-DPSYBOX_BUILD_PLUGIN=OFF` and run `psybox_tests` (see `../../tests/AGENTS.md`).
 
 ## Dependencies
 
