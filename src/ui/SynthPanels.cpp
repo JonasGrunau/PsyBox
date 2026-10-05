@@ -499,16 +499,17 @@ void MacroPanel::mouseDoubleClick (const juce::MouseEvent& e)
 // ---------------------------------------------------------------------------
 VoicingPanel::VoicingPanel (PsyBoxProcessor& p)
     : Section ("Voicing"), mode (p, P::VoiceMode), glideMode (p, P::GlideMode, { "Always", "Legato" }),
-      legatoGlide (p, P::GlideMode, "Legato glide")
+      modeMenu (p, P::VoiceMode, "Play Mode"), legatoGlide (p, P::GlideMode, "Legato glide")
 {
     addAndMakeVisible (mode);
+    addChildComponent (modeMenu);
     addChildComponent (glideMode);
     addAndMakeVisible (legatoGlide);
     glideMode.setTooltip ("Glide into every note, or only between overlapping notes (303 style)");
     legatoGlide.setTooltip ("Glide only between overlapping notes (303 style); off glides into every note");
     knobs = { ks.add (*this, p, P::PolyVoices), ks.add (*this, p, P::Glide), ks.add (*this, p, P::Octave),
               ks.add (*this, p, P::Accent), ks.add (*this, p, P::VelSens) };
-    extra = { ks.add (*this, p, P::BendRange) };
+    bend = ks.add (*this, p, P::BendRange);
 }
 
 void VoicingPanel::resized()
@@ -519,16 +520,25 @@ void VoicingPanel::resized()
     legatoGlide.setVisible (! tall);
     const auto gr = grid();
     captions.clear();
-    mode.setBounds (gr.control (0, 0, 3));
-    addCaption ("Play Mode", gr.cell (0, 0, 3));
-    knobs[0]->setBounds (gr.cell (3, 0));
+    // tall: the mode as buttons and Bend in the third row; short (Length or
+    // Knock underneath): the mode as a menu and Bend beside Voices
+    mode.setVisible (tall);
+    modeMenu.setVisible (! tall);
+    if (tall)
+    {
+        mode.setBounds (gr.control (0, 0, 3));
+        addCaption ("Play Mode", gr.cell (0, 0, 3));
+        knobs[0]->setBounds (gr.cell (3, 0));
+        bend->setBounds (gr.cell (0, 2));
+    }
+    else
+    {
+        modeMenu.setBounds (gr.captioned (0, 0, 2));
+        knobs[0]->setBounds (gr.cell (2, 0));
+        bend->setBounds (gr.cell (3, 0));
+    }
     for (int i = 1; i < 5; ++i)
         knobs[(size_t) i]->setBounds (gr.cell (i - 1, 1));
-    for (size_t i = 0; i < extra.size(); ++i)
-    {
-        extra[i]->setVisible (tall);
-        extra[i]->setBounds (gr.cell ((int) i, 2));
-    }
     glideMode.setVisible (tall);
     glideMode.setBounds (gr.control (1, 2, 3));
     if (tall) addCaption ("Glide", gr.cell (1, 2, 3));

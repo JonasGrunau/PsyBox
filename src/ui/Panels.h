@@ -176,9 +176,10 @@ private:
     IconButton next { IconButton::Icon::Right, "Next preset" };
     IconButton menu { IconButton::Icon::Menu, "Presets" };
     IconButton save { IconButton::Icon::Save, "Save preset" };
-    ParamKnob volume;
+    ParamKnob level;    // the patch's own level, set by Generate so patches play equally loud
+    ParamKnob volume;   // yours, kept through Generate
     Scope output;   // scope + level meter; drag it out to export a WAV
-    juce::Rectangle<int> presetArea, volumeCaption;
+    juce::Rectangle<int> presetArea, levelCaption, volumeCaption;
     static juce::Font wordmarkFont();
     void showPresetMenu();
     void savePresetDialog();

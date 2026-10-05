@@ -135,9 +135,11 @@ public:
 
 private:
     Segmented mode, glideMode;
+    ParamCombo modeMenu;   // short layout: the mode as a menu, so Bend fits beside Voices
     ToggleDot legatoGlide;
     KnobSet ks;
-    std::vector<ParamKnob*> knobs, extra;   // extra: accent and velocity, when there's room (basses)
+    std::vector<ParamKnob*> knobs;
+    ParamKnob* bend = nullptr;
 };
 
 // The energy sweep over the length: the level (fade) and the sweep curve,

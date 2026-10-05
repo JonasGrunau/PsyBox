@@ -490,11 +490,12 @@ void ViewTabs::mouseMove (const juce::MouseEvent& e)
 // TopBar
 // ---------------------------------------------------------------------------
 TopBar::TopBar (PsyBoxProcessor& p)
-    : proc (p), volume (p, P::MasterVol, "Vol"), output (p)
+    : proc (p), level (p, P::PatchGain, "Level"), volume (p, P::MasterVol, "Vol"), output (p)
 {
     for (juce::Component* c : { (juce::Component*) &views, (juce::Component*) &undoButton, (juce::Component*) &redoButton,
                                 (juce::Component*) &prev, (juce::Component*) &next, (juce::Component*) &menu,
-                                (juce::Component*) &save, (juce::Component*) &volume, (juce::Component*) &output })
+                                (juce::Component*) &save, (juce::Component*) &level, (juce::Component*) &volume,
+                                (juce::Component*) &output })
         addAndMakeVisible (c);
     prev.onClick = [this] { proc.stepPreset (-1); };
     next.onClick = [this] { proc.stepPreset (1); };
@@ -545,6 +546,7 @@ void TopBar::paint (juce::Graphics& g)
 
     g.setColour (col::textFaint);
     g.setFont (label (10.f));
+    g.drawText ("LEVEL", levelCaption, juce::Justification::centredRight, false);
     g.drawText ("VOL", volumeCaption, juce::Justification::centredRight, false);
 }
 
@@ -564,13 +566,18 @@ void TopBar::resized()
     menu.setBounds (presetArea.getRight() + sp::sm, iconY, 24, 24);
     save.setBounds (menu.getRight() + sp::xs, iconY, 24, 24);
 
-    // right: the output window (as tall as the preset box), then volume
+    // right: the output window (as tall as the preset box), the patch's
+    // level, then volume
     auto right = r.reduced (kPad, 0);
-    volume.setCompact (true);
-    volume.setBounds (right.removeFromRight (28).withSizeKeepingCentre (28, 28));
-    right.removeFromRight (sp::sm);
-    volumeCaption = right.removeFromRight (24);
-    right.removeFromRight (sp::lg);
+    const auto knob = [&] (ParamKnob& k, juce::Rectangle<int>& caption, const char* text) {
+        k.setCompact (true);
+        k.setBounds (right.removeFromRight (28).withSizeKeepingCentre (28, 28));
+        right.removeFromRight (sp::sm);
+        caption = right.removeFromRight (juce::GlyphArrangement::getStringWidthInt (label (10.f), text) + 2);
+        right.removeFromRight (sp::lg);
+    };
+    knob (volume, volumeCaption, "VOL");
+    knob (level, levelCaption, "LEVEL");
     right.removeFromLeft (save.getRight() - right.getX() + sp::xl);
     const int scopeW = std::min (232, right.getWidth());
     output.setBounds (right.removeFromRight (scopeW).withSizeKeepingCentre (scopeW, presetArea.getHeight()));
