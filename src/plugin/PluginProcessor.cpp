@@ -307,7 +307,7 @@ void PsyBoxProcessor::setCategory (Category c)
 
 void PsyBoxProcessor::saveSlot()
 {
-    slots[(size_t) category] = { true, currentState(), seed, presetName };
+    slots[(size_t) category] = { true, currentState(), seed, presetName, macroNames };
 }
 
 void PsyBoxProcessor::switchCategory (Category c)
@@ -322,6 +322,7 @@ void PsyBoxProcessor::switchCategory (Category c)
     s.set (P::MasterVol, plain (P::MasterVol));
     seed = slot.seed;
     presetName = slot.name;
+    macroNames = slot.macros;
     applyState (s);
     restoreRanges();
 }
@@ -338,6 +339,8 @@ void PsyBoxProcessor::writeSlots (juce::ValueTree& t) const
         st.setProperty ("category", c, nullptr);
         st.setProperty ("seed", (int) slot.seed, nullptr);
         st.setProperty ("name", slot.name, nullptr);
+        for (int i = 0; i < kNumMacros; ++i)
+            st.setProperty ("macro" + juce::String (i + 1), slot.macros[(size_t) i], nullptr);
         for (size_t i = 0; i < (size_t) kNumParams; ++i)
             st.setProperty (juce::Identifier (defs[i].id), slot.state.v[i], nullptr);
         all.appendChild (st, nullptr);
@@ -354,7 +357,12 @@ void PsyBoxProcessor::readSlots (const juce::ValueTree& t)
     {
         const int c = (int) st.getProperty ("category", -1);
         if (c < 0 || c >= kNumCategories) continue;
-        Slot slot { true, ParamState(), (uint32_t) (int) st.getProperty ("seed", 0), st.getProperty ("name").toString() };
+        Slot slot { true, ParamState(), (uint32_t) (int) st.getProperty ("seed", 0), st.getProperty ("name").toString(), {} };
+        for (int i = 0; i < kNumMacros; ++i)
+        {
+            const auto n = st.getProperty ("macro" + juce::String (i + 1), {}).toString();
+            slot.macros[(size_t) i] = n == "Macro " + juce::String (i + 1) ? juce::String() : n;
+        }
         for (size_t i = 0; i < (size_t) kNumParams; ++i)
             if (const auto* v = st.getPropertyPointer (juce::Identifier (defs[i].id)))
                 slot.state.v[i] = defs[i].snap ((float) *v);
@@ -372,6 +380,7 @@ void PsyBoxProcessor::generateWithSeed (uint32_t s)
     beginPatchChange();
     seed = s;
     applyState (generator.generate (category, seed, currentState(), locks, arpGeneration, kickKeyGeneration));
+    resetMacroNames();   // a new sound: the macros are named after what they now drive
     presetName = juce::String (categoryInfo()[(size_t) category].name) + " #" + juce::String::toHexString ((int) seed).toUpperCase().paddedLeft ('0', 6);
     pushHistory();
     sendChangeMessage();
@@ -432,7 +441,7 @@ void PsyBoxProcessor::pushHistory()
 {
     if (historyIndex + 1 < (int) history.size())
         history.erase (history.begin() + historyIndex + 1, history.end());
-    history.push_back ({ currentState(), seed, category, presetName });
+    history.push_back ({ currentState(), seed, category, presetName, macroNames });
     if (history.size() > 64)
         history.erase (history.begin());
     historyIndex = (int) history.size() - 1;
@@ -444,12 +453,14 @@ void PsyBoxProcessor::undo()
     beginPatchChange();
     // keep manual tweaks made since the last generator action reachable via redo
     history[(size_t) historyIndex].state = currentState();
+    history[(size_t) historyIndex].macros = macroNames;
     --historyIndex;
     const auto& h = history[(size_t) historyIndex];
     if (h.category != category) saveSlot();
     seed = h.seed;
     category = h.category;
     presetName = h.name;
+    macroNames = h.macros;
     applyState (h.state);
     restoreRanges();
     sendChangeMessage();
@@ -465,6 +476,7 @@ void PsyBoxProcessor::redo()
     seed = h.seed;
     category = h.category;
     presetName = h.name;
+    macroNames = h.macros;
     applyState (h.state);
     restoreRanges();
     sendChangeMessage();
@@ -480,17 +492,33 @@ void PsyBoxProcessor::restoreRanges()
     generator.setRanges (scratch.lastRanges());
 }
 
+juce::String PsyBoxProcessor::getMacroName (int i) const
+{
+    if (macroNames[(size_t) i].isNotEmpty())
+        return macroNames[(size_t) i];
+    const auto label = macroLabel (currentState(), i);
+    return label.empty() ? "Macro " + juce::String (i + 1) : juce::String (label);
+}
+
+bool PsyBoxProcessor::macroDrivesAnything (int i) const
+{
+    return ! macroLabel (currentState(), i).empty();
+}
+
 void PsyBoxProcessor::setMacroName (int i, const juce::String& name)
 {
-    const auto n = name.trim().substring (0, 12);
-    macroNames[(size_t) i] = n.isEmpty() ? "Macro " + juce::String (i + 1) : n;
+    // Typing the automatic name, a default name or nothing goes back to automatic.
+    auto n = name.trim().substring (0, 14);
+    macroNames[(size_t) i] = {};
+    if (n == getMacroName (i) || n == "Macro " + juce::String (i + 1))
+        n = {};
+    macroNames[(size_t) i] = n;
     sendChangeMessage();
 }
 
 void PsyBoxProcessor::resetMacroNames()
 {
-    for (int i = 0; i < kNumMacros; ++i)
-        macroNames[(size_t) i] = "Macro " + juce::String (i + 1);
+    for (auto& n : macroNames) n = {};
 }
 
 void PsyBoxProcessor::writeMacroNames (juce::ValueTree& t) const
@@ -501,8 +529,133 @@ void PsyBoxProcessor::writeMacroNames (juce::ValueTree& t) const
 
 void PsyBoxProcessor::readMacroNames (const juce::ValueTree& t)
 {
+    // Older sessions stored "Macro 1" for a name nobody typed.
     for (int i = 0; i < kNumMacros; ++i)
-        macroNames[(size_t) i] = t.getProperty ("macro" + juce::String (i + 1), "Macro " + juce::String (i + 1)).toString();
+    {
+        const auto n = t.getProperty ("macro" + juce::String (i + 1), {}).toString().trim();
+        macroNames[(size_t) i] = n == "Macro " + juce::String (i + 1) ? juce::String() : n;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Modulation
+// ---------------------------------------------------------------------------
+
+std::vector<PsyBoxProcessor::ModRoute> PsyBoxProcessor::getModRoutes() const
+{
+    std::vector<ModRoute> out;
+    for (int s = 0; s < kNumModSlots; ++s)
+    {
+        const int src = (int) std::lround (plain (modSrcParam (s)));
+        const int dst = (int) std::lround (plain (modDstParam (s)));
+        if (src > 0 && dst > 0 && src < (int) ModSrc::Count && dst < (int) ModDst::Count)
+            out.push_back ({ s, (ModSrc) src, (ModDst) dst, plain (modAmtParam (s)) });
+    }
+    return out;
+}
+
+int PsyBoxProcessor::modRoutesTo (ModDst dst, std::array<ModRoute, kNumModSlots>& out) const
+{
+    int n = 0;
+    for (int s = 0; s < kNumModSlots; ++s)
+    {
+        const int src = (int) std::lround (plain (modSrcParam (s)));
+        if (src > 0 && src < (int) ModSrc::Count && (int) std::lround (plain (modDstParam (s))) == (int) dst)
+            out[(size_t) n++] = { s, (ModSrc) src, dst, plain (modAmtParam (s)) };
+    }
+    return n;
+}
+
+int PsyBoxProcessor::findModSlot (ModSrc src, ModDst dst) const
+{
+    for (const auto& r : getModRoutes())
+        if (r.src == src && r.dst == dst) return r.slot;
+    return -1;
+}
+
+namespace
+{
+    void setPlainAsGesture (juce::RangedAudioParameter* p, const ParamDef& d, float plain)
+    {
+        p->beginChangeGesture();
+        p->setValueNotifyingHost (d.toNorm (plain));
+        p->endChangeGesture();
+    }
+} // namespace
+
+int PsyBoxProcessor::addModulation (ModSrc src, ModDst dst, float amount)
+{
+    if (src == ModSrc::None || dst == ModDst::None) return -1;
+    if (const int existing = findModSlot (src, dst); existing >= 0)
+        return existing;
+    for (int s = 0; s < kNumModSlots; ++s)
+    {
+        const bool free = std::lround (plain (modSrcParam (s))) == 0 || std::lround (plain (modDstParam (s))) == 0;
+        if (! free) continue;
+        setPlainAsGesture (param (modSrcParam (s)), def (modSrcParam (s)), (float) src);
+        setPlainAsGesture (param (modDstParam (s)), def (modDstParam (s)), (float) dst);
+        setPlainAsGesture (param (modAmtParam (s)), def (modAmtParam (s)), amount);
+        sendChangeMessage();   // macro names follow
+        return s;
+    }
+    return -1;
+}
+
+void PsyBoxProcessor::removeModulation (int slot)
+{
+    if (slot < 0 || slot >= kNumModSlots) return;
+    setPlainAsGesture (param (modSrcParam (slot)), def (modSrcParam (slot)), 0.f);
+    setPlainAsGesture (param (modDstParam (slot)), def (modDstParam (slot)), 0.f);
+    setPlainAsGesture (param (modAmtParam (slot)), def (modAmtParam (slot)), 0.f);
+    sendChangeMessage();
+}
+
+void PsyBoxProcessor::beginModAmountChange (int slot)
+{
+    if (slot >= 0 && slot < kNumModSlots) param (modAmtParam (slot))->beginChangeGesture();
+}
+
+void PsyBoxProcessor::setModAmount (int slot, float amount)
+{
+    if (slot < 0 || slot >= kNumModSlots) return;
+    const auto& d = def (modAmtParam (slot));
+    param (modAmtParam (slot))->setValueNotifyingHost (d.toNorm (juce::jlimit (-1.f, 1.f, amount)));
+}
+
+void PsyBoxProcessor::endModAmountChange (int slot)
+{
+    if (slot >= 0 && slot < kNumModSlots) param (modAmtParam (slot))->endChangeGesture();
+}
+
+// ---------------------------------------------------------------------------
+// Energy length
+// ---------------------------------------------------------------------------
+
+double PsyBoxProcessor::energyLengthSeconds() const
+{
+    if ((int) std::lround (plain (P::EnergyMode)) == (int) EnergyMode::Time)
+        return plain (P::EnergySec);
+    return energyBarsValue ((int) std::lround (plain (P::EnergyBars))) * 240.0 / juce::jmax (20.0, getBpm());
+}
+
+void PsyBoxProcessor::setEnergyMode (EnergyMode m)
+{
+    const double seconds = energyLengthSeconds();
+    if (m == EnergyMode::Time)
+    {
+        setPlainAsGesture (param (P::EnergySec), def (P::EnergySec), juce::jlimit (0.1f, 60.f, (float) seconds));
+    }
+    else
+    {
+        // the bar length nearest to what it sounds like now
+        const double bars = seconds * juce::jmax (20.0, getBpm()) / 240.0;
+        int best = 0;
+        for (int i = 1; i < def (P::EnergyBars).numChoices(); ++i)
+            if (std::abs (std::log (energyBarsValue (i) / bars)) < std::abs (std::log (energyBarsValue (best) / bars)))
+                best = i;
+        setPlainAsGesture (param (P::EnergyBars), def (P::EnergyBars), (float) best);
+    }
+    setPlainAsGesture (param (P::EnergyMode), def (P::EnergyMode), (float) m);
 }
 
 void PsyBoxProcessor::initPatch()
@@ -533,10 +686,12 @@ juce::File PsyBoxProcessor::bounceToFile()
     // ones are held for at least a beat so the body of the sound is there.
     const double attack = st.get (P::AenvA) / 1000.0, decay = st.get (P::AenvD) / 1000.0;
     const double beat = 60.0 / bpm;
-    const double gateSec = st.get (P::AenvS) < 0.05f ? juce::jlimit (0.1, 8.0, attack + decay)
+    // Energy sounds are held for their whole length.
+    const double gateSec = isEnergyCategory() ? juce::jlimit (0.1, 60.0, energyLengthSeconds())
+                         : st.get (P::AenvS) < 0.05f ? juce::jlimit (0.1, 8.0, attack + decay)
                                                      : juce::jlimit (beat, 8.0, attack + decay + 0.25);
     const int gate = (int) (gateSec * fs);
-    const int maxLen = (int) (40.0 * fs);
+    const int maxLen = (int) ((gateSec + 32.0) * fs);
 
     Engine e;
     e.setParams (st);   // before prepare, so the first note and the latency see this patch

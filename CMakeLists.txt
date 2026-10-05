@@ -76,6 +76,8 @@ if(PSYBOX_BUILD_PLUGIN)
         src/ui/PsyLookAndFeel.cpp
         src/ui/Widgets.cpp
         src/ui/Panels.cpp
+        src/ui/SynthPanels.cpp
+        src/ui/Pages.cpp
         src/ui/Displays.cpp
         src/ui/KickPanels.cpp)
 
@@ -108,6 +110,8 @@ if(PSYBOX_BUILD_PLUGIN)
         src/ui/PsyLookAndFeel.cpp
         src/ui/Widgets.cpp
         src/ui/Panels.cpp
+        src/ui/SynthPanels.cpp
+        src/ui/Pages.cpp
         src/ui/Displays.cpp
         src/ui/KickPanels.cpp)
     target_include_directories(psybox_snapshot PRIVATE src)

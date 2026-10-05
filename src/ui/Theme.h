@@ -59,6 +59,10 @@ namespace theme
     constexpr int kRowH = kPad + kHeaderH + kHeaderGap + kBodyH + kPad;  // 192
     constexpr int kCellInset = (kCellW - kKnobD) / 2;      // 8: cell edge -> knob edge
 
+    // Editor frame: the top bar and the sidebar column.
+    constexpr int kTopH = 52;
+    constexpr int kSideW = 196;
+
     // Width a run of n cells occupies visually (knob edge to knob edge).
     constexpr int cellsW (int n) { return n * kCellW - 2 * kCellInset; }
 }

@@ -4,10 +4,38 @@ using namespace theme;
 using psy::P;
 
 // ---------------------------------------------------------------------------
+// moddrag
+// ---------------------------------------------------------------------------
+namespace moddrag
+{
+    juce::var describe (psy::ModSrc s) { return "psymod:" + juce::String ((int) s); }
+
+    psy::ModSrc sourceOf (const juce::var& d)
+    {
+        const auto t = d.toString();
+        if (! t.startsWith ("psymod:")) return psy::ModSrc::None;
+        const int i = t.fromFirstOccurrenceOf (":", false, false).getIntValue();
+        return i > 0 && i < (int) psy::ModSrc::Count ? (psy::ModSrc) i : psy::ModSrc::None;
+    }
+
+    juce::String name (psy::ModSrc s)
+    {
+        return psy::choices::modSrc[(size_t) juce::jlimit (0, (int) psy::ModSrc::Count - 1, (int) s)];
+    }
+
+    bool bipolar (psy::ModSrc s)
+    {
+        using S = psy::ModSrc;
+        return s == S::Lfo1 || s == S::Lfo2 || s == S::Lfo3 || s == S::Note || s == S::PitchBend || s == S::Random;
+    }
+} // namespace moddrag
+
+// ---------------------------------------------------------------------------
 // ParamKnob
 // ---------------------------------------------------------------------------
 ParamKnob::ParamKnob (PsyBoxProcessor& p, P prm, const juce::String& labelOverride)
-    : proc (p), param (prm), labelText (labelOverride.isNotEmpty() ? labelOverride : juce::String (psy::def (prm).name))
+    : proc (p), param (prm), target (psy::modTargetFor (prm)),
+      labelText (labelOverride.isNotEmpty() ? labelOverride : juce::String (psy::def (prm).name))
 {
     const auto& d = psy::def (prm);
     slider.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
@@ -17,15 +45,21 @@ ParamKnob::ParamKnob (PsyBoxProcessor& p, P prm, const juce::String& labelOverri
     slider.setVelocityModeParameters (0.6, 1, 0.08, true, juce::ModifierKeys::shiftModifier);
     slider.getProperties().set ("bipolar", d.min < 0.f && d.max > 0.f);
     slider.setPopupDisplayEnabled (false, false, nullptr);
-    slider.setTooltip (juce::String (d.group) + " " + d.name + "  -  right-click to lock or reset");
+    slider.setTooltip (juce::String (d.group) + " " + d.name
+                       + (target != psy::ModDst::None ? "  -  drop a mod source here, right-click to lock or reset"
+                                                       : "  -  right-click to lock or reset"));
     slider.onDragStart = [this] { repaint(); };
     slider.onDragEnd = [this] { repaint(); };
     slider.onValueChange = [this] { repaint(); };
+    slider.passThrough = [this] (juce::Point<int> pt) {
+        return numRoutes > 0 && inRing (slider.getBounds().getPosition().toFloat() + pt.toFloat());
+    };
     slider.addMouseListener (this, false);
     addAndMakeVisible (slider);
     attachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (proc.apvts, d.id, slider);
     slider.setDoubleClickReturnValue (true, d.def);
-    startTimerHz (10);
+    refreshRoutes();
+    startTimerHz (target != psy::ModDst::None ? 15 : 10);
 }
 
 void ParamKnob::resized()
@@ -41,10 +75,62 @@ void ParamKnob::resized()
     slider.setBounds (r.getCentreX() - d / 2, r.getY(), d, d);
 }
 
+juce::Point<float> ParamKnob::knobCentre() const { return slider.getBounds().toFloat().getCentre(); }
+
+// Same geometry as PsyLookAndFeel::drawRotarySlider.
+float ParamKnob::trackRadius() const
+{
+    return (float) std::min (slider.getWidth(), slider.getHeight()) * 0.5f - 2.f;
+}
+
+bool ParamKnob::inRing (juce::Point<float> pt) const
+{
+    const float r = trackRadius();
+    const float body = r - (r * 2.f + 4.f > 44.f ? 2.5f : 2.f) - 3.5f;
+    const float dist = pt.getDistanceFrom (knobCentre());
+    return dist >= body - 1.f && dist <= r + 4.f;
+}
+
+int ParamKnob::editableRoute() const
+{
+    for (int i = 0; i < numRoutes; ++i)
+        if (routes[(size_t) i].src == proc.uiSelectedSource) return i;
+    return numRoutes > 0 ? 0 : -1;
+}
+
+void ParamKnob::refreshRoutes()
+{
+    if (target == psy::ModDst::None) return;
+    numRoutes = proc.modRoutesTo (target, routes);
+    uint64_t h = 1469598103934665603ULL ^ (uint64_t) numRoutes;
+    for (int i = 0; i < numRoutes; ++i)
+    {
+        const auto& r = routes[(size_t) i];
+        h = (h ^ (uint64_t) (r.slot * 131 + (int) r.src)) * 1099511628211ULL;
+        h = (h ^ (uint64_t) std::lround (r.amount * 10000.f)) * 1099511628211ULL;
+    }
+    h ^= (uint64_t) proc.uiSelectedSource << 40;
+    if (h != routePrint)
+    {
+        routePrint = h;
+        repaint();
+    }
+}
+
 void ParamKnob::paint (juce::Graphics& g)
 {
     if (compact) return;
     const auto area = getLocalBounds().removeFromBottom (kLabelH);
+    const int ri = editableRoute();
+    if ((ringHover || ringSlot >= 0) && ri >= 0)
+    {
+        const auto& r = routes[(size_t) ri];
+        g.setColour (col::text);
+        g.setFont (mono (10.f));
+        g.drawText (moddrag::name (r.src) + " " + juce::String (juce::roundToInt (r.amount * 100.f)) + "%", area,
+                    juce::Justification::centred, false);
+        return;
+    }
     const bool hot = slider.isMouseOverOrDragging();
     if (hot)
     {
@@ -60,6 +146,62 @@ void ParamKnob::paint (juce::Graphics& g)
     }
 }
 
+void ParamKnob::paintOverChildren (juce::Graphics& g)
+{
+    if (target == psy::ModDst::None) return;
+    const auto c = knobCentre();
+    const float r = trackRadius();
+    const float stroke = r * 2.f + 4.f > 44.f ? 2.5f : 2.f;
+    const float body = r - stroke - 3.5f;
+
+    // while a source is dragged, every knob that takes it shows a ring
+    if (proc.uiDragSource != psy::ModSrc::None)
+    {
+        const float rr = r + 1.5f;
+        g.setColour (dropHover ? col::text : col::text.withAlpha (0.55f));
+        if (dropHover)
+            g.drawEllipse (c.x - rr, c.y - rr, rr * 2.f, rr * 2.f, 2.f);
+        else
+        {
+            juce::Path ring;
+            ring.addEllipse (c.x - rr, c.y - rr, rr * 2.f, rr * 2.f);
+            juce::Path dashed;
+            const float dashes[] = { 2.f, 3.f };
+            juce::PathStrokeType (1.f).createDashedStroke (dashed, ring, dashes, 2);
+            g.fillPath (dashed);
+        }
+    }
+    if (numRoutes == 0) return;
+
+    // one arc per route between body and track: from the value as far as the
+    // amount takes it (both ways for sources that swing both ways)
+    const float start = juce::degreesToRadians (225.f), end = juce::degreesToRadians (495.f);
+    const float pos = (float) slider.valueToProportionOfLength (slider.getValue());
+    const float ringR = body + 2.25f;
+    const int sel = editableRoute();
+    for (int pass = 0; pass < 2; ++pass)
+        for (int i = 0; i < numRoutes; ++i)
+        {
+            const bool isSel = i == sel;
+            if (isSel != (pass == 1)) continue;   // the editable ring on top
+            const auto& rt = routes[(size_t) i];
+            const float depth = rt.amount * psy::modDepthNorm (rt.dst);
+            const float to = juce::jlimit (0.f, 1.f, pos + depth);
+            const float from = moddrag::bipolar (rt.src) ? juce::jlimit (0.f, 1.f, pos - depth) : pos;
+            const float a0 = start + std::min (from, to) * (end - start), a1 = start + std::max (from, to) * (end - start);
+            const auto colour = isSel ? col::text : col::text.withAlpha (0.4f);
+            g.setColour (colour);
+            if (a1 - a0 > 0.01f)
+            {
+                juce::Path arc;
+                arc.addCentredArc (c.x, c.y, ringR, ringR, 0.f, a0, a1, true);
+                g.strokePath (arc, juce::PathStrokeType (isSel ? 2.f : 1.5f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+            }
+            const auto tip = c.getPointOnCircumference (ringR, start + to * (end - start));
+            g.fillEllipse (tip.x - 2.f, tip.y - 2.f, 4.f, 4.f);
+        }
+}
+
 void ParamKnob::mouseDoubleClick (const juce::MouseEvent& e)
 {
     if (onRename && e.eventComponent == this && e.y >= getHeight() - kLabelH - kLabelGap)
@@ -71,7 +213,7 @@ void ParamKnob::startRename()
     editor = std::make_unique<juce::TextEditor>();
     editor->setFont (label (10.f));
     editor->setJustification (juce::Justification::centred);
-    editor->setInputRestrictions (12);
+    editor->setInputRestrictions (14);
     editor->setIndents (0, 0);
     editor->setBorder ({});
     editor->setColour (juce::TextEditor::backgroundColourId, col::well);
@@ -100,9 +242,65 @@ void ParamKnob::finishRename (bool commit)
 void ParamKnob::mouseDown (const juce::MouseEvent& e)
 {
     if (e.mods.isPopupMenu())
+    {
         showMenu();
-    else if (e.mods.isAltDown())
+        return;
+    }
+    if (e.eventComponent == this && numRoutes > 0 && inRing (e.position))
+    {
+        const int ri = editableRoute();
+        ringSlot = routes[(size_t) ri].slot;
+        proc.uiSelectedSource = routes[(size_t) ri].src;
+        ringStartAmount = routes[(size_t) ri].amount;
+        ringStartY = e.position.y;
+        proc.beginModAmountChange (ringSlot);
+        repaint();
+        return;
+    }
+    if (e.mods.isAltDown())
         proc.setLocked (param, ! proc.isLocked (param));
+}
+
+void ParamKnob::mouseDrag (const juce::MouseEvent& e)
+{
+    if (ringSlot < 0 || e.eventComponent != this) return;
+    const float speed = e.mods.isShiftDown() ? 0.0015f : 0.008f;
+    proc.setModAmount (ringSlot, ringStartAmount + (ringStartY - e.position.y) * speed);
+    refreshRoutes();
+}
+
+void ParamKnob::mouseUp (const juce::MouseEvent&)
+{
+    if (ringSlot < 0) return;
+    proc.endModAmountChange (ringSlot);
+    ringSlot = -1;
+    repaint();
+}
+
+void ParamKnob::mouseMove (const juce::MouseEvent& e)
+{
+    const bool h = e.eventComponent == this && numRoutes > 0 && inRing (e.position);
+    if (h != ringHover)
+    {
+        ringHover = h;
+        setMouseCursor (h ? juce::MouseCursor::UpDownResizeCursor : juce::MouseCursor::NormalCursor);
+        repaint();
+    }
+}
+
+bool ParamKnob::isInterestedInDragSource (const SourceDetails& d)
+{
+    return target != psy::ModDst::None && moddrag::sourceOf (d.description) != psy::ModSrc::None;
+}
+
+void ParamKnob::itemDropped (const SourceDetails& d)
+{
+    dropHover = false;
+    const auto src = moddrag::sourceOf (d.description);
+    if (proc.addModulation (src, target, 0.25f) >= 0)
+        proc.uiSelectedSource = src;
+    refreshRoutes();
+    repaint();
 }
 
 void ParamKnob::showMenu()
@@ -113,7 +311,26 @@ void ParamKnob::showMenu()
     m.addItem (1, locked ? "Unlock" : "Lock (keep on Generate)");
     m.addItem (2, "Reset to default");
     if (onRename) m.addItem (3, "Rename...");
-    m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&slider), [this, locked] (int r) {
+    if (numRoutes > 0)
+    {
+        m.addSectionHeader ("Modulation");
+        for (int i = 0; i < numRoutes; ++i)
+        {
+            const auto& r = routes[(size_t) i];
+            juce::PopupMenu sub;
+            sub.addItem (100 + i * 4, "Edit with the ring", true, editableRoute() == i);
+            sub.addItem (101 + i * 4, "Invert");
+            sub.addItem (102 + i * 4, "Remove");
+            m.addSubMenu (moddrag::name (r.src) + "  " + juce::String (juce::roundToInt (r.amount * 100.f)) + "%", sub);
+        }
+    }
+    else if (target != psy::ModDst::None)
+    {
+        m.addSeparator();
+        m.addItem (4, "Drag an LFO, envelope or macro here to modulate", false);
+    }
+    const auto snapshot = routes;
+    m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&slider), [this, locked, snapshot] (int r) {
         if (r == 1) proc.setLocked (param, ! locked);
         if (r == 3) startRename();
         if (r == 2)
@@ -122,6 +339,22 @@ void ParamKnob::showMenu()
             p->beginChangeGesture();
             p->setValueNotifyingHost (p->getDefaultValue());
             p->endChangeGesture();
+        }
+        if (r >= 100)
+        {
+            const auto& rt = snapshot[(size_t) ((r - 100) / 4)];
+            switch ((r - 100) % 4)
+            {
+                case 0: proc.uiSelectedSource = rt.src; break;
+                case 1:
+                    proc.beginModAmountChange (rt.slot);
+                    proc.setModAmount (rt.slot, -rt.amount);
+                    proc.endModAmountChange (rt.slot);
+                    break;
+                case 2: proc.removeModulation (rt.slot); break;
+                default: break;
+            }
+            refreshRoutes();
         }
     });
 }
@@ -135,6 +368,124 @@ void ParamKnob::timerCallback()
         slider.getProperties().set ("locked", locked);
         slider.repaint();
     }
+    refreshRoutes();
+    const bool dragging = proc.uiDragSource != psy::ModSrc::None && target != psy::ModDst::None;
+    if (dragging != dragShown)
+    {
+        dragShown = dragging;
+        repaint();
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ModSourceHandle
+// ---------------------------------------------------------------------------
+ModSourceHandle::ModSourceHandle (PsyBoxProcessor& p, psy::ModSrc s, const juce::String& l)
+    : proc (p), source (s), label (l)
+{
+    setMouseCursor (juce::MouseCursor::DraggingHandCursor);
+    setTooltip ("Drag " + moddrag::name (s) + " onto a knob to modulate it");
+    startTimerHz (5);
+}
+
+int ModSourceHandle::idealWidth() const
+{
+    return 12 + (label.isNotEmpty() ? sp::xs + juce::GlyphArrangement::getStringWidthInt (heading (9.5f), label.toUpperCase()) + 2 : 0);
+}
+
+void ModSourceHandle::drawIcon (juce::Graphics& g, juce::Rectangle<float> r, juce::Colour c)
+{
+    // four arrows from the centre, like Serum's drag handles
+    const auto ctr = r.getCentre();
+    const float s = std::min (r.getWidth(), r.getHeight()) * 0.5f;
+    juce::Path p;
+    for (int i = 0; i < 4; ++i)
+    {
+        const float a = (float) i * juce::MathConstants<float>::halfPi;
+        const auto dir = juce::Point<float> (std::cos (a), std::sin (a));
+        const auto nrm = juce::Point<float> (-dir.y, dir.x);
+        const auto tip = ctr + dir * s;
+        p.startNewSubPath (ctr + dir * (s * 0.2f));
+        p.lineTo (tip);
+        p.startNewSubPath (tip - dir * (s * 0.42f) + nrm * (s * 0.36f));
+        p.lineTo (tip);
+        p.lineTo (tip - dir * (s * 0.42f) - nrm * (s * 0.36f));
+    }
+    g.setColour (c);
+    g.strokePath (p, juce::PathStrokeType (1.2f, juce::PathStrokeType::mitered, juce::PathStrokeType::rounded));
+}
+
+void ModSourceHandle::paint (juce::Graphics& g)
+{
+    const bool hot = isMouseOver() || dragging;
+    auto r = getLocalBounds().toFloat();
+    const auto iconColour = used ? accent() : (hot ? col::text : col::textDim);
+    drawIcon (g, r.removeFromLeft (12.f).withSizeKeepingCentre (11.f, 11.f).translated (0.f, tab ? -1.f : 0.f), iconColour);
+    if (label.isEmpty()) return;
+    r.removeFromLeft ((float) sp::xs);
+    g.setFont (heading (9.5f));
+    g.setColour (selected || hot ? col::text : col::textDim);
+    g.drawText (label.toUpperCase(), r.withTrimmedBottom (tab ? 2.f : 0.f), juce::Justification::centredLeft, false);
+    if (tab && selected)
+    {
+        g.setColour (col::text);
+        g.fillRect (0.f, (float) getHeight() - 2.f, (float) getWidth(), 2.f);
+    }
+}
+
+void ModSourceHandle::mouseDown (const juce::MouseEvent&)
+{
+    dragging = false;
+}
+
+void ModSourceHandle::mouseDrag (const juce::MouseEvent& e)
+{
+    if (dragging || e.getDistanceFromDragStart() < 4) return;
+    if (auto* container = juce::DragAndDropContainer::findParentDragContainerFor (this))
+    {
+        dragging = true;
+        proc.uiSelectedSource = source;
+        // a small pill with the source name follows the mouse
+        const auto name = moddrag::name (source).toUpperCase();
+        const int w = juce::GlyphArrangement::getStringWidthInt (heading (9.5f), name) + 30, h = 20;
+        juce::Image img (juce::Image::ARGB, w * 2, h * 2, true);
+        {
+            juce::Graphics ig (img);
+            ig.addTransform (juce::AffineTransform::scale (2.f));
+            ig.setColour (col::panel.withAlpha (0.95f));
+            ig.fillRoundedRectangle (0.5f, 0.5f, (float) w - 1.f, (float) h - 1.f, 10.f);
+            ig.setColour (accent());
+            ig.drawRoundedRectangle (0.5f, 0.5f, (float) w - 1.f, (float) h - 1.f, 10.f, 1.f);
+            drawIcon (ig, { 7.f, 4.f, 12.f, 12.f }, accent());
+            ig.setColour (col::text);
+            ig.setFont (heading (9.5f));
+            ig.drawText (name, juce::Rectangle<int> (23, 0, w - 26, h), juce::Justification::centredLeft, false);
+        }
+        juce::ScaledImage scaled (img, 2.0);
+        container->startDragging (moddrag::describe (source), this, scaled, false, nullptr, &e.source);
+        repaint();
+    }
+}
+
+void ModSourceHandle::mouseUp (const juce::MouseEvent& e)
+{
+    const bool wasDrag = dragging;
+    dragging = false;
+    repaint();
+    if (! wasDrag && e.mouseWasClicked())
+    {
+        proc.uiSelectedSource = source;
+        if (onClick) onClick();
+    }
+}
+
+void ModSourceHandle::timerCallback()
+{
+    bool u = false;
+    for (int s = 0; s < psy::kNumModSlots && ! u; ++s)
+        u = (int) std::lround (proc.plain (psy::modSrcParam (s))) == (int) source
+         && (int) std::lround (proc.plain (psy::modDstParam (s))) > 0;
+    if (u != used) { used = u; repaint(); }
 }
 
 // ---------------------------------------------------------------------------
@@ -223,7 +574,8 @@ void Segmented::paint (juce::Graphics& g)
 void Segmented::mouseDown (const juce::MouseEvent& e)
 {
     const int i = indexAt (e.getPosition());
-    attachment.setValueAsCompleteGesture ((float) i);
+    if (onPick) onPick (i);
+    else attachment.setValueAsCompleteGesture ((float) i);
 }
 
 void Segmented::mouseMove (const juce::MouseEvent& e)
@@ -431,7 +783,7 @@ void TabStrip::paint (juce::Graphics& g)
             const auto ink = inkRange (f, names[i].toUpperCase());
             const float x0 = ledOn (i) ? (float) r.getX() : (float) r.getX() + ink.getStart();
             const float x1 = (float) r.getX() + (ledOn (i) ? 11.f : 0.f) + ink.getEnd();
-            g.setColour (accent());
+            g.setColour (col::text);   // neutral: the active tab doesn't change colour with the category
             g.fillRect (juce::Rectangle<float> (x0, (float) r.getBottom() - 2.f, x1 - x0, 2.f));
         }
         auto tr = r;
@@ -530,6 +882,12 @@ void IconButton::paintButton (juce::Graphics& g, bool over, bool down)
                 p.startNewSubPath (c.x - s, c.y + (float) i * s * 0.65f);
                 p.lineTo (c.x + s, c.y + (float) i * s * 0.65f);
             }
+            break;
+        case Icon::Close:
+            p.startNewSubPath (c.x - s * 0.7f, c.y - s * 0.7f);
+            p.lineTo (c.x + s * 0.7f, c.y + s * 0.7f);
+            p.startNewSubPath (c.x + s * 0.7f, c.y - s * 0.7f);
+            p.lineTo (c.x - s * 0.7f, c.y + s * 0.7f);
             break;
         case Icon::Dice:
         case Icon::Mutate:

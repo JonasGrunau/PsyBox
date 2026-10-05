@@ -58,6 +58,9 @@ public:
     bool getKickKeyGeneration() const noexcept { return kickKeyGeneration; }
     void setKickKeyGeneration (bool on);
     bool isKickCategory() const noexcept { return psy::familyOf (category) == psy::Family::Kick; }
+    bool isEnergyCategory() const noexcept { return psy::isEnergy (category); }
+    bool categoryHasArp() const noexcept { return psy::hasArp (category); }
+    double getBpm() const noexcept { return lastBpm.load (std::memory_order_relaxed); }
     int getLastPlayedNote() const noexcept { return lastPlayedNote.load (std::memory_order_relaxed); }
 
     // Arp pattern editing (message thread). The pattern is plain parameters;
@@ -86,11 +89,41 @@ public:
     juce::Array<juce::File> listPresets() const;
     void initPatch();
 
-    // User names for the four macros. Part of the patch (session + presets);
-    // Generate and Mutate leave them alone.
+    // Macro names. Each macro is named after what it drives ("Cutoff",
+    // "Reverb", "Filter + Space") and the name follows the matrix as it
+    // changes, until the user types one; an empty name goes back to the
+    // automatic one. Typed names are part of the patch (session + presets);
+    // Generate clears them, Mutate leaves them alone.
     static constexpr int kNumMacros = 4;
-    juce::String getMacroName (int i) const { return macroNames[(size_t) i]; }
+    using MacroNames = std::array<juce::String, kNumMacros>;
+    juce::String getMacroName (int i) const;   // never empty ("Macro 3" when it drives nothing)
+    bool macroDrivesAnything (int i) const;
+    bool isMacroNameTyped (int i) const { return macroNames[(size_t) i].isNotEmpty(); }
     void setMacroName (int i, const juce::String& name);
+
+    // ---- Modulation (message thread) ------------------------------------------
+    // The matrix as routes. Drag-and-drop adds one (or finds the existing one
+    // for the same source and target); the rings around knobs edit amounts.
+    struct ModRoute { int slot; psy::ModSrc src; psy::ModDst dst; float amount; };
+    std::vector<ModRoute> getModRoutes() const;   // slots with a source and a target
+    int findModSlot (psy::ModSrc, psy::ModDst) const;
+    int modRoutesTo (psy::ModDst, std::array<ModRoute, psy::kNumModSlots>& out) const;   // no allocation: knobs poll it
+    int addModulation (psy::ModSrc, psy::ModDst, float amount = 0.3f);   // -1 when the matrix is full
+    void removeModulation (int slot);
+    void beginModAmountChange (int slot);
+    void setModAmount (int slot, float amount);   // inside begin/end, or as a one-off gesture
+    void endModAmountChange (int slot);
+
+    // Editor state (message thread, not saved): the mod source the rings
+    // edit first, and the one being dragged onto a knob.
+    psy::ModSrc uiSelectedSource = psy::ModSrc::None;
+    psy::ModSrc uiDragSource = psy::ModSrc::None;
+
+    // ---- Energy length --------------------------------------------------------
+    // Switching between bars and seconds keeps the length as it sounds at the
+    // current tempo.
+    void setEnergyMode (psy::EnergyMode);
+    double energyLengthSeconds() const;
 
     // Renders the current patch offline (one note: the last one played, held,
     // then released until the tail dies away) to a 24-bit WAV in
@@ -155,20 +188,20 @@ private:
     void beginPatchChange() noexcept { patchEpoch.fetch_add (1, std::memory_order_release); }
     static constexpr int kFadeOut = 480, kFadeIn = 128;   // 10 ms, ~3 ms at 48 kHz
     std::atomic<double> lastBpm { 120.0 };
-    std::array<juce::String, kNumMacros> macroNames;
+    MacroNames macroNames;   // typed names; empty = automatic
     void resetMacroNames();
     void writeMacroNames (juce::ValueTree&) const;
     void readMacroNames (const juce::ValueTree&);
 
     // The patch each category had when you last left it; restored when you come back.
-    struct Slot { bool valid = false; psy::ParamState state; uint32_t seed = 0; juce::String name; };
+    struct Slot { bool valid = false; psy::ParamState state; uint32_t seed = 0; juce::String name; MacroNames macros; };
     std::array<Slot, psy::kNumCategories> slots;
     void saveSlot();
     void switchCategory (psy::Category c);   // saves the old slot, restores or generates the new one
     void writeSlots (juce::ValueTree&) const;
     void readSlots (const juce::ValueTree&);
 
-    struct Snapshot { psy::ParamState state; uint32_t seed; psy::Category category; juce::String name; };
+    struct Snapshot { psy::ParamState state; uint32_t seed; psy::Category category; juce::String name; MacroNames macros; };
     std::vector<Snapshot> history;
     int historyIndex = -1;
 

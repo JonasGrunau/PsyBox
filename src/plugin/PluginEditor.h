@@ -1,15 +1,16 @@
 #pragma once
 
 #include "PluginProcessor.h"
-#include "ui/KickPanels.h"
-#include "ui/Panels.h"
+#include "ui/Pages.h"
 #include "ui/PsyLookAndFeel.h"
 
 // The whole UI is laid out at a fixed logical size and scaled as one piece,
-// so every proportion survives resizing.
+// so every proportion survives resizing. Mod sources are dragged onto knobs
+// through the editor (it is the drag-and-drop container).
 class PsyBoxEditor : public juce::AudioProcessorEditor,
-                       public juce::ChangeListener,
-                       private juce::Timer
+                     public juce::ChangeListener,
+                     public juce::DragAndDropContainer,
+                     private juce::Timer
 {
 public:
     static constexpr int kW = 1280, kH = 820;
@@ -22,39 +23,39 @@ public:
     void paint (juce::Graphics&) override;
     void resized() override;
     void changeListenerCallback (juce::ChangeBroadcaster*) override;
+    void showView (View v) { root.showView (v); }
+
+protected:
+    void dragOperationStarted (const juce::DragAndDropTarget::SourceDetails&) override;
+    void dragOperationEnded (const juce::DragAndDropTarget::SourceDetails&) override;
 
 private:
     class Root : public juce::Component, private juce::Timer
     {
     public:
         explicit Root (PsyBoxProcessor&);
-        VoicePanel& voicePanel() noexcept { return voice; }
         void paint (juce::Graphics&) override;
-        void paintOverChildren (juce::Graphics&) override;
         void resized() override;
-        // Kick patches swap the synth sections for the kick sections; basses
-        // keep the synth sections without the arp.
+        // The views a category offers (kicks: no matrix, only melodic sounds
+        // an arp) and what sits under the voicing on the OSC page.
         void updateMode();
+        void showView (View);
 
     private:
         PsyBoxProcessor& proc;
-        bool kickLayout = false, arpLayout = true;
+        bool kickLayout = false;
+        int lastMode = -1;
+        View view = View::Main;
         TopBar top;
         Sidebar side;
-        OscPanel oscA, oscB;
-        MixerPanel mixer;
-        FilterPanel f1, f2;
-        VoicePanel voice;
-        EnvPanel env;
-        LfoPanel lfo;
-        ModMatrixPanel matrix;
-        FxPanel fx;
-        MacroPanel macros;
-        KickPitchPanel kickPitch;
-        KickAmpPanel kickAmp;
-        KickClickPanel kickClick;
-        KickDrivePanel kickDrive;
-        KickWavePanel kickWave;
+        OscPage osc;
+        KickPage kick;
+        FxPage fx;
+        MatrixPage matrix;
+        GlobalPage global;
+        ArpPage arp;
+        std::vector<View> available() const;
+        juce::Component* pageFor (View) const;
         void timerCallback() override { updateMode(); }   // automation / state loads
     };
 
@@ -72,7 +73,6 @@ private:
     Root root;
     const bool withKeyboard;
     Keys keyboard;
-    ArpPatternEditor patternEditor;   // over the panels, same scale as root
     int totalH() const { return kH + (withKeyboard ? kKeysH : 0); }
     // Keeps the piano playable from the computer keyboard: controls never take
     // focus, and focus returns to the piano whenever nothing is being typed.

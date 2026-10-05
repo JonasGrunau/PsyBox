@@ -2,58 +2,64 @@
 
 using namespace theme;
 
-namespace
-{
-    constexpr int kTopH = 52;
-    constexpr int kSideW = 196;
-    // Rows of the main grid: height, number of sections and their widths (each
-    // row sums to 1084). Widths follow from content: padding + displays + whole
-    // knob cells. Kick patches use their own rows 0-2, and row 3 (FX, macros)
-    // is shared. The output scope and meter live in the top bar.
-    struct RowSpec { int h; int n; int w[3]; };
-    constexpr RowSpec kRows[4] = { { kRowH, 3, { 384, 384, 316 } },
-                                   { kRowH, 3, { 366, 366, 352 } },
-                                   { kRowH, 3, { 352, 360, 372 } },
-                                   { kRowH, 2, { 948, 136, 0 } } };
-    constexpr RowSpec kKickRows[4] = { { kRowH, 2, { 542, 542, 0 } },
-                                       { kRowH, 2, { 542, 542, 0 } },
-                                       { kRowH, 1, { 1084, 0, 0 } },
-                                       { kRowH, 2, { 948, 136, 0 } } };
-    static_assert (kTopH + 4 * kRowH == PsyBoxEditor::kH);
-} // namespace
-
 PsyBoxEditor::Root::Root (PsyBoxProcessor& p)
-    : proc (p), top (p), side (p), oscA (p, false), oscB (p, true), mixer (p), f1 (p, 0), f2 (p, 1), voice (p), env (p),
-      lfo (p), matrix (p), fx (p), macros (p), kickPitch (p), kickAmp (p), kickClick (p), kickDrive (p), kickWave (p)
+    : proc (p), top (p), side (p), osc (p), kick (p), fx (p), matrix (p), global (p), arp (p)
 {
-    for (juce::Component* c : std::initializer_list<juce::Component*> { &top, &side, &oscA, &oscB, &mixer, &f1, &f2, &voice,
-                                                                         &env, &lfo, &matrix, &fx, &macros })
-        addAndMakeVisible (c);
-    for (juce::Component* c : std::initializer_list<juce::Component*> { &kickPitch, &kickAmp, &kickClick, &kickDrive, &kickWave })
+    addAndMakeVisible (top);
+    addAndMakeVisible (side);
+    for (juce::Component* c : std::initializer_list<juce::Component*> { &osc, &kick, &fx, &matrix, &global, &arp })
         addChildComponent (c);
+    top.views.onChange = [this] (View v) { showView (v); };
     updateMode();
+    showView (View::Main);
     startTimerHz (15);
+}
+
+std::vector<View> PsyBoxEditor::Root::available() const
+{
+    if (kickLayout) return { View::Main, View::Fx, View::Global };
+    if (proc.categoryHasArp()) return { View::Main, View::Fx, View::Matrix, View::Arp, View::Global };
+    return { View::Main, View::Fx, View::Matrix, View::Global };
+}
+
+juce::Component* PsyBoxEditor::Root::pageFor (View v) const
+{
+    switch (v)
+    {
+        case View::Main:   return kickLayout ? (juce::Component*) &kick : (juce::Component*) &osc;
+        case View::Fx:     return (juce::Component*) &fx;
+        case View::Matrix: return (juce::Component*) &matrix;
+        case View::Arp:    return (juce::Component*) &arp;
+        case View::Global: return (juce::Component*) &global;
+        case View::Count:  break;
+    }
+    return nullptr;
+}
+
+void PsyBoxEditor::Root::showView (View v)
+{
+    const auto views = available();
+    if (std::find (views.begin(), views.end(), v) == views.end())
+        v = View::Main;   // e.g. the arp page, after switching to a bass
+    view = v;
+    auto* page = pageFor (v);
+    for (juce::Component* c : std::initializer_list<juce::Component*> { &osc, &kick, &fx, &matrix, &global, &arp })
+        c->setVisible (c == page);
+    top.views.setSelected (v);
 }
 
 void PsyBoxEditor::Root::updateMode()
 {
-    const bool kick = proc.plain (psy::P::EngineMode) > 0.5f;
-    const bool arp = psy::hasArp (proc.getCategory());
-    if (arp != arpLayout)
-    {
-        arpLayout = arp;
-        voice.setArpAllowed (arp);
-    }
-    if (kick == kickLayout) return;
-    kickLayout = kick;
-    for (juce::Component* c : std::initializer_list<juce::Component*> { &oscA, &oscB, &mixer, &f1, &f2, &voice, &env, &lfo, &matrix })
-        c->setVisible (! kick);
-    for (juce::Component* c : std::initializer_list<juce::Component*> { &kickPitch, &kickAmp, &kickClick, &kickDrive, &kickWave })
-        c->setVisible (kick);
-    // the macros drive mod-matrix targets, and the kick has none
-    macros.setAlpha (kick ? 0.35f : 1.f);
-    macros.setInterceptsMouseClicks (! kick, ! kick);
-    resized();
+    // 0 melodic synth (arp page), 1 energy (length), 2 bass, 3 kick
+    const bool kickMode = proc.plain (psy::P::EngineMode) > 0.5f;
+    const int mode = kickMode ? 3 : (proc.categoryHasArp() ? 0 : (proc.isEnergyCategory() ? 1 : 2));
+    if (mode == lastMode) return;
+    lastMode = mode;
+    kickLayout = kickMode;
+    osc.setExtra (mode == 0 ? OscPage::Extra::None : (mode == 1 ? OscPage::Extra::Length : OscPage::Extra::Knock));
+    top.views.setViews (available(), kickLayout ? "Kick" : "Osc");
+    top.resized();
+    showView (view);
     repaint();
 }
 
@@ -62,46 +68,13 @@ void PsyBoxEditor::Root::paint (juce::Graphics& g)
     g.fillAll (col::bg);
 }
 
-void PsyBoxEditor::Root::paintOverChildren (juce::Graphics& g)
-{
-    // hairline grid between sections
-    const auto& rows = kickLayout ? kKickRows : kRows;
-    g.setColour (col::line);
-    int y = kTopH;
-    for (int r = 0; r < 4; ++r)
-    {
-        if (r > 0) g.fillRect (kSideW, y, kW - kSideW, 1);
-        int x = kSideW;
-        for (int c = 0; c < rows[r].n - 1; ++c)
-        {
-            x += rows[r].w[c];
-            g.fillRect (x, y + kPad, 1, rows[r].h - 2 * kPad);
-        }
-        y += rows[r].h;
-    }
-}
-
 void PsyBoxEditor::Root::resized()
 {
     top.setBounds (0, 0, kW, kTopH);
     side.setBounds (0, kTopH, kSideW, kH - kTopH);
-
-    juce::Component* synth[4][3] = { { &oscA, &oscB, &mixer }, { &f1, &f2, &voice }, { &env, &lfo, &matrix }, { &fx, &macros, nullptr } };
-    juce::Component* kick[4][3] = { { &kickPitch, &kickAmp, nullptr }, { &kickClick, &kickDrive, nullptr },
-                                    { &kickWave, nullptr, nullptr }, { &fx, &macros, nullptr } };
-    const auto& rows = kickLayout ? kKickRows : kRows;
-    auto& grid = kickLayout ? kick : synth;
-    int y = kTopH;
-    for (int r = 0; r < 4; ++r)
-    {
-        int x = kSideW;
-        for (int c = 0; c < rows[r].n; ++c)
-        {
-            grid[r][c]->setBounds (x, y, rows[r].w[c], rows[r].h);
-            x += rows[r].w[c];
-        }
-        y += rows[r].h;
-    }
+    const juce::Rectangle<int> area (kSideW, kTopH, kW - kSideW, kH - kTopH);
+    for (juce::Component* c : std::initializer_list<juce::Component*> { &osc, &kick, &fx, &matrix, &global, &arp })
+        c->setBounds (area);
 }
 
 // ---------------------------------------------------------------------------
@@ -131,15 +104,12 @@ void PsyBoxEditor::Keys::drawBlackNote (int, juce::Graphics& g, juce::Rectangle<
 PsyBoxEditor::PsyBoxEditor (PsyBoxProcessor& p)
     : AudioProcessorEditor (p), proc (p), root (p),
       withKeyboard (forceKeyboard || p.wrapperType == juce::AudioProcessor::wrapperType_Standalone),
-      keyboard (p.keyboardState, juce::MidiKeyboardComponent::horizontalKeyboard), patternEditor (p)
+      keyboard (p.keyboardState, juce::MidiKeyboardComponent::horizontalKeyboard)
 {
     juce::LookAndFeel::setDefaultLookAndFeel (&lnf);
     setLookAndFeel (&lnf);
     addAndMakeVisible (root);
     root.setBounds (0, 0, kW, kH);
-    addChildComponent (patternEditor);
-    patternEditor.setBounds (0, 0, kW, kH);
-    root.voicePanel().onEditPattern = [this] { patternEditor.open(); };
 
     if (withKeyboard)
     {
@@ -171,7 +141,6 @@ PsyBoxEditor::PsyBoxEditor (PsyBoxProcessor& p)
             for (auto* child : c.getChildren()) noFocus (*child);
         };
         noFocus (root);
-        noFocus (patternEditor);
         startTimerHz (5);
     }
 }
@@ -205,7 +174,6 @@ void PsyBoxEditor::resized()
 {
     const float s = (float) getWidth() / (float) kW;
     root.setTransform (juce::AffineTransform::scale (s));
-    patternEditor.setTransform (juce::AffineTransform::scale (s));
     if (withKeyboard)
     {
         // same logical layout as the panels: full width, 1 px hairline above
@@ -224,6 +192,16 @@ void PsyBoxEditor::updateAccent()
         root.repaint();
         keyboard.repaint();
     }
+}
+
+void PsyBoxEditor::dragOperationStarted (const juce::DragAndDropTarget::SourceDetails& d)
+{
+    proc.uiDragSource = moddrag::sourceOf (d.description);   // knobs that take it show a ring
+}
+
+void PsyBoxEditor::dragOperationEnded (const juce::DragAndDropTarget::SourceDetails&)
+{
+    proc.uiDragSource = psy::ModSrc::None;
 }
 
 void PsyBoxEditor::changeListenerCallback (juce::ChangeBroadcaster*)
