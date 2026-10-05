@@ -489,6 +489,256 @@ void ModSourceHandle::timerCallback()
 }
 
 // ---------------------------------------------------------------------------
+// NumberBox
+// ---------------------------------------------------------------------------
+NumberBox::NumberBox (PsyBoxProcessor& p, P prm, const juce::String& cap)
+    : proc (p), param (prm), target (psy::modTargetFor (prm)), caption (cap),
+      attachment (*p.param (prm), [this] (float v) { value = v; repaint(); })
+{
+    attachment.sendInitialUpdate();
+    setMouseCursor (juce::MouseCursor::UpDownResizeCursor);
+    setTooltip (juce::String (psy::def (prm).group) + " " + psy::def (prm).name + "  -  drag or scroll, double-click to reset"
+                + (target != psy::ModDst::None ? ", drop a mod source here" : ""));
+    startTimerHz (10);
+}
+
+int NumberBox::idealWidth() const
+{
+    return (int) std::ceil (juce::GlyphArrangement::getStringWidth (label (10.f), caption.toUpperCase())
+                            + juce::GlyphArrangement::getStringWidth (mono (11.5f), "+100")) + 3 * sp::sm;
+}
+
+juce::Rectangle<float> NumberBox::field() const
+{
+    auto b = getLocalBounds().toFloat();
+    if (cell)
+        return b.removeFromTop ((float) kKnobD).withSizeKeepingCentre (b.getWidth() - 4.f, (float) kCtrlH);
+    return b.withSizeKeepingCentre (b.getWidth(), (float) kCtrlH);
+}
+
+juce::Rectangle<float> NumberBox::gearArea() const
+{
+    return gear ? field().removeFromLeft ((float) kCtrlH) : juce::Rectangle<float>();
+}
+
+juce::Rectangle<float> NumberBox::arrowsArea() const
+{
+    return cell ? field().removeFromRight (11.f) : juce::Rectangle<float>();
+}
+
+juce::String NumberBox::text() const
+{
+    if (overrideText.isNotEmpty()) return overrideText;
+    const auto& d = psy::def (param);
+    const int v = (int) std::lround (value);
+    if (d.min < 0.f) return v > 0 ? "+" + juce::String (v) : juce::String (v);
+    return juce::String (v);
+}
+
+void NumberBox::paint (juce::Graphics& g)
+{
+    const bool on = isEnabled();
+    const bool hot = on && (isMouseOver() || dragging);
+    const auto f = field();
+    g.setColour (col::well);
+    g.fillRoundedRectangle (f, 3.f);
+    const bool takesDrag = proc.uiDragSource != psy::ModSrc::None && target != psy::ModDst::None;
+    g.setColour (dropHover ? col::text : (takesDrag ? col::text.withAlpha (0.55f) : (hot ? col::textFaint : col::lineStrong)));
+    g.drawRoundedRectangle (f.reduced (0.5f), 3.f, dropHover ? 1.5f : 1.f);
+
+    auto inner = f;
+    if (gear)
+    {
+        const auto ga = inner.removeFromLeft ((float) kCtrlH);
+        const bool overGear = isMouseOver() && ga.contains (getMouseXYRelative().toFloat());
+        // a gear: a ring with eight teeth around a hole
+        const auto c = ga.getCentre();
+        juce::Path p;
+        for (int i = 0; i < 8; ++i)
+        {
+            p.addRectangle (-1.2f, -5.6f, 2.4f, 2.6f);   // a tooth on top, then turn the lot by one tooth
+            p.applyTransform (juce::AffineTransform::rotation (juce::MathConstants<float>::twoPi / 8.f));
+        }
+        p.addEllipse (-3.9f, -3.9f, 7.8f, 7.8f);
+        p.applyTransform (juce::AffineTransform::translation (c));
+        g.setColour (gearOn ? accent() : (overGear && on ? col::text : (on ? col::textDim : col::textFaint)));
+        g.fillPath (p);
+        g.setColour (col::well);
+        g.fillEllipse (juce::Rectangle<float> (3.4f, 3.4f).withCentre (c));
+        g.setColour (col::lineStrong);
+        g.fillRect (inner.getX(), inner.getY() + 4.f, 1.f, inner.getHeight() - 8.f);
+    }
+
+    const bool changed = overrideText.isEmpty() && std::abs (value - psy::def (param).def) > 0.001f;
+    const auto valueColour = ! on ? col::textFaint : (changed ? accent() : col::text);
+    if (cell)
+    {
+        const auto ar = inner.removeFromRight (11.f);
+        if (on)
+        {
+            g.setColour (hot ? col::textDim : col::textFaint);
+            const float cx = ar.getCentreX() - 1.f, cy = ar.getCentreY();
+            juce::Path up, down;
+            up.addTriangle (cx - 2.5f, cy - 2.f, cx + 2.5f, cy - 2.f, cx, cy - 5.f);
+            down.addTriangle (cx - 2.5f, cy + 2.f, cx + 2.5f, cy + 2.f, cx, cy + 5.f);
+            g.fillPath (up);
+            g.fillPath (down);
+        }
+        g.setColour (valueColour);
+        g.setFont (mono (12.f));
+        g.drawText (text(), inner.toNearestInt(), juce::Justification::centred, false);
+        g.setColour (on ? col::textDim : col::textFaint);
+        g.setFont (label (10.f));
+        g.drawText (caption.toUpperCase(), getLocalBounds().removeFromBottom (kLabelH), juce::Justification::centred, false);
+    }
+    else
+    {
+        inner.reduce ((float) sp::sm - 2.f, 0.f);
+        g.setColour (on ? col::textDim : col::textFaint);
+        g.setFont (label (10.f));
+        g.drawText (caption.toUpperCase(), inner.toNearestInt(), juce::Justification::centredLeft, false);
+        g.setColour (valueColour);
+        g.setFont (mono (11.5f));
+        g.drawText (text(), inner.toNearestInt(), juce::Justification::centredRight, false);
+    }
+
+    if (numRoutes > 0)
+    {
+        g.setColour (accent());
+        g.fillEllipse (juce::Rectangle<float> (4.f, 4.f).withCentre ({ f.getRight() - 4.f, f.getY() + 4.f }));
+    }
+}
+
+void NumberBox::setValue (float plain, bool gesture)
+{
+    const auto& d = psy::def (param);
+    const float v = d.snap (plain);
+    if (gesture) attachment.setValueAsPartOfGesture (v);
+    else if (v != value) attachment.setValueAsCompleteGesture (v);
+}
+
+void NumberBox::step (int dir)
+{
+    if (isEnabled()) setValue (value + (float) dir, false);
+}
+
+void NumberBox::mouseDown (const juce::MouseEvent& e)
+{
+    if (! isEnabled()) return;
+    if (e.mods.isPopupMenu()) { showMenu(); return; }
+    const auto pt = e.position;
+    if (gear && gearArea().contains (pt)) { if (onGear) onGear(); return; }
+    if (cell && arrowsArea().contains (pt)) { step (pt.y < arrowsArea().getCentreY() ? 1 : -1); return; }
+    dragging = true;
+    dragStart = value;
+    attachment.beginGesture();
+    repaint();
+}
+
+void NumberBox::mouseDrag (const juce::MouseEvent& e)
+{
+    if (! dragging) return;
+    const auto& d = psy::def (param);
+    const float pixelsPerStep = (d.max - d.min) > 60.f ? 3.f : 8.f;
+    const float steps = std::trunc ((float) -e.getDistanceFromDragStartY() / (e.mods.isShiftDown() ? pixelsPerStep * 4.f : pixelsPerStep));
+    setValue (dragStart + steps, true);
+}
+
+void NumberBox::mouseUp (const juce::MouseEvent&)
+{
+    if (! dragging) return;
+    dragging = false;
+    attachment.endGesture();
+    if (onActive) onActive (isMouseOver());
+    repaint();
+}
+
+void NumberBox::mouseDoubleClick (const juce::MouseEvent& e)
+{
+    if (! isEnabled() || (gear && gearArea().contains (e.position)) || (cell && arrowsArea().contains (e.position))) return;
+    setValue (psy::def (param).def, false);
+}
+
+void NumberBox::mouseWheelMove (const juce::MouseEvent&, const juce::MouseWheelDetails& w)
+{
+    if (std::abs (w.deltaY) > 0.f) step (w.deltaY > 0.f ? 1 : -1);
+}
+
+void NumberBox::mouseEnter (const juce::MouseEvent&)
+{
+    if (onActive) onActive (true);
+    repaint();
+}
+
+void NumberBox::mouseExit (const juce::MouseEvent&)
+{
+    if (onActive && ! dragging) onActive (false);
+    repaint();
+}
+
+bool NumberBox::isInterestedInDragSource (const SourceDetails& d)
+{
+    return target != psy::ModDst::None && moddrag::sourceOf (d.description) != psy::ModSrc::None;
+}
+
+void NumberBox::itemDropped (const SourceDetails& d)
+{
+    dropHover = false;
+    const auto src = moddrag::sourceOf (d.description);
+    if (proc.addModulation (src, target, 0.25f) >= 0)
+        proc.uiSelectedSource = src;
+    timerCallback();
+    repaint();
+}
+
+void NumberBox::showMenu()
+{
+    juce::PopupMenu m;
+    const bool locked = proc.isLocked (param);
+    m.addSectionHeader (juce::String (psy::def (param).group) + " / " + psy::def (param).name);
+    m.addItem (1, locked ? "Unlock" : "Lock (keep on Generate)");
+    m.addItem (2, "Reset to default");
+    for (int i = 0; i < numRoutes; ++i)
+    {
+        const auto& r = routes[(size_t) i];
+        if (i == 0) m.addSectionHeader ("Modulation");
+        juce::PopupMenu sub;
+        sub.addItem (101 + i * 4, "Invert");
+        sub.addItem (102 + i * 4, "Remove");
+        m.addSubMenu (moddrag::name (r.src) + "  " + juce::String (juce::roundToInt (r.amount * 100.f)) + "%", sub);
+    }
+    const auto snapshot = routes;
+    m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (this), [this, locked, snapshot] (int r) {
+        if (r == 1) proc.setLocked (param, ! locked);
+        if (r == 2) setValue (psy::def (param).def, false);
+        if (r >= 100)
+        {
+            const auto& rt = snapshot[(size_t) ((r - 100) / 4)];
+            if ((r - 100) % 4 == 1)
+            {
+                proc.beginModAmountChange (rt.slot);
+                proc.setModAmount (rt.slot, -rt.amount);
+                proc.endModAmountChange (rt.slot);
+            }
+            if ((r - 100) % 4 == 2) proc.removeModulation (rt.slot);
+            timerCallback();
+        }
+    });
+}
+
+void NumberBox::timerCallback()
+{
+    const int n = target != psy::ModDst::None ? proc.modRoutesTo (target, routes) : 0;
+    const bool shown = proc.uiDragSource != psy::ModSrc::None && target != psy::ModDst::None;
+    if (n != numRoutes || shown != dragShown)
+    {
+        numRoutes = n;
+        dragShown = shown;
+        repaint();
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Segmented
 // ---------------------------------------------------------------------------
 Segmented::Segmented (PsyBoxProcessor& p, P prm, juce::StringArray l)

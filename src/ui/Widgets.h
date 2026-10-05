@@ -131,6 +131,69 @@ private:
 };
 
 // ---------------------------------------------------------------------------
+// A number you drag up and down, scroll, or step with the arrows (like
+// Serum's unison and pitch fields). Inline style draws the caption inside
+// the field ("SEM +7"); cell style puts the field in a knob cell's control
+// area with the caption under it. With a gear it also opens settings
+// (onGear). Double-click resets, right-click locks. Takes dropped mod
+// sources when its parameter is a mod target.
+// ---------------------------------------------------------------------------
+class NumberBox : public juce::Component,
+                  public juce::DragAndDropTarget,
+                  public juce::SettableTooltipClient,
+                  private juce::Timer
+{
+public:
+    NumberBox (PsyBoxProcessor&, psy::P, const juce::String& caption);
+
+    void setCellStyle (bool c) { cell = c; repaint(); }
+    void setGear (bool g) { gear = g; repaint(); }
+    void setGearOn (bool on) { if (on != gearOn) { gearOn = on; repaint(); } }
+    // Shown instead of the value (the supersaw's fixed seven voices).
+    void setOverride (const juce::String& text) { if (text != overrideText) { overrideText = text; repaint(); } }
+    int idealWidth() const;   // inline style
+    psy::P getParam() const noexcept { return param; }
+
+    std::function<void()> onGear;
+    std::function<void (bool)> onActive;   // hovered or dragged, or neither any more
+
+    void paint (juce::Graphics&) override;
+    void mouseDown (const juce::MouseEvent&) override;
+    void mouseDrag (const juce::MouseEvent&) override;
+    void mouseUp (const juce::MouseEvent&) override;
+    void mouseDoubleClick (const juce::MouseEvent&) override;
+    void mouseWheelMove (const juce::MouseEvent&, const juce::MouseWheelDetails&) override;
+    void mouseEnter (const juce::MouseEvent&) override;
+    void mouseExit (const juce::MouseEvent&) override;
+    void mouseMove (const juce::MouseEvent&) override { repaint(); }
+
+    bool isInterestedInDragSource (const SourceDetails&) override;
+    void itemDragEnter (const SourceDetails&) override { dropHover = true; repaint(); }
+    void itemDragExit (const SourceDetails&) override { dropHover = false; repaint(); }
+    void itemDropped (const SourceDetails&) override;
+
+private:
+    PsyBoxProcessor& proc;
+    psy::P param;
+    psy::ModDst target;
+    juce::String caption, overrideText;
+    juce::ParameterAttachment attachment;
+    float value = 0.f, dragStart = 0.f;
+    bool cell = false, gear = false, gearOn = false, dragging = false, dropHover = false, dragShown = false;
+    int numRoutes = 0;
+    std::array<PsyBoxProcessor::ModRoute, psy::kNumModSlots> routes {};
+
+    juce::Rectangle<float> field() const;       // the box itself
+    juce::Rectangle<float> gearArea() const;
+    juce::Rectangle<float> arrowsArea() const;
+    juce::String text() const;
+    void setValue (float plain, bool gesture);
+    void step (int dir);
+    void showMenu();
+    void timerCallback() override;
+};
+
+// ---------------------------------------------------------------------------
 // Segmented selector for a choice (or toggle) parameter.
 // ---------------------------------------------------------------------------
 class Segmented : public juce::Component,
@@ -202,6 +265,7 @@ class ParamCombo : public juce::Component
 {
 public:
     ParamCombo (PsyBoxProcessor&, psy::P, const juce::String& caption = {});
+    void setTooltip (const juce::String& t) { box.setTooltip (t); }
     void resized() override;
     void paint (juce::Graphics&) override;
 

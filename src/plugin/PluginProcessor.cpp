@@ -51,7 +51,9 @@ juce::AudioProcessorValueTreeState::ParameterLayout PsyBoxProcessor::createLayou
         else
         {
             const ParamDef* dp = &d;
+            // The effect order is the patch's layout, not something to automate.
             auto attrs = juce::AudioParameterFloatAttributes()
+                             .withAutomatable (std::string_view (d.id) != "fx_order")
                              .withStringFromValueFunction ([dp] (float v, int) { return juce::String (dp->format (v)); })
                              .withValueFromStringFunction ([dp] (const juce::String& s) { return dp->snap (s.getFloatValue()); });
             layout.add (std::make_unique<juce::AudioParameterFloat> (id, name, rangeFor (d), d.def, attrs));

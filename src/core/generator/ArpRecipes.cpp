@@ -368,11 +368,14 @@ namespace
     using Scale = std::array<int, 7>;
     using Degrees = std::array<int, kArpSteps>;
 
+    // The scale set next to the Arp switch when a key is set, otherwise one
+    // of the five psy scales (always drawn, so seeds stay put either way).
     Scale scale (B& b)
     {
-        const Scale all[] = { { 0, 1, 3, 5, 7, 8, 10 }, { 0, 2, 3, 5, 7, 8, 10 }, { 0, 2, 3, 5, 7, 8, 11 },
-                              { 0, 1, 4, 5, 7, 8, 10 }, { 0, 2, 3, 5, 7, 9, 10 } };
-        return choose (b, all, { 0.35f, 0.25f, 0.15f, 0.15f, 0.1f });
+        const int all[] = { 0, 1, 2, 3, 4 };
+        const int drawn = choose (b, all, { 0.35f, 0.25f, 0.15f, 0.15f, 0.1f });
+        const auto& st = b.state();
+        return arpScaleSteps (st.geti (P::ArpKey) > 0 ? st.geti (P::ArpScale) : drawn);
     }
 
     int semitones (const Scale& s, int degree)
@@ -506,6 +509,75 @@ namespace
             p.notes[(size_t) i] = (int8_t) std::clamp (semitones (s, d[(size_t) i]), -kArpNoteRange, kArpNoteRange);
     }
 
+    // How many different notes the pattern plays.
+    int distinct (const ArpPattern& p, const Degrees& d)
+    {
+        std::array<bool, 64> seen {};
+        int n = 0;
+        for (int i = 0; i < std::clamp (p.length, 1, kArpSteps); ++i)
+            if (p.has (i, On))
+            {
+                auto& s = seen[(size_t) std::clamp (d[(size_t) i] + 24, 0, 63)];
+                n += s ? 0 : 1;
+                s = true;
+            }
+        return n;
+    }
+
+    // A line that hardly moves gets livelier: played steps (never the first,
+    // mostly in the second half, so the figure is stated and then answered)
+    // move to other notes until it plays `want` different ones.
+    void enliven (B& b, const ArpPattern& p, Degrees& d, int want, const Motion& m)
+    {
+        std::array<int, kArpSteps> played {};
+        int n = 0;
+        for (int i = 1; i < std::clamp (p.length, 1, kArpSteps); ++i)
+            if (p.has (i, On)) played[(size_t) n++] = i;
+        if (n == 0) return;
+        for (int tries = 0; tries < 24 && distinct (p, d) < want; ++tries)
+        {
+            int k = std::min (n - 1, (int) b.rnd (0.f, (float) n));
+            if (b.chance (0.7f)) k = std::max (k, n / 2);
+            auto& to = d[(size_t) played[(size_t) k]];
+            to = away (b, to, m);
+        }
+        // past the pattern's end the notes repeat it
+        const int len = std::clamp (p.length, 1, kArpSteps);
+        for (int i = len; i < kArpSteps; ++i) d[(size_t) i] = d[(size_t) (i % len)];
+    }
+
+    // A progression that goes somewhere (no bar on the key alone).
+    std::array<int, 4> moving (B& b)
+    {
+        auto r = progression (b);
+        if (r == std::array<int, 4> { 0, 0, 0, 0 }) r = { 0, 0, -2, -1 };
+        return r;
+    }
+
+    // Broken chords in degrees above a root: up, up and back, down, the
+    // pump, a turn, a skip to the octave.
+    using Shape = std::array<int, 4>;
+    Shape chordShape (B& b)
+    {
+        const Shape all[] = { { 0, 2, 4, 7 }, { 0, 4, 7, 4 }, { 7, 4, 2, 0 }, { 0, 2, 4, 2 }, { 4, 2, 0, 2 }, { 0, 4, 2, 7 } };
+        return choose (b, all, { 0.2f, 0.2f, 0.15f, 0.15f, 0.15f, 0.15f });
+    }
+
+    // Each section of `size` steps plays the shape on its root, one chord
+    // tone per played step, starting again at every section.
+    void brokenChords (const ArpPattern& p, Degrees& d, const std::array<int, 4>& roots, const Shape& shape, int size)
+    {
+        int n = 0, section = -1;
+        for (int i = 0; i < kArpSteps; ++i)
+        {
+            const int sec = std::min (3, i / std::max (1, size));
+            if (sec != section) { section = sec; n = 0; }
+            d[(size_t) i] = i > 0 ? d[(size_t) i - 1] : roots[0];
+            if (p.has (i % std::clamp (p.length, 1, kArpSteps), On))
+                d[(size_t) i] = roots[(size_t) sec] + shape[(size_t) (n++ % 4)];
+        }
+    }
+
     // ---- lines -----------------------------------------------------------------
 
     // 303 line: an 8-step motif and its answer (A A', A B, A A, or a fill
@@ -561,12 +633,13 @@ namespace
         accent (p, b.chance (0.5f) ? Accents::Offbeats : Accents::EveryThird, integer (b, 0, 2));
         slideIntoAccents (p, 1);
 
-        const Motion m { 0.45f, 0.15f, { { 0, 6.f }, { 7, 2.f }, { 1, 1.f }, { 2, 1.f }, { 4, 1.f }, { -1, 0.8f } }, -2, 7 };
+        const Motion m { 0.3f, 0.2f, { { 0, 6.f }, { 7, 2.f }, { 1, 1.f }, { 2, 1.f }, { 4, 1.f }, { -1, 0.8f } }, -2, 7 };
         const Scale s = scale (b);
         auto d = line (b, p, 8, m);
         const auto how = answerOf (b, 0.35f, 0.45f, 0.2f);
         const int shifts[] = { -1, 1, 3 };
         answer (b, p, d, 8, m, how, choose (b, shifts, { 0.4f, 0.3f, 0.3f }));
+        enliven (b, p, d, 3, m);
         setNotes (p, s, d);
         write (b, p);
     }
@@ -584,12 +657,13 @@ namespace
             for (int i = half; i < half + 8; ++i)
                 if (p.has (i, On)) { p.setFlag (i, Accent, true); break; }
 
-        const Motion m { 0.35f, 0.05f, { { 0, 4.f }, { 7, 2.5f }, { 4, 1.5f }, { 2, 1.f }, { -7, 1.f }, { 14, 0.8f } }, -7, 14 };
+        const Motion m { 0.15f, 0.1f, { { 0, 4.f }, { 7, 2.5f }, { 4, 1.5f }, { 2, 1.f }, { -7, 1.f }, { 14, 0.8f } }, -7, 14 };
         const Scale s = scale (b);
         auto d = line (b, p, 8, m);
-        const auto how = answerOf (b, 0.3f, 0.3f, 0.4f);
+        const auto how = answerOf (b, 0.15f, 0.35f, 0.5f);
         const int shifts[] = { -1, 3, 4, 7 };
         answer (b, p, d, 8, m, how, choose (b, shifts, { 0.3f, 0.25f, 0.25f, 0.2f }));
+        enliven (b, p, d, 3, m);
         setNotes (p, s, d);
         write (b, p);
     }
@@ -680,6 +754,7 @@ namespace
         const auto how = answerOf (b, 0.2f, 0.5f, 0.3f);
         const int shifts[] = { 1, 2, -1, 3 };
         answer (b, p, d, 8, m, how, choose (b, shifts, { 0.3f, 0.25f, 0.25f, 0.2f }));
+        enliven (b, p, d, 3, m);
         setNotes (p, s, d);
         write (b, p);
     }
@@ -693,10 +768,17 @@ namespace
         const char* bars[] = { "--x-", "--x---x---x---xx", "--x--x--x--x--x-", "--x---x---x-x-x-", "-x---x---x---x-x" };
         auto p = ArpPattern::parse (choose (b, bars, { 0.4f, 0.2f, 0.15f, 0.15f, 0.1f }));
         Degrees d {};
-        sections (d, progression (b), p.length / 4);
+        sections (d, moving (b), p.length / 4);
+        // the top of the chord leads: every other stab moves to a chord tone
+        const int tones[] = { 2, 4, 7 };
+        const int lead = choose (b, tones, { 0.4f, 0.4f, 0.2f });
+        int n = 0;
+        for (int i = 0; i < p.length; ++i)
+            if (p.has (i, On) && n++ % 2 == 1 && b.chance (0.75f)) d[(size_t) i] += lead;
         if (b.chance (0.3f))
             for (int i = p.length - 1; i >= 0; --i)
                 if (p.has (i, On)) { d[(size_t) i] += 7; break; }
+        enliven (b, p, d, 3, Motion { 0.f, 0.3f, { { 0, 2.f }, { 2, 2.f }, { 4, 2.f }, { -1, 1.f }, { 7, 1.f } }, -3, 9 });
         setNotes (p, scale (b), d);
         write (b, p);
     }
@@ -713,6 +795,7 @@ namespace
         const Motion m { 0.15f, 0.1f, { { 0, 3.f }, { 7, 2.f }, { 4, 1.5f }, { 1, 1.2f }, { 8, 1.f }, { 10, 0.8f }, { 14, 0.6f }, { -3, 0.8f } }, -3, 14 };
         const Scale s = scale (b);
         auto d = line (b, p, p.length, m);
+        enliven (b, p, d, 3, m);
         setNotes (p, s, d);
         write (b, p);
     }
@@ -754,6 +837,7 @@ namespace
         const Scale s = scale (b);
         auto d = line (b, p, 8, m);
         answer (b, p, d, 8, m, answerOf (b, 0.4f, 0.6f, 0.f), 0);
+        enliven (b, p, d, 3, m);
         setNotes (p, s, d);
         write (b, p);
     }
@@ -770,6 +854,7 @@ namespace
         const Motion m { 0.05f, 0.25f, { { 0, 2.f }, { 2, 2.f }, { 4, 2.f }, { 7, 2.f }, { 9, 1.5f }, { 11, 1.2f }, { 14, 1.f } }, 0, 14 };
         const Scale s = scale (b);
         auto d = line (b, p, p.length, m);
+        enliven (b, p, d, 3, m);
         setNotes (p, s, d);
         write (b, p);
     }
@@ -800,24 +885,27 @@ namespace
         auto p = ArpPattern::parse (a + (b.chance (0.5f) ? vary (b, a) : a));
         if (b.chance (0.4f)) p.length = 8;
 
-        const Motion m { 0.65f, 0.f, { { 0, 4.f }, { 7, 2.f }, { 4, 1.2f }, { -3, 1.f } }, -3, 7 };
+        const Motion m { 0.35f, 0.1f, { { 0, 4.f }, { 7, 2.f }, { 4, 1.2f }, { -3, 1.f } }, -3, 7 };
         const Scale s = scale (b);
         auto d = line (b, p, 8, m);
-        const int roots[] = { 0, -1, 3, 4, -2, 1 };
-        const int to = choose (b, roots, { 0.25f, 0.2f, 0.15f, 0.15f, 0.15f, 0.1f });
+        const int roots[] = { -1, 3, 4, -2, 1 };
+        const int to = choose (b, roots, { 0.25f, 0.2f, 0.2f, 0.2f, 0.15f });
         for (int i = 8; i < kArpSteps; ++i) d[(size_t) i] += to;
+        enliven (b, p, d, 3, m);
         setNotes (p, s, d);
         write (b, p);
     }
 
-    // The voice's LFO does the chopping; the arp moves the chord on the grid,
-    // straight or 3-3-2, through a progression over the pattern's quarters.
+    // The voice's LFO does the chopping; the arp plays a broken chord on the
+    // grid (straight, 3-3-2, offbeat pairs), its root walking a progression
+    // over the pattern's quarters.
     void gatePattern (B& b)
     {
-        const char* bars[] = { "x", "x--x--x-", "x-x-" };
-        auto p = ArpPattern::parse (choose (b, bars, { 0.55f, 0.3f, 0.15f }));
+        const char* bars[] = { "x", "x--x--x-", "x-x-", "xx-x" };
+        auto p = ArpPattern::parse (choose (b, bars, { 0.4f, 0.25f, 0.15f, 0.2f }));
         Degrees d {};
-        sections (d, progression (b), p.length / 4);
+        brokenChords (p, d, moving (b), chordShape (b), p.length / 4);
+        enliven (b, p, d, 4, Motion { 0.f, 0.4f, { { 0, 2.f }, { 2, 2.f }, { 4, 2.f }, { 7, 1.5f }, { -1, 1.f } }, -3, 9 });
         setNotes (p, scale (b), d);
         write (b, p);
     }
@@ -836,47 +924,65 @@ namespace
         if (b.chance (0.35f)) p.length = b.chance (0.5f) ? 7 : 5;
         accent (p, b.chance (0.5f) ? Accents::EveryThird : Accents::FigureStart, integer (b, 0, 2), 4);
 
-        const Motion m { 0.3f, 0.f, { { 0, 4.f }, { 7, 2.f }, { 4, 1.5f }, { 1, 1.f }, { 14, 0.8f }, { -7, 0.8f }, { 2, 0.6f } }, -7, 14 };
+        const Motion m { 0.1f, 0.1f, { { 0, 4.f }, { 7, 2.f }, { 4, 1.5f }, { 1, 1.f }, { 14, 0.8f }, { -7, 0.8f }, { 2, 0.6f } }, -7, 14 };
         Degrees d {};
         for (int i = 4; i < kArpSteps; i += 4)
         {
             const int to = move (b, d[(size_t) i - 1], m);
             for (int k = i; k < i + 4; ++k) d[(size_t) k] = to;
         }
-        if (b.chance (0.35f))
+        // the stutter climbs (a ratchet up the scale) or flips an octave on
+        // each cell's last hit
+        const int flavour = b.weighted ({ 0.35f, 0.4f, 0.25f });
+        if (flavour == 0)
+            for (int i = 0; i < kArpSteps; ++i) d[(size_t) i] += i % 4;
+        else if (flavour == 1)
             for (int i = 3; i < kArpSteps; i += 4) d[(size_t) i] += 7;
+        enliven (b, p, d, 3, m);
         setNotes (p, scale (b), d);
         write (b, p);
     }
 
     // ---- beds ---------------------------------------------------------------------
 
-    // Every step tied, so the envelopes run through. The pad drifts through
-    // a progression, gliding each time the root moves; a short loop moves
-    // once, halfway.
+    // Slow broken chords that ring into each other (the gates overlap),
+    // the root walking a progression; some figures tie a note into the next
+    // so the pad glides. A short loop moves its root once, halfway.
     void atmosPattern (B& b)
     {
-        auto p = ArpPattern::parse ("s");
+        const char* rhythms[] = { "x", "x-x-", "xs", "x-xs", "xxs-", "s" };
+        auto p = ArpPattern::parse (choose (b, rhythms, { 0.25f, 0.25f, 0.15f, 0.15f, 0.1f, 0.1f }));
         p.length = b.chance (0.5f) ? 16 : 8;
         const int moves[] = { 4, 3, -1, -2, 1 };
         const int move = choose (b, moves, { 0.25f, 0.2f, 0.2f, 0.2f, 0.15f });
-        const auto roots = p.length == 8 ? std::array<int, 4> { 0, move, move, move } : progression (b);
+        const auto roots = p.length == 8 ? std::array<int, 4> { 0, 0, move, move } : moving (b);
         Degrees d {};
-        if (! b.chance (0.2f)) sections (d, roots, 4);
+        brokenChords (p, d, roots, chordShape (b), p.length / 4);
+        enliven (b, p, d, 4, Motion { 0.f, 0.4f, { { 0, 2.f }, { 2, 2.f }, { 4, 2.f }, { 7, 1.5f }, { -1, 1.f } }, -3, 9 });
+        landSlides (p);
         setNotes (p, scale (b), d);
         write (b, p);
     }
 
-    // Tied too, and slower: the drone holds the key and may move once, to
-    // the fifth, fourth, seventh, third or octave, halfway through.
+    // Tied and slow: the drone walks a progression a quarter of the
+    // pattern at a time, and half the time its note climbs to the third or
+    // fifth (or dips to the seventh) halfway through each section. Now and
+    // then it is struck once per beat instead of tied, a slow pulse.
     void dronePattern (B& b)
     {
-        auto p = ArpPattern::parse ("s");
+        auto p = ArpPattern::parse (b.chance (0.3f) ? "x" : "s");
         p.length = b.chance (0.5f) ? 16 : 8;
-        const int moves[] = { 0, 4, 3, -1, 2, 7 };
-        const int to = choose (b, moves, { 0.35f, 0.2f, 0.15f, 0.1f, 0.1f, 0.1f });
+        const int size = p.length / 4;
         Degrees d {};
-        for (int i = p.length / 2; i < kArpSteps; ++i) d[(size_t) i] = to;
+        sections (d, moving (b), size);
+        if (b.chance (0.5f))
+        {
+            const int tones[] = { 2, 4, -1 };
+            const int up = choose (b, tones, { 0.4f, 0.4f, 0.2f });
+            for (int i = 0; i < kArpSteps; ++i)
+                if (i % size >= size / 2) d[(size_t) i] += up;
+        }
+        enliven (b, p, d, 3, Motion { 0.f, 0.5f, { { 0, 2.f }, { 2, 2.f }, { 4, 2.f }, { -1, 1.f }, { 7, 1.f } }, -3, 7 });
         setNotes (p, scale (b), d);
         write (b, p);
     }

@@ -61,13 +61,23 @@ knock, envelope, loudness, stereo):
 - **Bass Shot**: the progressive-trance one-shot. A saw over a body
   oscillator, a kick-like pitch drop, saturation and direct noise grit,
   multiband compression, and width above a mono low end.
-- **Reverse Bass**: a bass shot played backwards, for the beat before a kick.
-  A nearly raw saw that swells to full level over half the beat, holds, and
-  stops dead after its **Length** (1/4 bar by default, however long the key
-  is held).
-- **Reverse Sub**: the same for a sine sub with a little tube warmth. It swells
-  from about -32 dB and slides late in the beat by a fourth, fifth or
-  octave: down from an octave up, or up from the note.
+- **Reverse Bass**: a bass shot played backwards, for the beat before a kick,
+  fitted to twelve bright reverse shots by rendering and measuring. Always a
+  saw with a rounder wave and a spike each cycle, and a fizz above 10 kHz
+  (the Noise section's **Hiss**: the bite of a distorted top). It is there
+  from the first moment, quietly (the amp envelope's **Start**), swells late
+  and fast, holds, and stops dead after its **Length** (one beat, however
+  long the key is held). From patch to patch it starts 7-30 dB down and is
+  full at 30-60 % of the beat; it may be darker, dip around 500 Hz, open its
+  filter through the swell, add an octave saw, fall onto the note at the
+  end, or spread its top in stereo.
+- **Reverse Sub**: the same for a sub, fitted to three reference shots. It
+  swells from silence to full at about 57 % of the beat, holds its pitch,
+  then slides from just past the middle to the end (the Length panel's
+  **Delay**): a fifth or an octave down from an octave up, as a warm sine
+  (a quiet octave above for the second harmonic, a little tube), or a fourth
+  or fifth up from the note, easing in, as a saw through a band-pass that
+  follows the key.
 
 A glue compressor with make-up gain puts the basses level with the kicks; the
 reverse basses only get the make-up, so their swell keeps its shape. Their
@@ -127,7 +137,11 @@ body holds flat to about 160 ms and is down 30 dB by about 220 ms.
   random blips for bubbles, each with a freshly generated step pattern and a
   line on its note lane, so holding one key already plays a riff. The
   sound itself is the same with or without it; only the arp settings differ.
-  Energy sounds, basses and kicks have no arp.
+  Energy sounds, basses and kicks have no arp. Set a **Key** and scale under
+  the Arp switch (Phrygian, Minor, Harmonic Min, Phrygian Dom, Dorian, Major)
+  and new lines are written in it, and the arp plays every note in that scale
+  whichever key you hold (hold the key itself to hear the riff from its
+  root). Off leaves the scale to each pattern and plays notes as they come.
 - The same category and seed always give the same sound. Double-click the seed
   in the sidebar to type one in.
 - Each category remembers its patch. Switch from Acid to Zap and back and your
@@ -139,7 +153,13 @@ body holds flat to about 160 ms and is down 30 dB by about 220 ms.
   reverb, drive...) and names them after it: "Cutoff", "Env Amount", "Filter +
   Space". The names follow the matrix, so dragging a macro onto another knob
   renames it too. Double-click a name to type your own; clear it to go back to
-  the automatic one.
+  the automatic one. Generate also sets where each macro knob starts, part way
+  along so it turns both ways; a Cutoff macro lowers the filter's own knob to
+  match, so the sound keeps its brightness and the macro opens or closes it
+  from there (basses exactly so, and their reverb and delay macros stay at 0).
+  Mutate moves the macros too.
+- Leads, plucks, stabs, pads, drones and risers now and then get **unison**
+  (a few voices, a little detune, wide); basses always keep one voice.
 - The **output window** in the top bar shows the scope and a stereo level
   meter: RMS bars over peak bars, a held peak tick and its value in dB, red
   when the output clips. Drag it out to drop the current sound into your DAW
@@ -154,14 +174,23 @@ the octave). A MIDI controller works too: *Options → Audio/MIDI Settings*.
 
 Laid out like Serum. The tabs in the top bar switch views:
 
-- **OSC**: sub and noise, the two oscillators (waveform on top, knobs below),
-  the two filters; underneath the macros, the modulators and the voicing, with
-  the Length (Energy) or the Knock (Bass) under it.
+- **OSC**: sub and noise, the two oscillators (laid out like Serum 2's: the
+  SEM and FIN pitch fields, the waveform, then the knobs with the UNISON
+  field), the two filters; underneath the macros, the modulators and the
+  voicing, with the Length (Energy) or the Knock (Bass) under it. The
+  waveform draws every unison voice drifting past the others as fast as its
+  detune makes it beat; while you change a unison setting the voices also show
+  as lines across the detune range. The filter curves follow the newest note,
+  so envelopes, LFOs, macros and automation move them; the knob setting stays
+  as a faint curve underneath.
 - **FX**: a rack like Serum 2's. The chain on the left lists the nine effects
-  in signal order (click a row to switch one on or off). On the right, each
-  effect is a strip: badge, knobs, a display of what it does (curve, steps,
-  echoes, reverb tail, stereo fan...), Mix and a power switch. Switched-off
-  strips grey out.
+  in signal order: click a row to switch one on or off, drag it up or down to
+  move it in the chain. On the right, each effect is a strip in the same
+  order: badge, knobs, a display of what it does (curve, steps, echoes, reverb
+  tail, stereo fan...), Mix and a power switch. Switched-off strips grey out.
+  The order is saved with the patch and undoable; Generate starts a new patch
+  in the default order. Distortion first runs oversampled; later in the chain
+  it runs at the base rate (its shaper is anti-aliased).
 - **Matrix**: the 16 modulation routes as rows: source, amount, target.
 - **Arp** (Main, FX, Background): the step editor (play, note, accent and
   slide lanes, a ruler for the loop length), rate, octaves, gate, swing,
@@ -191,6 +220,14 @@ Two per voice, plus sub, noise and ring mod.
 - Supersaw: 7 voices with the JP-8000 detune and mix curves
 - Wavetable: 8 procedural tables, mip-mapped per octave from FFT spectra
 - FM: 2-operator phase modulation with feedback, plus osc A → B FM
+
+Unison per oscillator, like Serum 2: up to 16 voices with **Detune**, **Blend**
+(centre against side voices, the level held constant) and **Width** (stereo
+spread; the filters then run per side). The gear on the UNISON field opens the
+rest: **Mode** (Linear, Super, Exp, Inv, Random spacing), **Stack** (12, 12+7,
+24, or the centre an octave or two down), **Range** (how far Detune reaches, 2
+semitones by default) and **Spread** (each voice its own shape, wavetable
+position or FM index). The Supersaw is its own seven-voice unison.
 
 ### Filters
 
@@ -227,7 +264,10 @@ figures (303 motifs, rolling, offbeat, 3-3-2, Euclidean loops, fills into the
 next bar) and a line in a psy scale (Phrygian, minor, harmonic minor, Phrygian
 dominant, Dorian) that repeats and answers itself. Acid sits on the key and
 jumps an octave on its accents, leads play broken chords through a
-progression, lasers fall down a chord, pads drift between roots. In the Arp
+progression, lasers fall down a chord, pads and gates play slow broken chords
+on a moving progression, drones walk it and climb inside each chord, stabs
+lead with their top note. Every pattern plays at least three notes (nearly
+always). In the Arp
 view: paint steps, drag a note up or down (scroll, double-click to reset), set
 the length on the ruler, shift, clear, click a template card (Rolling, Gallop,
 3-3-2, Acid line...; it keeps your notes) or generate just a new pattern. The arp locks to the host

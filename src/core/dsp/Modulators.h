@@ -46,6 +46,9 @@ public:
 
     // 0 keeps the RC charge; above it the attack bends into a swell (see attackBend).
     void setAttackCurve (float curve) noexcept { aCurve = curve; }
+    // The level the attack starts from (0..1): a note already there, quietly,
+    // that then swells (a reversed sample's tail). Reached within 3 ms.
+    void setAttackStart (float level) noexcept { aStart = std::clamp (level, 0.f, 0.95f); }
 
     void set (float attackMs, float decayMs, float sustain, float releaseMs) noexcept
     {
@@ -65,7 +68,12 @@ public:
         if (releaseMs != rMs) { rMs = releaseMs; calc (rMs, kDecayRatio, 0.f, rCoef, rBase); rBase = -kDecayRatio * (1.f - rCoef); }
     }
 
-    void noteOn() noexcept { stage = Stage::Attack; aPhase = -1.f; }
+    void noteOn() noexcept
+    {
+        stage = Stage::Attack;
+        aPhase = -1.f;
+        aRamp = aStart > 0.f ? std::min (1.f, out / aStart) : 1.f;   // a retrigger above the start needs no ramp
+    }
     void noteOff() noexcept { if (stage != Stage::Idle) { stage = Stage::Release; relFrom = out; } }
     void kill() noexcept { stage = Stage::Idle; out = 0.f; }
     bool active() const noexcept { return stage != Stage::Idle; }
@@ -80,7 +88,7 @@ public:
         constexpr float kLogRatio = -7.6014f;   // ln (kDecayRatio / (1 + kDecayRatio))
         switch (stage)
         {
-            case Stage::Attack: return attackPhase (out, attackBend (std::max (aCurve, 0.f)));
+            case Stage::Attack: return attackPhase ((out - aStart) / (1.f - aStart), attackBend (std::max (aCurve, 0.f)));
             case Stage::Decay:
                 if (1.f - sus < 1e-4f) return 1.f;
                 return std::clamp (std::log ((out - sus + kDecayRatio) / (1.f - sus + kDecayRatio)) / kLogRatio, 0.f, 1.f);
@@ -99,18 +107,20 @@ public:
         {
             case Stage::Idle: break;
             case Stage::Attack:
-                if (aCurve <= 0.f)
+                if (aCurve <= 0.f && aStart <= 0.f)
                 {
                     out = aBase + out * aCoef;
                     if (out >= 1.f || aMs <= 0.05f) { out = 1.f; stage = Stage::Decay; }
                     break;
                 }
-                // bent attack: walk the curve, starting where the level is (a retrigger)
+                // bent attack: walk the curve from the start level, picking up
+                // where the level is (a retrigger)
                 {
-                    const float bend = attackBend (aCurve);
-                    if (aPhase < 0.f) aPhase = attackPhase (out, bend);
+                    const float bend = attackBend (std::max (aCurve, 0.f));
+                    if (aPhase < 0.f) aPhase = attackPhase ((std::max (out, aStart) - aStart) / (1.f - aStart), bend);
                     aPhase += aInc;
-                    out = attackShape (aPhase, bend);
+                    aRamp = std::min (1.f, aRamp + 1.f / (0.003f * fs));
+                    out = aStart * aRamp + (1.f - aStart) * attackShape (aPhase, bend);
                     if (aPhase >= 1.f || aMs <= 0.05f) { out = 1.f; stage = Stage::Decay; }
                 }
                 break;
@@ -138,7 +148,7 @@ private:
     float out = 0.f;
     float aMs = -1.f, dMs = -1.f, rMs = -1.f, sus = -1.f;
     float aCoef = 0.f, aBase = 0.f, dCoef = 0.f, dBase = 0.f, rCoef = 0.f, rBase = 0.f;
-    float aCurve = 0.f, aInc = 1.f, aPhase = -1.f;
+    float aCurve = 0.f, aInc = 1.f, aPhase = -1.f, aStart = 0.f, aRamp = 1.f;
     float relFrom = 0.f;   // level when the release began
 
     void calc (float ms, float ratio, float target, float& coef, float& base) const noexcept

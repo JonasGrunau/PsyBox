@@ -94,9 +94,11 @@ private:
     juce::TextButton generateButton { "Generate" }, mutateButton { "Mutate" }, clearLocks { "Unlock" };
     ToggleDot arpToggle { juce::String() };   // categories with an arp; the caption is painted like SEED
     ToggleDot keyToggle { juce::String() };   // kick categories only: new kicks follow the played key
+    ParamCombo arpKey, arpScale;              // the key and scale arps are written and played in
+    std::unique_ptr<juce::ParameterAttachment> keyWatch;   // dims the scale while the key is off
     juce::Slider mutateAmount;
     juce::Label seedLabel;
-    juce::Rectangle<int> seedCaption, arpCaption, keyCaption;
+    juce::Rectangle<int> seedCaption, arpCaption, keyCaption, arpKeyCaption, scaleCaption;
 
     // Which tab is open. Follows the category when it changes; opening a
     // tab selects its first category.

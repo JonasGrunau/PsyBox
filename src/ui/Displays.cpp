@@ -4,6 +4,7 @@
 #include "dsp/Filters.h"
 #include "dsp/Modulators.h"
 #include "dsp/Shapers.h"
+#include "dsp/Unison.h"
 #include "engine/KickVoice.h"
 #include "dsp/Wavetable.h"
 
@@ -121,141 +122,364 @@ void LiveDisplay::drawDot (juce::Graphics& g, juce::Point<float> pt, bool newest
 // ---------------------------------------------------------------------------
 // WaveDisplay
 // ---------------------------------------------------------------------------
-WaveDisplay::WaveDisplay (PsyBoxProcessor& p, bool b) : DisplayBase (p), isB (b) {}
+namespace
+{
+    constexpr int kCycleLen = 512;
+
+    double nowMs() { return juce::Time::getMillisecondCounterHiRes(); }
+
+    struct OscIds
+    {
+        P on, type, shape, pw, detune, wt, wtPos, fmRatio, fm, fmFb, unison, blend, width, range, mode, stack, spread;
+    };
+    OscIds oscIds (bool b)
+    {
+        if (b)
+            return { P::OscBOn, P::OscBType, P::OscBShape, P::OscBPw, P::OscBDetune, P::OscBWt, P::OscBWtPos, P::OscBFmRatio,
+                     P::OscBFm, P::OscBFmFb, P::OscBUnison, P::OscBBlend, P::OscBUniWidth, P::OscBUniRange, P::OscBUniMode,
+                     P::OscBUniStack, P::OscBUniSpread };
+        return { P::OscAOn, P::OscAType, P::OscAShape, P::OscAPw, P::OscADetune, P::OscAWt, P::OscAWtPos, P::OscAFmRatio,
+                 P::OscAFm, P::OscAFmFb, P::OscAUnison, P::OscABlend, P::OscAUniWidth, P::OscAUniRange, P::OscAUniMode,
+                 P::OscAUniStack, P::OscAUniSpread };
+    }
+
+    // How fast a voice slides past the centre on screen, in cycles per
+    // second: the real beat (hundreds of Hz at a semitone) slowed down to
+    // something the eye can follow, still faster the wider the detune.
+    float driftRate (float semis)
+    {
+        return std::copysign (1.2f * std::sqrt (std::abs (semis)), semis);
+    }
+} // namespace
+
+WaveDisplay::WaveDisplay (PsyBoxProcessor& p, bool b) : DisplayBase (p), isB (b)
+{
+    startMs = nowMs();
+    startTimerHz (60);
+}
+
+void WaveDisplay::showVoices (bool on)
+{
+    holdVoices = on;
+    voicesAt = nowMs();
+    repaint();
+}
 
 uint64_t WaveDisplay::fingerprint() const
 {
-    if (isB)
-        return hashParams ({ P::OscBOn, P::OscBType, P::OscBShape, P::OscBPw, P::OscBDetune, P::OscBWt, P::OscBWtPos,
-                             P::OscBFmRatio, P::OscBFm, P::OscBFmFb, P::OscBSync, P::OscBCoarse });
-    return hashParams ({ P::OscAOn, P::OscAType, P::OscAShape, P::OscAPw, P::OscADetune, P::OscAWt, P::OscAWtPos,
-                         P::OscAFmRatio, P::OscAFm, P::OscAFmFb });
+    const auto id = oscIds (isB);
+    return hashParams ({ id.on, id.type, id.shape, id.pw, id.detune, id.wt, id.wtPos, id.fmRatio, id.fm, id.fmFb, id.unison,
+                         id.blend, id.width, id.range, id.mode, id.stack, id.spread, P::OscBSync, P::OscBCoarse });
+}
+
+WaveDisplay::Voices WaveDisplay::voices() const
+{
+    const auto id = oscIds (isB);
+    Voices v;
+    const float det = proc.plain (id.detune);
+    if ((int) proc.plain (id.type) == (int) psy::OscType::Supersaw)
+    {
+        // the supersaw's own seven saws, centre first
+        using S = psy::dsp::Supersaw;
+        static const int order[7] = { 3, 2, 4, 1, 5, 0, 6 };
+        const double dt = S::detuneCurve (juce::jlimit (0.0, 1.0, (double) det));
+        v.count = 7;
+        for (int k = 0; k < 7; ++k)
+        {
+            const int i = order[k];
+            v.semis[(size_t) k] = 12.f * (float) std::log2 (1.0 + S::kOffsets[i] * dt);
+            v.gain[(size_t) k] = i == 3 ? S::centreGain (det) : S::sideGain (det);
+        }
+        v.span = 12.f * (float) std::log2 (1.0 + S::kOffsets[6] * S::detuneCurve (1.0));
+        return v;
+    }
+    psy::dsp::UnisonLayout l;
+    const float range = proc.plain (id.range);
+    l.compute ((int) proc.plain (id.unison), det, range, (int) proc.plain (id.mode), (int) proc.plain (id.stack),
+               proc.plain (id.blend), proc.plain (id.width));
+    v.count = l.count;
+    v.span = std::max (0.05f, range * 0.5f);
+    for (int k = 0; k < l.count; ++k)
+    {
+        v.semis[(size_t) k] = l.semis[(size_t) k];
+        v.gain[(size_t) k] = l.gain[(size_t) k];
+        v.span = std::max (v.span, std::abs (l.semis[(size_t) k]));
+    }
+    return v;
+}
+
+float WaveDisplay::linesAlpha() const
+{
+    if (holdVoices) return 1.f;
+    const double age = nowMs() - voicesAt;
+    return (float) juce::jlimit (0.0, 1.0, (1300.0 - age) / 500.0);
+}
+
+bool WaveDisplay::animating() const
+{
+    if (linesAlpha() > 0.f) return true;
+    if (proc.plain (oscIds (isB).on) < 0.5f) return false;
+    const auto v = voices();
+    for (int k = 0; k < v.count; ++k)
+        if (v.semis[(size_t) k] != 0.f) return true;
+    return false;
+}
+
+void WaveDisplay::timerCallback()
+{
+    if (! isShowing()) return;
+
+    // A unison setting changed under the mouse (not by Generate or
+    // automation): show where the voices went.
+    const auto id = oscIds (isB);
+    const uint64_t up = hashParams ({ id.unison, id.detune, id.blend, id.width, id.range, id.mode, id.stack, id.type });
+    if (up != uniPrint)
+    {
+        if (uniPrint != 0 && getParentComponent() != nullptr && getParentComponent()->isMouseOverOrDragging (true))
+            voicesAt = nowMs();
+        uniPrint = up;
+    }
+
+    // ease the lines towards where the voices are now
+    if (linesAlpha() > 0.f)
+    {
+        const auto v = voices();
+        for (int k = 0; k < v.count; ++k)
+        {
+            const float target = juce::jlimit (-1.f, 1.f, v.semis[(size_t) k] / v.span);
+            auto& x = lineX[(size_t) k];
+            x = linesPlaced ? x + (target - x) * 0.25f : target;
+        }
+        for (int k = v.count; k < psy::kMaxUnison; ++k)
+            lineX[(size_t) k] = 0.f;   // new voices grow out of the centre
+        linesPlaced = true;
+    }
+
+    if (animating()) repaint();
+    else DisplayBase::timerCallback();
+}
+
+void WaveDisplay::rebuildCycle()
+{
+    const auto id = oscIds (isB);
+    const int type = (int) proc.plain (id.type);
+    const float shape = proc.plain (id.shape);
+    const float pw = proc.plain (id.pw);
+    const int table = (int) proc.plain (id.wt);
+    const float wtPos = proc.plain (id.wtPos);
+    const float ratio = proc.plain (id.fmRatio);
+    const float index = proc.plain (id.fm);
+    const float fb = proc.plain (id.fmFb);
+    const bool sync = isB && proc.plain (P::OscBSync) > 0.5f;
+    const float syncRatio = sync ? std::max (1.f, std::exp2 (proc.plain (P::OscBCoarse) / 12.f)) : 1.f;
+    const auto& bank = psy::dsp::WavetableBank::shared();
+
+    // With Spread every unison voice has its own shape (or table position),
+    // so each gets its own period.
+    const float spread = type == (int) psy::OscType::Supersaw ? 0.f : proc.plain (id.spread);
+    psy::dsp::UnisonLayout l;
+    l.compute (spread > 0.f ? (int) proc.plain (id.unison) : 1, 0.f, 0.f, 0, 0, 1.f, 0.f);
+    cycle.assign ((size_t) (kCycleLen * l.count), 0.f);
+
+    for (int k = 0; k < l.count; ++k)
+    {
+        const float u = l.pos[(size_t) k] * spread;
+        float* out = cycle.data() + k * kCycleLen;
+        float fb1 = 0.f, fb2 = 0.f;
+        // FM feedback settles over the first period; keep the second
+        const int periods = type == (int) psy::OscType::FM ? 2 : 1;
+        for (int i = 0; i < kCycleLen * periods; ++i)
+        {
+            float ph = (float) (i % kCycleLen) / (float) kCycleLen;
+            if (sync) { const float s = ph * syncRatio; ph = s - std::floor (s); }
+            float v = 0.f;
+            switch (type)
+            {
+                case 1: v = 2.f * ph - 1.f; break;
+                case 2: v = bank.read (table, juce::jlimit (0.f, 1.f, wtPos + u * 0.5f), ph, 1.f / 2048.f, 0.45f); break;
+                case 3:
+                {
+                    const float m = std::sin (psy::dsp::kTwoPi * ph * ratio + fb * 1.4f * 0.5f * (fb1 + fb2));
+                    fb2 = fb1; fb1 = m;
+                    v = std::sin (psy::dsp::kTwoPi * ph + index * (1.f + u * 0.5f) * m);
+                    break;
+                }
+                default:
+                {
+                    const float s = juce::jlimit (0.f, 3.f, shape + u * 1.5f);
+                    const float sine = std::sin (psy::dsp::kTwoPi * ph);
+                    const float tri = ph < 0.5f ? 4.f * ph - 1.f : 3.f - 4.f * ph;
+                    const float saw = 2.f * ph - 1.f;
+                    const float sq = ph < pw ? 1.f : -1.f;
+                    if (s < 1.f) v = sine + (tri - sine) * s;
+                    else if (s < 2.f) v = tri + (saw - tri) * (s - 1.f);
+                    else v = saw + (sq - saw) * (s - 2.f);
+                    break;
+                }
+            }
+            if (i >= (periods - 1) * kCycleLen)
+                out[i % kCycleLen] = juce::jlimit (-1.2f, 1.2f, v);
+        }
+    }
 }
 
 void WaveDisplay::paintContent (juce::Graphics& g, juce::Rectangle<float> r)
 {
     drawGrid (g, r, 4, 2);
-    const bool on = proc.plain (isB ? P::OscBOn : P::OscAOn) > 0.5f;
-    const int type = (int) proc.plain (isB ? P::OscBType : P::OscAType);
-    const float shape = proc.plain (isB ? P::OscBShape : P::OscAShape);
-    const float pw = proc.plain (isB ? P::OscBPw : P::OscAPw);
-    const float det = proc.plain (isB ? P::OscBDetune : P::OscADetune);
-    const int table = (int) proc.plain (isB ? P::OscBWt : P::OscAWt);
-    const float wtPos = proc.plain (isB ? P::OscBWtPos : P::OscAWtPos);
-    const float ratio = proc.plain (isB ? P::OscBFmRatio : P::OscAFmRatio);
-    const float index = proc.plain (isB ? P::OscBFm : P::OscAFm);
-    const float fb = proc.plain (isB ? P::OscBFmFb : P::OscAFmFb);
-    const bool sync = isB && proc.plain (P::OscBSync) > 0.5f;
-    const float syncRatio = sync ? std::exp2 (proc.plain (P::OscBCoarse) / 12.f) : 1.f;
+    const auto id = oscIds (isB);
+    const bool on = proc.plain (id.on) > 0.5f;
 
+    const uint64_t shapePrint = hashParams ({ id.type, id.shape, id.pw, id.wt, id.wtPos, id.fmRatio, id.fm, id.fmFb,
+                                              id.spread, id.unison, P::OscBSync, P::OscBCoarse });
+    if (shapePrint != cyclePrint || cycle.empty())
+    {
+        cyclePrint = shapePrint;
+        rebuildCycle();
+    }
+    const int periods = (int) cycle.size() / kCycleLen;
+    const auto v = on ? voices() : Voices {};
+    const double t = (nowMs() - startMs) / 1000.0;
+
+    // two periods across the display; each voice at its own pitch and
+    // drifting phase
     const int n = std::max (64, (int) r.getWidth() * 2);
-    const auto& bank = psy::dsp::WavetableBank::shared();
-    std::vector<float> y ((size_t) n);
-
-    float fb1 = 0.f, fb2 = 0.f;
-    for (int i = 0; i < n; ++i)
-    {
-        const float t = 2.f * (float) i / (float) n;  // two cycles
-        float ph = t - std::floor (t);
-        if (sync) { const float s = ph * std::max (1.f, syncRatio); ph = s - std::floor (s); }
-        float v = 0.f;
-        switch (type)
-        {
-            case 1:
-            {
-                static constexpr float off[7] = { -0.11f, -0.063f, -0.0195f, 0.f, 0.0199f, 0.062f, 0.107f };
-                for (float o : off)
-                {
-                    const float pp = t * (1.f + o * det * 3.f) + o * 3.1f;
-                    v += 2.f * (pp - std::floor (pp)) - 1.f;
-                }
-                v *= 0.3f;
-                break;
-            }
-            case 2:
-                v = bank.read (table, wtPos, ph, 1.f / 2048.f, 0.45f);
-                break;
-            case 3:
-            {
-                const float m = std::sin (psy::dsp::kTwoPi * ph * ratio + fb * 1.4f * 0.5f * (fb1 + fb2));
-                fb2 = fb1; fb1 = m;
-                v = std::sin (psy::dsp::kTwoPi * ph + index * m);
-                break;
-            }
-            default:
-            {
-                const float s = juce::jlimit (0.f, 3.f, shape);
-                const float sine = std::sin (psy::dsp::kTwoPi * ph);
-                const float tri = ph < 0.5f ? 4.f * ph - 1.f : 3.f - 4.f * ph;
-                const float saw = 2.f * ph - 1.f;
-                const float sq = ph < pw ? 1.f : -1.f;
-                if (s < 1.f) v = sine + (tri - sine) * s;
-                else if (s < 2.f) v = tri + (saw - tri) * (s - 1.f);
-                else v = saw + (sq - saw) * (s - 2.f);
-                break;
-            }
-        }
-        y[(size_t) i] = juce::jlimit (-1.2f, 1.2f, v);
-    }
-
-    juce::Path p;
     const float mid = r.getCentreY(), amp = r.getHeight() * 0.38f;
-    for (int i = 0; i < n; ++i)
-    {
-        const float x = r.getX() + r.getWidth() * (float) i / (float) (n - 1);
-        const float yy = mid - y[(size_t) i] * amp;
-        if (i == 0) p.startNewSubPath (x, yy);
-        else p.lineTo (x, yy);
-    }
+    const auto pathFor = [&] (int k) {
+        const float semis = v.semis[(size_t) k];
+        const float ratio = std::exp2 (semis / 12.f);
+        const double drift = (double) driftRate (semis) * t;
+        const float* cyc = cycle.data() + std::min (k, periods - 1) * kCycleLen;
+        juce::Path p;
+        for (int i = 0; i < n; ++i)
+        {
+            double ph = 2.0 * (double) i / (double) (n - 1) * (double) ratio + drift;
+            ph -= std::floor (ph);
+            const float fi = (float) ph * (float) kCycleLen;
+            const int i0 = (int) fi % kCycleLen;
+            const float fr = fi - std::floor (fi);
+            const float y = cyc[i0] + (cyc[(i0 + 1) % kCycleLen] - cyc[i0]) * fr;
+            const float x = r.getX() + r.getWidth() * (float) i / (float) (n - 1);
+            if (i == 0) p.startNewSubPath (x, mid - y * amp);
+            else p.lineTo (x, mid - y * amp);
+        }
+        return p;
+    };
+
     if (! on)
     {
         g.setColour (col::textFaint);
-        g.strokePath (p, juce::PathStrokeType (1.2f));
+        g.strokePath (pathFor (0), juce::PathStrokeType (1.2f));
         return;
     }
-    g.setColour (accent().withAlpha (0.12f));
-    g.strokePath (p, juce::PathStrokeType (5.f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
-    g.setColour (accent());
-    g.strokePath (p, juce::PathStrokeType (1.5f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+
+    float maxGain = 0.f;
+    for (int k = 0; k < v.count; ++k) maxGain = std::max (maxGain, v.gain[(size_t) k]);
+    const auto acc = accent();
+    // the outer voices first, the centre last and brightest
+    for (int k = v.count - 1; k >= 1; --k)
+    {
+        const float rel = maxGain > 0.f ? v.gain[(size_t) k] / maxGain : 0.f;
+        if (rel < 0.01f) continue;
+        g.setColour (acc.withAlpha (0.12f + 0.4f * rel));
+        g.strokePath (pathFor (k), juce::PathStrokeType (1.1f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+    }
+    const auto centre = pathFor (0);
+    g.setColour (acc.withAlpha (0.12f));
+    g.strokePath (centre, juce::PathStrokeType (5.f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+    g.setColour (acc);
+    g.strokePath (centre, juce::PathStrokeType (1.5f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+
+    // the voices as lines across the detune range (Serum 2's unison view)
+    const float a = linesAlpha();
+    if (a <= 0.f || v.count < 2) return;
+    g.setColour (col::well.withAlpha (0.82f * a));
+    g.fillRect (r);
+    const float half = r.getWidth() * 0.5f - 12.f;
+    g.setColour (col::textFaint.withAlpha (a));
+    g.fillRect (r.getCentreX() - 0.5f, r.getY() + 6.f, 1.f, r.getHeight() - 12.f);
+    for (int k = v.count - 1; k >= 0; --k)
+    {
+        const float rel = maxGain > 0.f ? v.gain[(size_t) k] / maxGain : 0.f;
+        const float x = r.getCentreX() + (linesPlaced ? lineX[(size_t) k] : juce::jlimit (-1.f, 1.f, v.semis[(size_t) k] / v.span)) * half;
+        const float h = (r.getHeight() - 16.f) * (0.3f + 0.7f * rel);
+        const auto line = juce::Rectangle<float> (x - 1.f, mid - h * 0.5f, 2.f, h);
+        g.setColour (acc.withAlpha (a * (0.3f + 0.7f * rel)));
+        g.fillRoundedRectangle (line, 1.f);
+    }
+    float widest = 0.f;
+    for (int k = 0; k < v.count; ++k) widest = std::max (widest, std::abs (v.semis[(size_t) k]));
+    g.setColour (col::textDim.withAlpha (a));
+    g.setFont (mono (10.f));
+    const auto info = r.reduced (6.f, 4.f).toNearestInt();
+    g.drawText (juce::String (v.count) + " voices", info, juce::Justification::topLeft, false);
+    g.drawText (juce::String (juce::CharPointer_UTF8 ("\xc2\xb1")) + juce::String (juce::roundToInt (widest * 100.f)) + " ct", info,
+                juce::Justification::topRight, false);
 }
 
 // ---------------------------------------------------------------------------
 // FilterDisplay
 // ---------------------------------------------------------------------------
-FilterDisplay::FilterDisplay (PsyBoxProcessor& p, int s) : DisplayBase (p), slot (s)
+FilterDisplay::FilterDisplay (PsyBoxProcessor& p, int s) : LiveDisplay (p), slot (s)
 {
+    filter.prepare (48000.f);
     fftData.resize (2 * 4096);
     magDb.resize (2048);
 }
 
-uint64_t FilterDisplay::fingerprint() const
+bool FilterDisplay::live (psy::Voice::FilterNow& out) const
 {
-    if (slot == 0)
-        return hashParams ({ P::F1Type, P::F1Cutoff, P::F1Reso, P::F1Drive, P::F1Vowel });
-    return hashParams ({ P::F2Type, P::F2Cutoff, P::F2Reso, P::F2Drive, P::F1Vowel });
+    if (view.numVoices <= 0) return false;
+    out = view.voices[0].filter[(size_t) slot];
+    return true;
 }
 
-void FilterDisplay::recompute()
+uint64_t FilterDisplay::fingerprint() const
 {
-    const float fs = 48000.f;
-    psy::dsp::FilterSlot f;
-    f.prepare (fs);
-    const int type = (int) proc.plain (slot == 0 ? P::F1Type : P::F2Type);
-    f.setType (type);
-    const float cutoff = proc.plain (slot == 0 ? P::F1Cutoff : P::F2Cutoff);
-    const float reso = proc.plain (slot == 0 ? P::F1Reso : P::F2Reso);
-    const float vowel = proc.plain (P::F1Vowel);
+    uint64_t h = slot == 0 ? hashParams ({ P::F1Type, P::F1Cutoff, P::F1Reso, P::F1Drive, P::F1Vowel })
+                           : hashParams ({ P::F2Type, P::F2Cutoff, P::F2Reso, P::F2Drive, P::F1Vowel });
+    psy::Voice::FilterNow now;
+    if (live (now))
+    {
+        h = mixPos (h, std::log2 (std::max (now.cutoff, 1.f)) / 16.f);
+        h = mixPos (h, now.reso);
+        h = mixPos (h, now.vowel + 2.f);
+    }
+    return h;
+}
+
+void FilterDisplay::recompute (int type, float cutoff, float reso, float vowel)
+{
+    filter.setType (type);
+    filter.reset();
     // Small-signal response: the drive stage is bypassed so the curve shows
     // the filter shape rather than a level change.
-    f.update (cutoff, std::min (reso, 0.985f), 0.f, vowel);
+    filter.update (cutoff, std::min (reso, 0.985f), 0.f, vowel);
 
     std::fill (fftData.begin(), fftData.end(), 0.f);
     const float imp = 1e-3f;  // tiny impulse keeps the nonlinear filters in their linear region
     for (int i = 0; i < 4096; ++i)
-        fftData[(size_t) i] = f.process (i == 0 ? imp : 0.f) / imp;
+        fftData[(size_t) i] = filter.process (i == 0 ? imp : 0.f) / imp;
     fft.performFrequencyOnlyForwardTransform (fftData.data(), true);
     for (int i = 0; i < 2048; ++i)
         magDb[(size_t) i] = juce::Decibels::gainToDecibels (fftData[(size_t) i], -120.f);
+}
+
+juce::Path FilterDisplay::responsePath (juce::Rectangle<float> r, float top, float bottom) const
+{
+    juce::Path p;
+    const int w = (int) r.getWidth();
+    for (int px = 0; px <= w; ++px)
+    {
+        const float hz = 20.f * std::pow (1000.f, (float) px / (float) w);
+        const float bin = hz / 48000.f * 4096.f;
+        const int b0 = juce::jlimit (0, 2046, (int) bin);
+        const float fr = bin - (float) b0;
+        const float db = magDb[(size_t) b0] + (magDb[(size_t) b0 + 1] - magDb[(size_t) b0]) * fr;
+        const float y = juce::jlimit (r.getY() - 2.f, r.getBottom() + 2.f, r.getY() + r.getHeight() * (top - db) / (top - bottom));
+        if (px == 0) p.startNewSubPath (r.getX() + (float) px, y);
+        else p.lineTo (r.getX() + (float) px, y);
+    }
+    return p;
 }
 
 void FilterDisplay::paintContent (juce::Graphics& g, juce::Rectangle<float> r)
@@ -277,27 +501,34 @@ void FilterDisplay::paintContent (juce::Graphics& g, juce::Rectangle<float> r)
         g.drawText ("BYPASSED", r.toNearestInt(), juce::Justification::centred, false);
         return;
     }
-    recompute();
+    const float cutoff = proc.plain (slot == 0 ? P::F1Cutoff : P::F2Cutoff);
+    const float reso = proc.plain (slot == 0 ? P::F1Reso : P::F2Reso);
+    const float vowel = proc.plain (P::F1Vowel);
 
-    juce::Path p;
-    const int w = (int) r.getWidth();
-    for (int px = 0; px <= w; ++px)
+    // the newest note's filter, where its envelopes, LFOs and macros have it
+    psy::Voice::FilterNow now;
+    const bool moved = live (now)
+                    && (std::abs (std::log2 (std::max (now.cutoff, 1.f) / cutoff)) > 0.01f
+                        || std::abs (now.reso - reso) > 0.005f || std::abs (now.vowel - vowel) > 0.005f);
+    const float shownCutoff = juce::jlimit (16.f, 22000.f, moved ? now.cutoff : cutoff);
+    if (moved)
     {
-        const float hz = 20.f * std::pow (1000.f, (float) px / (float) w);
-        const float bin = hz / 48000.f * 4096.f;
-        const int b0 = juce::jlimit (0, 2046, (int) bin);
-        const float fr = bin - (float) b0;
-        const float db = magDb[(size_t) b0] + (magDb[(size_t) b0 + 1] - magDb[(size_t) b0]) * fr;
-        const float y = juce::jlimit (r.getY() - 2.f, r.getBottom() + 2.f, yOf (db));
-        if (px == 0) p.startNewSubPath (r.getX() + (float) px, y);
-        else p.lineTo (r.getX() + (float) px, y);
+        recompute (type, cutoff, reso, vowel);
+        g.setColour (col::textFaint);
+        g.strokePath (responsePath (r, top, bottom), juce::PathStrokeType (1.f));
+        g.setColour (col::textFaint.withAlpha (0.6f));
+        g.fillRect (xOf (cutoff), r.getY(), 1.f, r.getHeight());
+        recompute (type, now.cutoff, now.reso, now.vowel);
     }
-    strokeCurve (g, p, r, true);
+    else
+    {
+        recompute (type, cutoff, reso, vowel);
+    }
+    strokeCurve (g, responsePath (r, top, bottom), r, true);
 
     // cutoff marker
-    const float cutoff = proc.plain (slot == 0 ? P::F1Cutoff : P::F2Cutoff);
     g.setColour (accent().withAlpha (0.35f));
-    g.fillRect (xOf (cutoff), r.getY(), 1.f, r.getHeight());
+    g.fillRect (xOf (shownCutoff), r.getY(), 1.f, r.getHeight());
 }
 
 // ---------------------------------------------------------------------------
@@ -305,7 +536,7 @@ void FilterDisplay::paintContent (juce::Graphics& g, juce::Rectangle<float> r)
 // ---------------------------------------------------------------------------
 uint64_t EnvDisplay::fingerprint() const
 {
-    uint64_t h = hashParams ({ P::AenvA, P::AenvD, P::AenvS, P::AenvR, P::AenvCurve, P::FenvA, P::FenvD, P::FenvS, P::FenvR,
+    uint64_t h = hashParams ({ P::AenvA, P::AenvD, P::AenvS, P::AenvR, P::AenvCurve, P::AenvStart, P::FenvA, P::FenvD, P::FenvS, P::FenvR,
                                P::MenvA, P::MenvD, P::MenvS, P::MenvR }) + (uint64_t) env;
     for (int k = 0; k < view.numVoices; ++k)
     {
@@ -332,14 +563,18 @@ void EnvDisplay::paintContent (juce::Graphics& g, juce::Rectangle<float> r)
     const auto Y = [&] (float v) { return area.getBottom() - area.getHeight() * v; };
 
     juce::Path p;
-    p.startNewSubPath (X (0), Y (0));
-    const int steps = 24;
-    // attack: the RC charge, or the amp envelope's bend towards a swell
+    // attack: the RC charge, or the amp envelope's bend towards a swell,
+    // from the amp's start level (a note already there, quietly)
     const float bend = psy::dsp::attackBend (env == 0 ? proc.plain (P::AenvCurve) : 0.f);
+    const float start = env == 0 ? proc.plain (P::AenvStart) : 0.f;
+    const auto attackAt = [&] (float u) { return start + (1.f - start) * psy::dsp::attackShape (u, bend); };
+    p.startNewSubPath (X (0), Y (0));
+    if (start > 0.f) p.lineTo (X (0), Y (start));
+    const int steps = 24;
     for (int i = 1; i <= steps; ++i)
     {
         const float u = (float) i / steps;
-        p.lineTo (X (tw (a) * u), Y (psy::dsp::attackShape (u, bend)));
+        p.lineTo (X (tw (a) * u), Y (attackAt (u)));
     }
     for (int i = 1; i <= steps; ++i)  // decay: exponential
     {
@@ -369,7 +604,7 @@ void EnvDisplay::paintContent (juce::Graphics& g, juce::Rectangle<float> r)
         juce::Point<float> pt;
         switch ((Stage) e.stage)
         {
-            case Stage::Attack:  pt = { X (tw (a) * u), Y (psy::dsp::attackShape (u, bend)) }; break;
+            case Stage::Attack:  pt = { X (tw (a) * u), Y (attackAt (u)) }; break;
             case Stage::Decay:   pt = { X (tw (a) + tw (d) * u), Y (s + (1.f - s) * std::exp (-u * 5.f)) }; break;
             case Stage::Sustain: pt = { X (tw (a) + tw (d)), Y (s) }; break;
             case Stage::Release: pt = { X (tw (a) + tw (d) + hold + tw (rel) * u), Y (s * std::exp (-u * 5.f) * (1.f - u)) }; break;

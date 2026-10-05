@@ -28,6 +28,7 @@ struct ArpSettings
     int mode = 0, div = 12, octaves = 1;
     float gate = 0.5f, swing = 0.f;
     bool hold = false;
+    int key = -1, scale = 0;   // key 0..11: every note is moved into the scale; -1 plays them as they come
     ArpPattern pattern = ArpPattern::parse ("x");
 
     static ArpSettings from (const ParamState& p) noexcept;
@@ -136,7 +137,9 @@ private:
         // the mode picks the key, the step's note lane moves it, so one held
         // key can play a whole line
         float vel = 0.f;
-        const int note = std::clamp (nextNote (vel) + (int) set.pattern.notes[(size_t) pos], 0, 127);
+        int note = std::clamp (nextNote (vel) + (int) set.pattern.notes[(size_t) pos], 0, 127);
+        if (set.key >= 0)
+            note = std::clamp (quantizeToScale (note, set.key, set.scale), 0, 127);
         // The pattern owns the accent: accented steps hit full velocity, the
         // others stay under the engine's accent threshold.
         vel = set.pattern.has (pos, ArpPattern::Accent) ? 1.f : std::min (vel, 0.75f);

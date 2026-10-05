@@ -9,9 +9,11 @@ void Voice::prepare (float baseRate, float maxOsRate)
 {
     f1.prepare (maxOsRate);
     f2.prepare (maxOsRate);
+    f1R.prepare (maxOsRate);
+    f2R.prepare (maxOsRate);
     setRates (baseRate, maxOsRate);
-    wtA.setBank (&WavetableBank::shared());
-    wtB.setBank (&WavetableBank::shared());
+    for (auto& w : wtA) w.setBank (&WavetableBank::shared());
+    for (auto& w : wtB) w.setBank (&WavetableBank::shared());
 }
 
 void Voice::setRates (float baseRate, float osRate)
@@ -24,6 +26,9 @@ void Voice::setRates (float baseRate, float osRate)
         l.setSampleRate (baseRate);
     f1.setRate (osRate);
     f2.setRate (osRate);
+    f1R.setRate (osRate);
+    f2R.setRate (osRate);
+    noise.setRate (osRate);
     kill();
 }
 
@@ -56,10 +61,12 @@ void Voice::start (int n, float vel, bool acc, bool retrigger, bool stolen, floa
         const bool quiet = ! stolen || amp.value() < 0.01f;
         if (quiet)
         {
-            if (p.on (P::OscARetrig)) { anA.reset(); wtA.reset(); fmA.reset(); syncPhase = 0.0; }
-            else { const double ph = rng.uniform(); anA.reset (ph); wtA.reset (ph); fmA.reset (ph); }
-            if (p.on (P::OscBRetrig)) { anB.reset(); wtB.reset(); fmB.reset(); }
-            else { const double ph = rng.uniform(); anB.reset (ph); wtB.reset (ph); fmB.reset (ph); }
+            // the unison voices draw their phases from their own generator,
+            // so the first voice and everything after it start as before
+            Rng phases (seed ^ 0x756E69736F6EULL);
+            if (p.on (P::OscARetrig)) syncPhase = 0.0;
+            resetOscs (0, p.on (P::OscARetrig), phases);
+            resetOscs (1, p.on (P::OscBRetrig), phases);
             sub.reset();
             ssA.reset (rng);
             ssB.reset (rng);
@@ -67,12 +74,46 @@ void Voice::start (int n, float vel, bool acc, bool retrigger, bool stolen, floa
             {
                 f1.reset();
                 f2.reset();
+                f1R.reset();
+                f2R.reset();
             }
         }
         noise.reset (seed * 7919u + 17u);
         for (int i = 0; i < kNumLfos; ++i)
             lfos[(size_t) i].seed (seed + (uint64_t) i * 101u);
     }
+}
+
+void Voice::resetOscs (int which, bool retrig, Rng& phases) noexcept
+{
+    auto& an = which == 0 ? anA : anB;
+    auto& wt = which == 0 ? wtA : wtB;
+    auto& fm = which == 0 ? fmA : fmB;
+    const double first = retrig ? 0.0 : rng.uniform();
+    for (int k = 0; k < kMaxUnison; ++k)
+    {
+        const double ph = k == 0 ? first : (retrig ? UnisonLayout::retrigPhase (k) : phases.uniform());
+        an[(size_t) k].reset (ph);
+        wt[(size_t) k].reset (ph);
+        fm[(size_t) k].reset (ph);
+    }
+}
+
+bool Voice::Unison::update (int count, float det, float rng, int md, int stk, float bl, float wd, bool st) noexcept
+{
+    if (count == n && det == detune && rng == range && md == mode && stk == stack && bl == blend && wd == width && st == stereo)
+        return false;
+    n = count; detune = det; range = rng; mode = md; stack = stk; blend = bl; width = wd; stereo = st;
+    layout.compute (count, det, rng, md, stk, bl, wd);
+    for (int k = 0; k < layout.count; ++k)
+    {
+        const auto i = (size_t) k;
+        ratio[i] = std::exp2 (layout.semis[i] / 12.f);
+        const float a = (layout.pan[i] + 1.f) * kPi * 0.25f;
+        gL[i] = st ? layout.gain[i] * std::cos (a) * 1.41421356f : layout.gain[i];
+        gR[i] = st ? layout.gain[i] * std::sin (a) * 1.41421356f : layout.gain[i];
+    }
+    return true;
 }
 
 void Voice::changeNote (int n, bool acc, bool doGlide)
@@ -102,15 +143,17 @@ void Voice::kill()
     menv.kill();
     f1.reset();
     f2.reset();
+    f1R.reset();
+    f2R.reset();
 }
 
-float Voice::oscSample (int which, int type, double inc, float shape, float pw, float detune, int table, float wtPos,
+float Voice::oscSample (int which, int k, int type, double inc, float shape, float pw, float detune, int table, float wtPos,
                         float fmRatio, float fmIndex, float fmFb, const SyncInfo* sync, float xmodPm, float hl) noexcept
 {
-    AnalogOsc& an = which == 0 ? anA : anB;
+    AnalogOsc& an = (which == 0 ? anA : anB)[(size_t) k];
     Supersaw& ss = which == 0 ? ssA : ssB;
-    WavetableOsc& wt = which == 0 ? wtA : wtB;
-    FmOsc& fm = which == 0 ? fmA : fmB;
+    WavetableOsc& wt = (which == 0 ? wtA : wtB)[(size_t) k];
+    FmOsc& fm = (which == 0 ? fmA : fmB)[(size_t) k];
 
     // Non-analog types get a plain phase reset on sync (no correction needed:
     // the wavetable and FM outputs are already smooth at the restart point
@@ -141,6 +184,7 @@ void Voice::render (float* outL, float* outR, int chunkOffsetBase, int nBase, co
 
     amp.set (p.get (P::AenvA), p.get (P::AenvD), p.get (P::AenvS), p.get (P::AenvR));
     amp.setAttackCurve (p.get (P::AenvCurve));
+    amp.setAttackStart (p.get (P::AenvStart));
     const float accentAmt = accent ? p.get (P::Accent) : 0.f;
     // 303-style accent: shorter, harder filter envelope
     fenv.set (p.get (P::FenvA), p.get (P::FenvD) * (1.f - 0.5f * accentAmt), p.get (P::FenvS), p.get (P::FenvR));
@@ -153,6 +197,18 @@ void Voice::render (float* outL, float* outR, int chunkOffsetBase, int nBase, co
     const int f1Type = p.geti (P::F1Type), f2Type = p.geti (P::F2Type);
     f1.setType (f1Type);
     f2.setType (f2Type);
+
+    // Unison: the supersaw already is seven voices. A spread in stereo runs
+    // the filters twice; the right channel starts from the left's state.
+    const int nA = tA == (int) OscType::Supersaw ? 1 : p.geti (P::OscAUnison);
+    const int nB = tB == (int) OscType::Supersaw ? 1 : p.geti (P::OscBUnison);
+    const bool wide = (onA && nA > 1 && p.get (P::OscAUniWidth) > 0.f) || (onB && nB > 1 && p.get (P::OscBUniWidth) > 0.f);
+    if (wide && ! stereo) { f1R = f1; f2R = f2; }
+    stereo = wide;
+    f1R.setType (f1Type);
+    f2R.setType (f2Type);
+    const float spreadA = p.get (P::OscAUniSpread), spreadB = p.get (P::OscBUniSpread);
+    const int tableA = p.geti (P::OscAWt), tableB = p.geti (P::OscBWt);
     const bool parallel = p.geti (P::FRouting) == 1;
     const int penvDest = p.geti (P::PenvDest);
     const int noiseType = p.geti (P::NoiseType);
@@ -213,7 +269,7 @@ void Voice::render (float* outL, float* outR, int chunkOffsetBase, int nBase, co
         src[(size_t) ModSrc::Macro2] = p.get (P::Macro2);
         src[(size_t) ModSrc::Macro3] = p.get (P::Macro3);
         src[(size_t) ModSrc::Macro4] = p.get (P::Macro4);
-        const float sweep = sweepT >= 1.0 ? 1.f : std::pow ((float) sweepT, ctx.sweepExp);
+        const float sweep = sweepValue ((float) sweepT, ctx.sweepDelay, ctx.sweepExp);
         src[(size_t) ModSrc::Sweep] = sweep;
         if (sweepT < 1.0)
         {
@@ -272,6 +328,12 @@ void Voice::render (float* outL, float* outR, int chunkOffsetBase, int nBase, co
         const float lvlRing = clamp01 (p.get (P::RingLevel) + M (ModDst::RingLevel));
         const bool needA = lvlA > 0.f || lvlRing > 0.f || xmod > 0.f;
         const bool needB = lvlB > 0.f || lvlRing > 0.f;
+        if (nA > 1)
+            uniA.update (nA, detA, p.get (P::OscAUniRange), p.geti (P::OscAUniMode), p.geti (P::OscAUniStack),
+                         p.get (P::OscABlend), p.get (P::OscAUniWidth), stereo);
+        if (nB > 1)
+            uniB.update (nB, detB, p.get (P::OscBUniRange), p.geti (P::OscBUniMode), p.geti (P::OscBUniStack),
+                         p.get (P::OscBBlend), p.get (P::OscBUniWidth), stereo);
 
         // Filters: cutoff in octaves around the knob value
         const float envAmt1 = p.get (P::F1Env) + M (ModDst::FilterEnvAmt);
@@ -280,14 +342,22 @@ void Voice::render (float* outL, float* outR, int chunkOffsetBase, int nBase, co
         if (f1Type != 0)
         {
             const float oct = envAmt1 * 8.f * fEnv * accentEnv + p.get (P::F1Key) * keyOct + M (ModDst::F1Cutoff) * 8.f;
-            f1.update (p.get (P::F1Cutoff) * std::exp2 (oct), clamp01 (p.get (P::F1Reso) + M (ModDst::F1Reso)),
-                       clamp01 (p.get (P::F1Drive) + M (ModDst::F1Drive)), clamp01 (p.get (P::F1Vowel) + M (ModDst::F1Vowel)));
+            const FilterNow f { p.get (P::F1Cutoff) * std::exp2 (oct), clamp01 (p.get (P::F1Reso) + M (ModDst::F1Reso)),
+                                clamp01 (p.get (P::F1Vowel) + M (ModDst::F1Vowel)) };
+            const float drive = clamp01 (p.get (P::F1Drive) + M (ModDst::F1Drive));
+            f1.update (f.cutoff, f.reso, drive, f.vowel);
+            if (stereo) f1R.update (f.cutoff, f.reso, drive, f.vowel);
+            filtNow[0] = f;
         }
         if (f2Type != 0)
         {
             const float oct = (p.get (P::F2Env) + M (ModDst::F2EnvAmt)) * 8.f * fEnv * accentEnv + p.get (P::F2Key) * keyOct + M (ModDst::F2Cutoff) * 8.f;
-            f2.update (p.get (P::F2Cutoff) * std::exp2 (oct), clamp01 (p.get (P::F2Reso) + M (ModDst::F2Reso)),
-                       clamp01 (p.get (P::F2Drive) + M (ModDst::F2Drive)), clamp01 (p.get (P::F1Vowel) + M (ModDst::F1Vowel)));
+            const FilterNow f { p.get (P::F2Cutoff) * std::exp2 (oct), clamp01 (p.get (P::F2Reso) + M (ModDst::F2Reso)),
+                                clamp01 (p.get (P::F1Vowel) + M (ModDst::F1Vowel)) };
+            const float drive = clamp01 (p.get (P::F2Drive) + M (ModDst::F2Drive));
+            f2.update (f.cutoff, f.reso, drive, f.vowel);
+            if (stereo) f2R.update (f.cutoff, f.reso, drive, f.vowel);
+            filtNow[1] = f;
         }
 
         // the level can follow the energy sweep: up (fade in) or down (fade out)
@@ -310,36 +380,82 @@ void Voice::render (float* outL, float* outR, int chunkOffsetBase, int nBase, co
                 sync.fraction = incA > 0.0 ? syncPhase / incA : 0.0;
             }
 
-            float a = 0.f, b = 0.f;
+            // Each unison voice is the oscillator at its own pitch (and, with
+            // Spread, its own shape or wavetable position), summed per side.
+            float aL = 0.f, aR = 0.f, bL = 0.f, bR = 0.f;
             if (needA)
-                a = oscSample (0, tA, incA, shapeA, pwA, detA, p.geti (P::OscAWt), wtA_, p.get (P::OscAFmRatio), fmIdxA,
-                               p.get (P::OscAFmFb), nullptr, 0.f, ctx.harmonicLimit);
+            {
+                if (nA == 1)
+                    aL = aR = oscSample (0, 0, tA, incA, shapeA, pwA, detA, tableA, wtA_, p.get (P::OscAFmRatio), fmIdxA,
+                                         p.get (P::OscAFmFb), nullptr, 0.f, ctx.harmonicLimit);
+                else
+                    for (int k = 0; k < nA; ++k)
+                    {
+                        const auto i = (size_t) k;
+                        const float u = uniA.layout.pos[i] * spreadA;
+                        const float v = oscSample (0, k, tA, incA * uniA.ratio[i], shapeA + u * 1.5f, pwA, detA, tableA,
+                                                   clamp01 (wtA_ + u * 0.5f), p.get (P::OscAFmRatio), fmIdxA * (1.f + u * 0.5f),
+                                                   p.get (P::OscAFmFb), nullptr, 0.f, ctx.harmonicLimit);
+                        aL += v * uniA.gL[i];
+                        aR += v * uniA.gR[i];
+                    }
+            }
+            const float a = 0.5f * (aL + aR);   // what modulates B
             if (needB)
-                b = oscSample (1, tB, incB, shapeB, pwB, detB, p.geti (P::OscBWt), wtB_, p.get (P::OscBFmRatio), fmIdxB,
-                               p.get (P::OscBFmFb), p.on (P::OscBSync) ? &sync : nullptr, xmod * a, ctx.harmonicLimit);
+            {
+                const SyncInfo* syncB = p.on (P::OscBSync) ? &sync : nullptr;
+                if (nB == 1)
+                    bL = bR = oscSample (1, 0, tB, incB, shapeB, pwB, detB, tableB, wtB_, p.get (P::OscBFmRatio), fmIdxB,
+                                         p.get (P::OscBFmFb), syncB, xmod * a, ctx.harmonicLimit);
+                else
+                    for (int k = 0; k < nB; ++k)
+                    {
+                        const auto i = (size_t) k;
+                        const float u = uniB.layout.pos[i] * spreadB;
+                        const float v = oscSample (1, k, tB, incB * uniB.ratio[i], shapeB + u * 1.5f, pwB, detB, tableB,
+                                                   clamp01 (wtB_ + u * 0.5f), p.get (P::OscBFmRatio), fmIdxB * (1.f + u * 0.5f),
+                                                   p.get (P::OscBFmFb), syncB, xmod * a, ctx.harmonicLimit);
+                        bL += v * uniB.gL[i];
+                        bR += v * uniB.gR[i];
+                    }
+            }
 
-            float x = a * lvlA + b * lvlB + a * b * lvlRing;
+            float x = aL * lvlA + bL * lvlB + aL * bL * lvlRing;
+            float xR = stereo ? aR * lvlA + bR * lvlB + aR * bR * lvlRing : 0.f;
             if (lvlSub > 0.f)
-                x += sub.process (incSub, subShape == 0 ? 0.f : (subShape == 1 ? 1.f : 3.f), 0.5f) * lvlSub;
+            {
+                const float s = sub.process (incSub, subShape == 0 ? 0.f : (subShape == 1 ? 1.f : 3.f), 0.5f) * lvlSub;
+                x += s;
+                xR += s;
+            }
             float direct = 0.f;
             if (lvlNoise > 0.f)
             {
                 const float nz = noise.process (noiseType, incA * 4.0) * lvlNoise;
                 if (noiseDirect) direct = nz;
-                else x += nz;
+                else { x += nz; xR += nz; }
             }
             x *= 0.5f;
+            xR *= 0.5f;
 
-            float y;
+            float y, yR;
             if (parallel && f2Type != 0)
+            {
                 y = 0.5f * (f1.process (x) + f2.process (x)) * 1.4f;
+                yR = stereo ? 0.5f * (f1R.process (xR) + f2R.process (xR)) * 1.4f : y;
+            }
             else
+            {
                 y = f2.process (f1.process (x));
+                yR = stereo ? f2R.process (f1R.process (xR)) : y;
+            }
             y += 0.5f * direct;   // same staging as the filtered path
+            yR += stereo ? 0.5f * direct : 0.f;
 
             y = flushDenormal (y);
+            yR = flushDenormal (yR);
             outL[base + j] += y * gL;
-            outR[base + j] += y * gR;
+            outR[base + j] += yR * gR;
         }
         if (n == nBase - 1) srcNow = src;
     }

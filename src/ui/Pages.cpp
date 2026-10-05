@@ -53,7 +53,7 @@ void OscPage::setExtra (Extra e)
 void OscPage::resized()
 {
     // top: 384 = two section rows; bottom the same
-    constexpr int kTop = 2 * kRowH, kSubW = 144, kOscW = 288, kMacroW = 208, kRightW = 256;
+    constexpr int kTop = 2 * kRowH, kSubW = 144, kOscW = 296, kMacroW = 208, kRightW = 256;
     const int w = getWidth(), h = getHeight();
     sub.setBounds (0, 0, kSubW, kRowH);
     noise.setBounds (0, kRowH, kSubW, kRowH);

@@ -1,7 +1,111 @@
 #include "SynthPanels.h"
 
+#include "dsp/Unison.h"
+
 using namespace theme;
 using psy::P;
+
+// ---------------------------------------------------------------------------
+// UnisonSettings
+// ---------------------------------------------------------------------------
+UnisonSettings::UnisonSettings (PsyBoxProcessor& p, bool b)
+    : proc (p), isB (b),
+      mode (p, b ? P::OscBUniMode : P::OscAUniMode, "Mode"),
+      stack (p, b ? P::OscBUniStack : P::OscAUniStack, "Stack")
+{
+    addAndMakeVisible (mode);
+    addAndMakeVisible (stack);
+    range = ks.add (*this, p, b ? P::OscBUniRange : P::OscAUniRange);
+    spread = ks.add (*this, p, b ? P::OscBUniSpread : P::OscAUniSpread);
+    startTimerHz (30);
+}
+
+void UnisonSettings::setType (int t)
+{
+    spread->setLabel (t == (int) psy::OscType::Wavetable ? "WT Pos" : (t == (int) psy::OscType::FM ? "Index" : "Shape"));
+}
+
+namespace
+{
+    // The settings the voice view draws, Osc A's or Osc B's.
+    struct UniIds { P count, detune, blend, width, range, mode, stack; };
+    UniIds uniIds (bool b)
+    {
+        if (b) return { P::OscBUnison, P::OscBDetune, P::OscBBlend, P::OscBUniWidth, P::OscBUniRange, P::OscBUniMode, P::OscBUniStack };
+        return { P::OscAUnison, P::OscADetune, P::OscABlend, P::OscAUniWidth, P::OscAUniRange, P::OscAUniMode, P::OscAUniStack };
+    }
+} // namespace
+
+uint64_t UnisonSettings::print() const
+{
+    const auto id = uniIds (isB);
+    uint64_t h = 1469598103934665603ULL;
+    for (auto prm : { id.count, id.detune, id.blend, id.width, id.range, id.mode, id.stack })
+        h = (h ^ (uint64_t) std::lround (proc.plain (prm) * 1000.f)) * 1099511628211ULL;
+    return h ^ (uint64_t) accent().getARGB();
+}
+
+void UnisonSettings::timerCallback()
+{
+    if (! isShowing()) return;
+    const auto h = print();
+    if (h != lastPrint) { lastPrint = h; repaint (linesArea); }
+}
+
+void UnisonSettings::paint (juce::Graphics& g)
+{
+    const auto b = getLocalBounds().toFloat();
+    g.setColour (col::well);
+    g.fillRoundedRectangle (b, 4.f);
+    g.setColour (col::line);
+    g.drawRoundedRectangle (b.reduced (0.5f), 4.f, 1.f);
+
+    // where the voices sit in pitch (across the range) and in level
+    const auto r = linesArea.toFloat();
+    const auto id = uniIds (isB);
+    psy::dsp::UnisonLayout l;
+    const float range = proc.plain (id.range);
+    l.compute ((int) proc.plain (id.count), proc.plain (id.detune), range, (int) proc.plain (id.mode), (int) proc.plain (id.stack),
+               proc.plain (id.blend), proc.plain (id.width));
+    float span = std::max (0.05f, range * 0.5f), maxGain = 0.f;
+    for (int k = 0; k < l.count; ++k)
+    {
+        span = std::max (span, std::abs (l.semis[(size_t) k]));
+        maxGain = std::max (maxGain, l.gain[(size_t) k]);
+    }
+    g.setColour (col::grid);
+    g.fillRect (r.getX(), r.getBottom() - 1.f, r.getWidth(), 1.f);
+    g.fillRect (r.getCentreX() - 0.5f, r.getY(), 1.f, r.getHeight());
+    const bool on = isEnabled();
+    for (int k = l.count - 1; k >= 0; --k)
+    {
+        const float rel = maxGain > 0.f ? l.gain[(size_t) k] / maxGain : 0.f;
+        const float x = r.getCentreX() + juce::jlimit (-1.f, 1.f, l.semis[(size_t) k] / span) * (r.getWidth() * 0.5f - 3.f);
+        const float h = (r.getHeight() - 4.f) * (0.3f + 0.7f * rel);
+        g.setColour (on ? accent().withAlpha (0.3f + 0.7f * rel) : col::textFaint);
+        g.fillRoundedRectangle (x - 1.f, r.getBottom() - h, 2.f, h, 1.f);
+    }
+    g.setColour (on ? col::textDim : col::textFaint);
+    g.setFont (label (10.f));
+    g.drawText ("VOICES", linesArea.withY (linesArea.getBottom() + kLabelGap).withHeight (kLabelH), juce::Justification::centred, false);
+}
+
+void UnisonSettings::resized()
+{
+    // the selectors on the left, one per row; range and spread on the
+    // right, and under them the voices
+    const auto b = getLocalBounds().reduced (sp::sm);
+    const int gridH = 2 * kCellH + sp::xs;
+    const CellGrid gr { b.getX() - kCellInset + sp::sm, b.getCentreY() - gridH / 2 };
+    const auto cell = [&] (int col, int row, int span) {
+        return juce::Rectangle<int> (gr.x0 + col * kCellW, gr.y0 + row * (kCellH + sp::xs), span * kCellW, kCellH);
+    };
+    mode.setBounds (cell (0, 0, 2).reduced (kCellInset, 0));
+    stack.setBounds (cell (0, 1, 2).reduced (kCellInset, 0));
+    range->setBounds (cell (2, 0, 1));
+    spread->setBounds (cell (3, 0, 1));
+    linesArea = cell (2, 1, 2).reduced (kCellInset, 0).withHeight (kKnobD);
+}
 
 // ---------------------------------------------------------------------------
 // OscPanel
@@ -10,26 +114,46 @@ OscPanel::OscPanel (PsyBoxProcessor& p, bool b)
     : Section (b ? "Osc B" : "Osc A"), proc (p), isB (b),
       onToggle (p, b ? P::OscBOn : P::OscAOn, "On"),
       type (p, b ? P::OscBType : P::OscAType),
+      semi (p, b ? P::OscBCoarse : P::OscACoarse, "Sem"),
+      fine (p, b ? P::OscBFine : P::OscAFine, "Fin"),
+      unison (p, b ? P::OscBUnison : P::OscAUnison, "Unison"),
       wave (p, b),
-      table (p, b ? P::OscBWt : P::OscAWt),
+      settings (p, b),
+      table (p, b ? P::OscBWt : P::OscAWt, "Table"),
       retrig (p, b ? P::OscBRetrig : P::OscARetrig, "Retrig")
 {
     addAndMakeVisible (onToggle);
     addAndMakeVisible (type);
+    addAndMakeVisible (semi);
+    addAndMakeVisible (fine);
     addAndMakeVisible (wave);
+    addChildComponent (settings);
     addChildComponent (table);
     addAndMakeVisible (retrig);
     retrig.setTooltip ("Start the waveform at the same phase on every note");
+
+    unison.setCellStyle (true);
+    unison.setGear (true);
+    unison.setTooltip ("Unison voices, 1 to 16: drag or scroll. The gear opens the spacing, stack, range and spread");
+    unison.onGear = [this] {
+        showSettings = ! showSettings;
+        unison.setGearOn (showSettings);
+        settings.setVisible (showSettings);
+        wave.setVisible (! showSettings);
+    };
+    unison.onActive = [this] (bool active) { wave.showVoices (active); };
+    addAndMakeVisible (unison);
+
     shape = ks.add (*this, p, b ? P::OscBShape : P::OscAShape);
     pw = ks.add (*this, p, b ? P::OscBPw : P::OscAPw);
-    detune = ks.add (*this, p, b ? P::OscBDetune : P::OscADetune);
-    wtpos = ks.add (*this, p, b ? P::OscBWtPos : P::OscAWtPos, "Position");
+    wtpos = ks.add (*this, p, b ? P::OscBWtPos : P::OscAWtPos, "WT Pos");
     ratio = ks.add (*this, p, b ? P::OscBFmRatio : P::OscAFmRatio);
     fm = ks.add (*this, p, b ? P::OscBFm : P::OscAFm, "Index");
     fb = ks.add (*this, p, b ? P::OscBFmFb : P::OscAFmFb);
+    detune = ks.add (*this, p, b ? P::OscBDetune : P::OscADetune);
+    blend = ks.add (*this, p, b ? P::OscBBlend : P::OscABlend);
+    width = ks.add (*this, p, b ? P::OscBUniWidth : P::OscAUniWidth);
     level = ks.add (*this, p, b ? P::OscBLevel : P::OscALevel, "Level");
-    coarse = ks.add (*this, p, b ? P::OscBCoarse : P::OscACoarse);
-    fine = ks.add (*this, p, b ? P::OscBFine : P::OscAFine);
     if (b)
     {
         xmod = ks.add (*this, p, P::OscBXMod);
@@ -44,13 +168,23 @@ OscPanel::OscPanel (PsyBoxProcessor& p, bool b)
 void OscPanel::timerCallback()
 {
     const bool on = proc.plain (isB ? P::OscBOn : P::OscAOn) > 0.5f;
-    for (auto& k : ks.knobs)
-        if (k->isEnabled() != on) k->setEnabled (on);
-    table.setEnabled (on);
     const int t = (int) proc.plain (isB ? P::OscBType : P::OscAType);
-    if (t != lastType)
+    if (t != lastType || on != lastOn)
     {
         lastType = t;
+        lastOn = on;
+        // the supersaw is seven voices of its own: Detune spreads them, the
+        // unison count, blend and width don't apply
+        const bool supersaw = t == (int) psy::OscType::Supersaw;
+        for (auto& k : ks.knobs)
+            k->setEnabled (on && ! (supersaw && (k.get() == blend || k.get() == width)));
+        table.setEnabled (on);
+        semi.setEnabled (on);
+        fine.setEnabled (on);
+        unison.setEnabled (on && ! supersaw);
+        unison.setOverride (supersaw ? "7" : juce::String());
+        settings.setEnabled (on && ! supersaw);
+        settings.setType (t);
         resized();
     }
 }
@@ -62,39 +196,45 @@ void OscPanel::resized()
     onToggle.setBounds (h.removeFromLeft (onToggle.idealWidth()));
     type.setBounds (h.removeFromRight (cellsW (2) + sp::lg).withSizeKeepingCentre (cellsW (2) + sp::lg, kCtrlH));
 
-    // knobs along the bottom, switches above them, the waveform fills the rest
+    // pitch fields and switches on top, knobs along the bottom, the
+    // waveform (or the unison settings) fills the rest
     auto b = body();
     const int gridH = 2 * kCellH + kRowGap;
     const auto gr = gridAt (b.getX(), b.getBottom() - gridH);
     auto top = b.withTrimmedBottom (gridH + sp::md);
-    auto switches = top.removeFromBottom (kCtrlH);
-    top.removeFromBottom (sp::sm);
+    auto strip = top.removeFromTop (kCtrlH);
+    top.removeFromTop (sp::sm);
     wave.setBounds (top);
+    settings.setBounds (top);
 
-    retrig.setBounds (switches.removeFromLeft (retrig.idealWidth()));
+    const int fieldW = std::max (semi.idealWidth(), fine.idealWidth());
+    semi.setBounds (strip.removeFromLeft (fieldW));
+    strip.removeFromLeft (sp::xs);
+    fine.setBounds (strip.removeFromLeft (fieldW));
     if (sync)
     {
-        switches.removeFromLeft (sp::lg);
-        sync->setBounds (switches.removeFromLeft (sync->idealWidth()));
+        sync->setBounds (strip.removeFromRight (sync->idealWidth()));
+        strip.removeFromRight (sp::md);
     }
-    table.setBounds (switches.removeFromRight (cellsW (2) + sp::xl));
+    retrig.setBounds (strip.removeFromRight (retrig.idealWidth()));
 
     for (auto& k : ks.knobs) k->setVisible (false);
     table.setVisible (false);
     const auto put = [&] (juce::Component* c, int col, int row) { c->setBounds (gr.cell (col, row)); c->setVisible (true); };
-    // Level first, then the knobs of the oscillator type, so no row has a gap
-    put (level, 0, 0);
+    unison.setBounds (gr.cell (1, 0));
+    put (detune, 2, 0);
+    put (blend, 3, 0);
+    put (width, 4, 0);
     switch (lastType < 0 ? 0 : lastType)
     {
-        case 1: put (detune, 1, 0); break;
-        case 2: put (wtpos, 1, 0); table.setVisible (true); break;
-        case 3: put (ratio, 1, 0); put (fm, 2, 0); put (fb, 3, 0); break;
-        default: put (shape, 1, 0); put (pw, 2, 0); break;
+        case 1: break;   // supersaw: Detune is all it has
+        case 2: put (wtpos, 0, 0); table.setBounds (gr.captioned (0, 1, 2)); table.setVisible (true); break;
+        case 3: put (fm, 0, 0); put (ratio, 0, 1); put (fb, 1, 1); break;
+        default: put (shape, 0, 0); put (pw, 0, 1); break;
     }
-    put (coarse, 0, 1);
-    put (fine, 1, 1);
     if (xmod) put (xmod, 2, 1);
     if (ring) put (ring, 3, 1);
+    put (level, 4, 1);
 }
 
 // ---------------------------------------------------------------------------
@@ -239,6 +379,7 @@ ModPanel::ModPanel (PsyBoxProcessor& p) : Section ("Modulation"), proc (p), envD
         for (int i = 0; i < 4; ++i)
             pages[(size_t) e].push_back (ks.add (*this, p, envIds[e][i]));
     pages[AmpEnv].push_back (ks.add (*this, p, P::AenvCurve));   // the attack's bend: RC charge to swell
+    pages[AmpEnv].push_back (ks.add (*this, p, P::AenvStart));   // the level the attack starts from
 
     for (auto [prm, name] : { std::pair { P::PenvAmt, "Amount" }, std::pair { P::PenvAttack, "Attack" },
                               std::pair { P::PenvDecay, "Decay" }, std::pair { P::PenvCurve, "Curve" } })
@@ -549,7 +690,7 @@ void VoicingPanel::resized()
 // ---------------------------------------------------------------------------
 uint64_t SweepDisplay::fingerprint() const
 {
-    uint64_t h = hashParams ({ P::EnergyMode, P::EnergyBars, P::EnergySec, P::EnergyCurve, P::EnergyFade, P::EnergyCut })
+    uint64_t h = hashParams ({ P::EnergyMode, P::EnergyBars, P::EnergySec, P::EnergyCurve, P::EnergyDelay, P::EnergyFade, P::EnergyCut })
                ^ (uint64_t) std::lround (proc.getBpm() * 100.0);
     for (int k = 0; k < view.numVoices; ++k)
         h = mixPos (h, view.voices[(size_t) k].sweep);
@@ -562,6 +703,7 @@ void SweepDisplay::paintContent (juce::Graphics& g, juce::Rectangle<float> r)
     const double seconds = proc.energyLengthSeconds();
     const float bars = psy::energyBarsValue ((int) std::lround (proc.plain (P::EnergyBars)));
     const float ex = std::exp2 (2.5f * proc.plain (P::EnergyCurve));
+    const float delay = proc.plain (P::EnergyDelay);
     const float fade = proc.plain (P::EnergyFade);
     const bool cut = proc.plain (P::EnergyCut) > 0.5f;
 
@@ -580,7 +722,7 @@ void SweepDisplay::paintContent (juce::Graphics& g, juce::Rectangle<float> r)
     for (int i = 0; i <= n; ++i)
     {
         const float t = (float) i / (float) n;
-        const float s = std::pow (t, ex);
+        const float s = psy::sweepValue (t, delay, ex);
         const float lv = fade >= 0.f ? 1.f - fade * (1.f - s) : 1.f + fade * s;
         const float x = area.getX() + lenW * t;
         const auto pt = juce::Point<float> (x, area.getBottom() - area.getHeight() * s);
@@ -611,7 +753,7 @@ void SweepDisplay::paintContent (juce::Graphics& g, juce::Rectangle<float> r)
     for (int k = view.numVoices - 1; k >= 0; --k)
     {
         const float t = view.voices[(size_t) k].sweep;
-        drawDot (g, { area.getX() + lenW * t, area.getBottom() - area.getHeight() * std::pow (t, ex) }, k == 0, r);
+        drawDot (g, { area.getX() + lenW * t, area.getBottom() - area.getHeight() * psy::sweepValue (t, delay, ex) }, k == 0, r);
     }
 
     // readout: the length in both units
@@ -638,6 +780,7 @@ LengthPanel::LengthPanel (PsyBoxProcessor& p)
     seconds = ks.add (*this, p, P::EnergySec);
     curve = ks.add (*this, p, P::EnergyCurve);
     fade = ks.add (*this, p, P::EnergyFade);
+    delay = ks.add (*this, p, P::EnergyDelay);   // the sweep waits this share of the length
     lastTime = proc.plain (P::EnergyMode) > 0.5f;
     bars->setVisible (! lastTime);
     seconds->setVisible (lastTime);
@@ -665,13 +808,16 @@ void LengthPanel::resized()
     sweep.setBounds (h.removeFromLeft (sweep.idealWidth()));
     unit.setBounds (h.removeFromRight (cellsW (2)).withSizeKeepingCentre (cellsW (2), kCtrlH));
     const auto gr = grid();
+    // the length and how the sweep runs over it on top; Cut and the
+    // picture of it below
     bars->setBounds (gr.cell (0, 0));
     seconds->setBounds (gr.cell (0, 0));
-    curve->setBounds (gr.cell (1, 0));
-    fade->setBounds (gr.cell (2, 0));
-    cut.setBounds (gr.cell (3, 0));
-    const auto row = gr.cell (0, 1, 4);
-    display.setBounds (row.withX (body().getX()).withWidth (body().getWidth()));
+    delay->setBounds (gr.cell (1, 0));
+    curve->setBounds (gr.cell (2, 0));
+    fade->setBounds (gr.cell (3, 0));
+    cut.setBounds (gr.cell (0, 1));
+    const auto row = gr.cell (1, 1, 3);
+    display.setBounds (row.withX (row.getX() + kCellInset).withRight (body().getRight()));
 }
 
 // ---------------------------------------------------------------------------

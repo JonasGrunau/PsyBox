@@ -159,18 +159,15 @@ public:
 
     float process (double inc, float detuneAmount) noexcept
     {
-        static constexpr double offsets[7] = { -0.11002313, -0.06288439, -0.01952356, 0.0,
-                                               0.01991221, 0.06216538, 0.10745242 };
         const double x = std::clamp ((double) detuneAmount, 0.0, 1.0);
         const double dt = detuneCurve (x);
-        const float centreGain = (float) (-0.55366 * x + 0.99785);
-        const float sideGain = (float) (-0.73764 * x * x + 1.2841 * x + 0.044372);
+        const float cGain = centreGain (x), sGain = sideGain (x);
 
         float naive = 0.f;
         for (int i = 0; i < 7; ++i)
         {
-            const double vInc = std::clamp (inc * (1.0 + offsets[i] * dt), 0.0, 0.49);
-            const float g = i == 3 ? centreGain : sideGain;
+            const double vInc = std::clamp (inc * (1.0 + kOffsets[i] * dt), 0.0, 0.49);
+            const float g = i == 3 ? cGain : sGain;
             double ph = phases[(size_t) i] + vInc;
             if (ph >= 1.0)
             {
@@ -184,10 +181,12 @@ public:
         return 0.45f * (delay.push (naive) + acc.pop());
     }
 
-private:
-    std::array<double, 7> phases {};
-    blep::Accumulator acc;
-    blep::Delay2 delay;
+    // The seven saws' frequency offsets (times the detune curve) and the
+    // centre and side gains, as the editor draws them.
+    static constexpr double kOffsets[7] = { -0.11002313, -0.06288439, -0.01952356, 0.0,
+                                            0.01991221, 0.06216538, 0.10745242 };
+    static float centreGain (double x) noexcept { return (float) (-0.55366 * x + 0.99785); }
+    static float sideGain (double x) noexcept { return (float) (-0.73764 * x * x + 1.2841 * x + 0.044372); }
 
     static double detuneCurve (double x) noexcept
     {
@@ -201,6 +200,11 @@ private:
             y = y * x + c[i];
         return y;
     }
+
+private:
+    std::array<double, 7> phases {};
+    blep::Accumulator acc;
+    blep::Delay2 delay;
 };
 
 // ---------------------------------------------------------------------------
@@ -272,18 +276,26 @@ private:
 };
 
 // ---------------------------------------------------------------------------
-// Noise: white, pink (Kellet's refined 7-pole filter), and "digital" sample &
-// hold noise clocked from the note pitch.
+// Noise: white, pink (Kellet's refined 7-pole filter), "digital" sample &
+// hold noise clocked from the note pitch, and hiss: white noise above about
+// 10 kHz (three one-pole high-passes), the fizz on top of a distorted bass.
 // ---------------------------------------------------------------------------
 class Noise
 {
 public:
+    // The rate the noise runs at, for the hiss's corner.
+    void setRate (float sampleRate) noexcept
+    {
+        hissCoef = std::exp (-kTwoPi * 10000.f / std::max (sampleRate, 24000.f));
+    }
+
     void reset (uint64_t seed) noexcept
     {
         rng.reseed (seed);
         b0 = b1 = b2 = b3 = b4 = b5 = b6 = 0.f;
         held = 0.f;
         clock = 0.0;
+        hp1 = hp2 = hp3 = 0.f;
     }
 
     float process (int type, double clockInc) noexcept
@@ -311,6 +323,16 @@ public:
                     held = white;
                 }
                 return held;
+            case 3:
+            {
+                // white minus its low end, three times: 18 dB per octave under the corner
+                hp1 = hissCoef * hp1 + (1.f - hissCoef) * white;
+                const float a = white - hp1;
+                hp2 = hissCoef * hp2 + (1.f - hissCoef) * a;
+                const float b = a - hp2;
+                hp3 = hissCoef * hp3 + (1.f - hissCoef) * b;
+                return (b - hp3) * 1.8f;
+            }
             default:
                 return white * 0.7f;
         }
@@ -321,6 +343,7 @@ private:
     float b0 = 0, b1 = 0, b2 = 0, b3 = 0, b4 = 0, b5 = 0, b6 = 0;
     float held = 0.f;
     double clock = 0.0;
+    float hissCoef = 0.6f, hp1 = 0.f, hp2 = 0.f, hp3 = 0.f;
 };
 
 } // namespace psy::dsp

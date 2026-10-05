@@ -722,22 +722,144 @@ int FxPage::Chain::rowAt (juce::Point<int> pt) const
     return -1;
 }
 
-void FxPage::Chain::setHover (int row)
+int FxPage::Chain::slotAt (float rowTop) const
 {
-    if (row == hover) return;
-    hover = row;
-    repaint();
-    if (onHover) onHover (row);
+    const float top = (float) rowArea (0).getY();
+    return juce::jlimit (0, (int) rows.size() - 1, (int) std::lround ((rowTop - top) / (float) kRowH));
 }
 
-void FxPage::Chain::mouseMove (const juce::MouseEvent& e) { setHover (rowAt (e.getPosition())); }
+psy::FxChain FxPage::Chain::shown() const
+{
+    if (! dragging || pressed < 0 || slot < 0) return order;
+    // the dragged effect taken out and put back in at its slot
+    psy::FxChain out {};
+    const int effect = order[(size_t) pressed];
+    int n = 0;
+    for (int i = 0; i < psy::kNumFx; ++i)
+        if (i != pressed) out[(size_t) n++] = order[(size_t) i];
+    for (int i = psy::kNumFx - 1; i > slot; --i) out[(size_t) i] = out[(size_t) i - 1];
+    out[(size_t) slot] = effect;
+    return out;
+}
+
+void FxPage::Chain::setOrder (const psy::FxChain& o)
+{
+    order = o;
+    if (! placed)
+    {
+        for (int i = 0; i < psy::kNumFx; ++i) rowY[(size_t) order[(size_t) i]] = (float) rowArea (i).getY();
+        placed = true;
+    }
+    startTimerHz (60);   // rows slide to their new places
+    repaint();
+}
+
+void FxPage::Chain::timerCallback()
+{
+    const auto target = shown();
+    const int lifted = dragging && pressed >= 0 ? order[(size_t) pressed] : -1;
+    bool moving = false;
+    for (int i = 0; i < psy::kNumFx; ++i)
+    {
+        const int fx = target[(size_t) i];
+        if (fx == lifted) continue;   // under the mouse
+        auto& y = rowY[(size_t) fx];
+        const float to = (float) rowArea (i).getY();
+        y += (to - y) * 0.35f;
+        if (std::abs (to - y) < 0.5f) y = to;
+        else moving = true;
+    }
+    if (! moving && ! dragging) stopTimer();
+    repaint();
+}
+
+void FxPage::Chain::setHover (int effect)
+{
+    if (effect == hover) return;
+    hover = effect;
+    repaint();
+    if (onHover) onHover (effect);
+}
+
+void FxPage::Chain::mouseMove (const juce::MouseEvent& e)
+{
+    const int row = rowAt (e.getPosition());
+    setHover (row < 0 ? -1 : order[(size_t) row]);
+}
 
 void FxPage::Chain::mouseDown (const juce::MouseEvent& e)
 {
-    const int i = rowAt (e.getPosition());
-    if (i < 0) return;
-    auto& r = rows[(size_t) i];
-    r.attachment->setValueAsCompleteGesture (r.on ? 0.f : 1.f);
+    pressed = rowAt (e.getPosition());
+    dragging = false;
+    slot = -1;
+    if (pressed >= 0) grabOffset = e.position.y - (float) rowArea (pressed).getY();
+}
+
+void FxPage::Chain::mouseDrag (const juce::MouseEvent& e)
+{
+    if (pressed < 0) return;
+    if (! dragging && std::abs (e.getDistanceFromDragStartY()) < 4) return;
+    if (! placed) setOrder (order);
+    dragging = true;
+    // the row follows the mouse, inside the list
+    dragY = juce::jlimit ((float) rowArea (0).getY(), (float) rowArea ((int) rows.size() - 1).getY(), e.position.y - grabOffset);
+    rowY[(size_t) order[(size_t) pressed]] = dragY;
+    slot = slotAt (dragY);
+    setMouseCursor (juce::MouseCursor::DraggingHandCursor);
+    startTimerHz (60);
+    repaint();
+}
+
+void FxPage::Chain::mouseUp (const juce::MouseEvent&)
+{
+    setMouseCursor (juce::MouseCursor::PointingHandCursor);
+    const int from = pressed;
+    if (from < 0) return;
+    if (! dragging)
+    {
+        pressed = -1;
+        // a click: switch the effect on the row
+        auto& r = rows[(size_t) order[(size_t) from]];
+        r.attachment->setValueAsCompleteGesture (r.on ? 0.f : 1.f);
+        return;
+    }
+    // it lands where the gap was; the row settles there from the mouse
+    const auto moved = shown();
+    dragging = false;
+    pressed = slot = -1;
+    startTimerHz (60);
+    if (moved != order && onReorder) onReorder (moved);
+    repaint();
+}
+
+void FxPage::Chain::paintRow (juce::Graphics& g, int effect, juce::Rectangle<int> a, int place, bool lit, bool band) const
+{
+    const auto& r = rows[(size_t) effect];
+    if (lit && band)
+    {
+        g.setColour (juce::Colours::white.withAlpha (0.03f));
+        g.fillRect (a);
+    }
+    // a grip in the margin on hover: the row can be dragged
+    if (lit)
+    {
+        const float gx = (float) a.getX() + 5.f, gy = (float) a.getCentreY() - 5.f;
+        g.setColour (col::textFaint);
+        for (int y = 0; y < 3; ++y)
+            for (int x = 0; x < 2; ++x)
+                g.fillEllipse (gx + 4.f * (float) x, gy + 4.f * (float) y, 2.f, 2.f);
+    }
+    a.removeFromLeft (kPad);
+    a.removeFromRight (kPad);
+    g.setColour (r.on ? accent() : col::lineStrong);
+    g.fillRoundedRectangle (juce::Rectangle<float> ((float) a.getX(), (float) a.getCentreY() - 7.f, 2.f, 14.f), 1.f);
+    a.removeFromLeft (sp::md);
+    g.setColour (col::textFaint);
+    g.setFont (mono (10.f));
+    g.drawText (juce::String (place + 1), a.removeFromLeft (sp::lg), juce::Justification::centredLeft, false);
+    Power::drawIcon (g, a.removeFromRight (12).withSizeKeepingCentre (11, 11).toFloat(),
+                     r.on ? accent() : (lit ? col::textDim : col::textFaint));
+    drawHeading (g, r.name, a, juce::Justification::centredLeft, r.on ? col::text : (lit ? col::textDim : col::textFaint));
 }
 
 void FxPage::Chain::paint (juce::Graphics& g)
@@ -750,38 +872,63 @@ void FxPage::Chain::paint (juce::Graphics& g)
     g.setFont (mono (10.f));
     g.drawText (juce::String (count) + " ON", head, juce::Justification::centredRight, false);
 
+    if (! placed)
+        for (int i = 0; i < psy::kNumFx; ++i) rowY[(size_t) order[(size_t) i]] = (float) rowArea (i).getY();
+
+    const auto now = shown();
+    const int lifted = dragging && pressed >= 0 ? order[(size_t) pressed] : -1;
+    if (lifted >= 0 && slot >= 0)
+    {
+        // the empty place it will land in
+        const auto gap = rowArea (slot).reduced (kPad - 4, 3).toFloat();
+        g.setColour (accent().withAlpha (0.06f));
+        g.fillRoundedRectangle (gap, 3.f);
+        g.setColour (accent().withAlpha (0.5f));
+        juce::Path outline;
+        outline.addRoundedRectangle (gap.reduced (0.5f), 3.f);
+        juce::Path dashed;
+        const float dashes[] = { 3.f, 3.f };
+        juce::PathStrokeType (1.f).createDashedStroke (dashed, outline, dashes, 2);
+        g.fillPath (dashed);
+    }
     for (int i = 0; i < (int) rows.size(); ++i)
     {
-        const auto& r = rows[(size_t) i];
-        auto a = rowArea (i);
-        if (i == hover)
-        {
-            g.setColour (juce::Colours::white.withAlpha (0.03f));
-            g.fillRect (a);
-        }
-        a.removeFromLeft (kPad);
-        a.removeFromRight (kPad);
-        g.setColour (r.on ? accent() : col::lineStrong);
-        g.fillRoundedRectangle (juce::Rectangle<float> ((float) a.getX(), (float) a.getCentreY() - 7.f, 2.f, 14.f), 1.f);
-        a.removeFromLeft (sp::md);
-        g.setColour (col::textFaint);
-        g.setFont (mono (10.f));
-        g.drawText (juce::String (i + 1), a.removeFromLeft (sp::lg), juce::Justification::centredLeft, false);
-        Power::drawIcon (g, a.removeFromRight (12).withSizeKeepingCentre (11, 11).toFloat(),
-                         r.on ? accent() : (i == hover ? col::textDim : col::textFaint));
-        drawHeading (g, r.name, a, juce::Justification::centredLeft, r.on ? col::text : (i == hover ? col::textDim : col::textFaint));
+        const int fx = now[(size_t) i];
+        if (fx == lifted) continue;
+        const auto a = rowArea (i).withY ((int) std::lround (rowY[(size_t) fx]));
+        paintRow (g, fx, a, i, ! dragging && fx == hover);
+    }
+    if (lifted >= 0)
+    {
+        // the row in hand, over the others
+        const auto a = rowArea (0).withY ((int) std::lround (rowY[(size_t) lifted])).withTrimmedLeft (2).withTrimmedRight (kPad - 6);
+        g.setColour (col::panel.brighter (0.06f));
+        g.fillRoundedRectangle (a.toFloat(), 3.f);
+        g.setColour (col::lineStrong);
+        g.drawRoundedRectangle (a.toFloat().reduced (0.5f), 3.f, 1.f);
+        paintRow (g, lifted, rowArea (0).withY (a.getY()), slot, true, false);
     }
 
     g.setColour (col::textFaint);
     g.setFont (label (10.5f));
-    g.drawFittedText ("Signal runs from 1 to 9.\nClick a row to switch it.",
-                      getLocalBounds().reduced (kPad).removeFromBottom (32), juce::Justification::bottomLeft, 2);
+    g.drawFittedText ("Signal runs from 1 to 9.\nClick a row to switch it,\ndrag it to move it.",
+                      getLocalBounds().reduced (kPad).removeFromBottom (48), juce::Justification::bottomLeft, 3);
 }
 
 // ---------------------------------------------------------------------------
 // FxPage
 // ---------------------------------------------------------------------------
 FxPage::FxPage (PsyBoxProcessor& p)
+    : orderAttachment (*p.param (P::FxOrder), [this] (float code) {
+          // the chain and the rack follow the order (also on undo or a preset)
+          order = psy::fxChain ((int) std::lround (code));
+          if (chain == nullptr) return;
+          chain->setOrder (order);
+          for (int i = 0; i < psy::kNumFx; ++i)
+              strips[(size_t) order[(size_t) i]]->setIndex (i + 1);
+          resized();
+          repaint();
+      })
 {
     using K = FxDisplay::Kind;
     std::vector<std::pair<juce::String, P>> effects;
@@ -887,6 +1034,11 @@ FxPage::FxPage (PsyBoxProcessor& p)
             if (in) chain->setHover ((int) i);
             else if (! chain->isMouseOver()) chain->setHover (-1);
         };
+    chain->onReorder = [this] (const psy::FxChain& moved) {
+        const int code = psy::fxOrderCode (moved);
+        if (code >= 0) orderAttachment.setValueAsCompleteGesture ((float) code);
+    };
+    orderAttachment.sendInitialUpdate();
 }
 
 void FxPage::resized()
@@ -896,8 +1048,9 @@ void FxPage::resized()
     const int x = kChainW + 1, w = getWidth() - x;
     const int rowH = (h - kTallExtra) / (int) strips.size();
     int y = 0;
-    for (auto& s : strips)
+    for (int fx : order)   // in chain order
     {
+        auto& s = strips[(size_t) fx];
         const int sh = s.get() == tall ? h - rowH * ((int) strips.size() - 1) : rowH;
         s->setBounds (x, y, w, sh);
         y += sh;
@@ -908,9 +1061,9 @@ void FxPage::paintOverChildren (juce::Graphics& g)
 {
     g.setColour (col::line);
     g.fillRect (kChainW, 0, 1, getHeight());
-    for (size_t i = 0; i + 1 < strips.size(); ++i)
+    for (size_t i = 0; i + 1 < order.size(); ++i)
     {
-        const auto b = strips[i]->getBounds();
+        const auto b = strips[(size_t) order[i]]->getBounds();
         g.fillRect (b.getX(), b.getBottom() - 1, b.getWidth(), 1);
     }
 }

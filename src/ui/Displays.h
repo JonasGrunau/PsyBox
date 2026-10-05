@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Theme.h"
+#include "dsp/Filters.h"
 #include "plugin/PluginProcessor.h"
 
 #include <juce_dsp/juce_dsp.h>
@@ -26,35 +27,6 @@ protected:
     void drawGrid (juce::Graphics&, juce::Rectangle<float>, int vLines, int hLines) const;
 };
 
-// One oscillator's waveform, for any of the four types.
-class WaveDisplay : public DisplayBase
-{
-public:
-    WaveDisplay (PsyBoxProcessor&, bool oscB);
-
-private:
-    bool isB;
-    void paintContent (juce::Graphics&, juce::Rectangle<float>) override;
-    uint64_t fingerprint() const override;
-};
-
-// Magnitude response of a filter slot, measured by running the real DSP
-// filter on an impulse and taking its FFT (so what you see is what you hear).
-class FilterDisplay : public DisplayBase
-{
-public:
-    FilterDisplay (PsyBoxProcessor&, int slot);
-
-private:
-    int slot;
-    juce::dsp::FFT fft { 12 };
-    std::vector<float> fftData;
-    std::vector<float> magDb;
-    void recompute();
-    void paintContent (juce::Graphics&, juce::Rectangle<float>) override;
-    uint64_t fingerprint() const override;
-};
-
 // A curve with moving dots: where every sounding voice is on it, the newest
 // brightest and with a playhead (like Serum). Polls the voices at 60 Hz
 // while it is on screen and repaints only when a dot has moved.
@@ -70,6 +42,66 @@ protected:
     // Folds a dot's position into a fingerprint, so it repaints as it moves.
     static uint64_t mixPos (uint64_t h, float pos);
     void drawDot (juce::Graphics&, juce::Point<float>, bool newest, juce::Rectangle<float> area) const;
+};
+
+// One oscillator's waveform, for any of the four types. With unison (and
+// the supersaw, which is seven saws) every voice is drawn: they drift past
+// each other as fast as their detune makes them beat, the centre on top.
+// When a unison setting changes (or showVoices is called) the voices also
+// show as vertical lines across the detune range for a moment, like Serum 2.
+class WaveDisplay : public DisplayBase
+{
+public:
+    WaveDisplay (PsyBoxProcessor&, bool oscB);
+    // Keeps the voice lines up while `on` (hovering the unison field).
+    void showVoices (bool on);
+
+private:
+    bool isB;
+    std::vector<float> cycle;     // one period of the waveform, rebuilt when its knobs move
+    uint64_t cyclePrint = 0, uniPrint = 0;
+    bool holdVoices = false;
+    double voicesAt = -1.0e9;     // ms, when the lines were last asked for
+    std::array<float, psy::kMaxUnison> lineX {};   // where the lines are drawn, easing to their targets
+    bool linesPlaced = false;
+    double startMs = 0.0;
+
+    struct Voices
+    {
+        int count = 1;
+        std::array<float, psy::kMaxUnison> semis {}, gain {};
+        float span = 1.f;         // semitones from the centre to the edge of the line view
+    };
+    Voices voices() const;
+    float linesAlpha() const;
+    bool animating() const;
+    void rebuildCycle();
+    void timerCallback() override;
+    void paintContent (juce::Graphics&, juce::Rectangle<float>) override;
+    uint64_t fingerprint() const override;
+};
+
+// Magnitude response of a filter slot, measured by running the real DSP
+// filter on an impulse and taking its FFT (so what you see is what you hear).
+// While a note sounds the curve follows the newest voice's filter, so
+// envelopes, LFOs, macros and automation move it; the knob setting stays
+// as a faint curve underneath.
+class FilterDisplay : public LiveDisplay
+{
+public:
+    FilterDisplay (PsyBoxProcessor&, int slot);
+
+private:
+    int slot;
+    psy::dsp::FilterSlot filter;
+    juce::dsp::FFT fft { 12 };
+    std::vector<float> fftData;
+    std::vector<float> magDb;
+    void recompute (int type, float cutoff, float reso, float vowel);
+    juce::Path responsePath (juce::Rectangle<float>, float top, float bottom) const;
+    bool live (psy::Voice::FilterNow&) const;   // the newest voice's filter, if a note sounds
+    void paintContent (juce::Graphics&, juce::Rectangle<float>) override;
+    uint64_t fingerprint() const override;
 };
 
 class EnvDisplay : public LiveDisplay

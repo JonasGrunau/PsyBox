@@ -4,9 +4,10 @@
 
 // ---------------------------------------------------------------------------
 // FX: laid out like Serum 2's rack. The chain on the left lists every effect
-// in signal order (click a row to switch it on or off); the rack on the right
-// holds one strip per effect: a badge, the controls, a display, the mix and
-// the power switch. Switched-off strips grey out.
+// in signal order (click a row to switch it on or off, drag it up or down to
+// move it in the chain); the rack on the right holds one strip per effect, in
+// the same order: a badge, the controls, a display, the mix and the power
+// switch. Switched-off strips grey out.
 // ---------------------------------------------------------------------------
 class FxPage : public Page
 {
@@ -53,6 +54,7 @@ public:
         void showWhen (juce::Component*, std::function<bool()> visible);   // re-checked on a timer
 
         void setHighlight (bool);
+        void setIndex (int i) { if (i != index) { index = i; repaint(); } }   // its place in the chain, from 1
         std::function<void (bool)> onHover;   // the mouse entered or left the strip
 
         static constexpr int kSelectorW = 72;
@@ -86,17 +88,24 @@ public:
         friend class FxPage;
     };
 
-    // The chain: a row per effect with its number, name and power state.
-    class Chain : public juce::Component
+    // The chain: a row per effect, in signal order, with its place, name and
+    // power state. A click switches the effect; a drag moves it in the chain:
+    // the dragged row follows the mouse, the others slide out of its way and
+    // leave its landing place empty, and on release it settles there.
+    class Chain : public juce::Component, private juce::Timer
     {
     public:
         Chain (PsyBoxProcessor&, const std::vector<std::pair<juce::String, psy::P>>& effects);
         void paint (juce::Graphics&) override;
         void mouseDown (const juce::MouseEvent&) override;
+        void mouseDrag (const juce::MouseEvent&) override;
+        void mouseUp (const juce::MouseEvent&) override;
         void mouseMove (const juce::MouseEvent&) override;
         void mouseExit (const juce::MouseEvent&) override { setHover (-1); }
-        void setHover (int row);
-        std::function<void (int)> onHover;   // row under the mouse, -1 when none
+        void setHover (int effect);
+        void setOrder (const psy::FxChain& o);
+        std::function<void (int)> onHover;                      // effect under the mouse, -1 when none
+        std::function<void (const psy::FxChain&)> onReorder;   // a row was dragged somewhere else
 
         static constexpr int kRowH = 30;
 
@@ -107,14 +116,25 @@ public:
             bool on = false;
             std::unique_ptr<juce::ParameterAttachment> attachment;
         };
-        std::vector<Row> rows;
-        int hover = -1;
+        std::vector<Row> rows;                // by effect
+        psy::FxChain order = psy::fxChain (0);   // effects, top to bottom
+        int hover = -1;                       // effect
+        int pressed = -1, slot = -1;          // row the drag started on, place it would land in
+        bool dragging = false, placed = false;
+        float dragY = 0.f, grabOffset = 0.f;  // mouse y, and where on the row it grabbed
+        std::array<float, psy::kNumFx> rowY {};   // where each effect's row is drawn, easing to its place
         juce::Rectangle<int> rowArea (int i) const;
-        int rowAt (juce::Point<int>) const;
+        int rowAt (juce::Point<int>) const;   // row (place in the chain) under the point
+        int slotAt (float rowTop) const;      // place for a row whose top is at rowTop
+        psy::FxChain shown() const;           // the order as it would be if dropped now
+        void timerCallback() override;        // eases the rows
+        void paintRow (juce::Graphics&, int effect, juce::Rectangle<int>, int place, bool lit, bool band = true) const;
     };
 
 private:
-    std::vector<std::unique_ptr<Strip>> strips;
+    std::vector<std::unique_ptr<Strip>> strips;   // by effect
     std::unique_ptr<Chain> chain;
     Strip* tall = nullptr;   // the compressor: two rows and a bigger display
+    psy::FxChain order = psy::fxChain (0);
+    juce::ParameterAttachment orderAttachment;
 };

@@ -17,6 +17,8 @@ ArpSettings ArpSettings::from (const ParamState& p) noexcept
     s.gate = p.get (P::ArpGate);
     s.swing = p.get (P::ArpSwing);
     s.hold = p.on (P::ArpHold);
+    s.key = p.geti (P::ArpKey) - 1;
+    s.scale = p.geti (P::ArpScale);
     if (p.geti (P::EngineMode) == (int) EngineMode::Kick)
     {
         // a tie would swallow the next kick: every step is a fresh hit

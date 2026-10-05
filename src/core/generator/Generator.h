@@ -64,9 +64,13 @@ public:
     void lfoSync (int index, LfoShape shape, std::initializer_list<int> divisions, bool retrig);
 
     ParamState& state() { return s; }
+    // The category being built (macros keep basses dry, unison picks its voices).
+    void setCategory (Category c) { cat = c; }
+    Category category() const { return cat; }
 
 private:
     ParamState& s;
+    Category cat = Category::Count;
     const LockSet& locks;
     dsp::Rng& rng;
     RangeMemory& ranges;
@@ -80,6 +84,9 @@ Recipe recipeFor (Category c) noexcept;
 Recipe arpRecipeFor (Category c) noexcept;          // arp settings (ArpRecipes.cpp)
 Recipe arpPatternRecipeFor (Category c) noexcept;   // the arp's 16 steps
 Recipe kickRecipeFor (Category c) noexcept;         // kick categories (KickRecipes.cpp)
+// Unison for the category's oscillators (leads and pads spread, basses keep
+// one voice). Runs after the sound recipe, on the same random stream.
+void unisonRecipe (Category c, RecipeBuilder& b);
 
 // What a macro does, in a word or two, from the targets it drives ("Cutoff",
 // "Filter", "Reverb", "Cutoff + Drive"). Empty when it drives nothing.

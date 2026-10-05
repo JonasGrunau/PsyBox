@@ -42,6 +42,7 @@ struct ModView
         std::array<Env, 4> env {};            // amp, env 1 (filter), env 2 (mod), env 3 (pitch)
         std::array<float, kNumLfos> lfo {};   // phase over two cycles, 0..2 (see dsp::Lfo::phase2)
         float sweep = 0.f;                    // energy sweep, linear 0..1
+        std::array<psy::Voice::FilterNow, 2> filter {};   // each filter slot as modulated now
     };
     std::array<Voice, kMaxVoices> voices {};
     int numVoices = 0;                         // newest first
@@ -113,6 +114,7 @@ private:
     dsp::Decimator decimL, decimR;
 
     dsp::Distortion dist;
+    dsp::Distortion distLate;   // the distortion moved later in the chain, at the base rate
     dsp::Bitcrusher crush;
     dsp::FrequencyShifter fshift;
     dsp::Phaser phaser;
@@ -153,7 +155,10 @@ private:
     void followEngineMode() noexcept;
     Voice& allocateVoice (bool& stolen) noexcept;
     void renderVoices (int offset, int n) noexcept;
+    // The effects in the patch's order. Distortion first runs on the
+    // oversampled signal before the decimator instead (see process).
     void processFx (float* l, float* r, int n, double bpm, const ParamState& p) noexcept;
+    bool distFirst (const ParamState& p) const noexcept { return fxChain (p.geti (P::FxOrder))[0] == (int) Fx::Distortion; }
     void modulateFx (int sampleInBlock) noexcept;   // fills fxParams
 };
 

@@ -45,6 +45,7 @@ void Engine::prepare (double sampleRate, int maxBlockSize)
     arp.prepare (fs);
 
     const float f = (float) fs;
+    distLate.prepare (f);
     fshift.prepare (f);
     phaser.prepare (f);
     chorus.prepare (f);
@@ -94,6 +95,7 @@ void Engine::reset()
     arp.reset();
     arpActive = false;
     dist.reset();
+    distLate.reset();
     crush.reset();
     fshift.reset();
     phaser.reset();
@@ -131,6 +133,7 @@ void Engine::getModView (ModView& out) const noexcept
         for (int i = 0; i < kNumLfos; ++i)
             o.lfo[(size_t) i] = cur.on (lfoParam (i, 4)) ? v.lfo (i).phase2() : globalLfos[(size_t) i].phase2();
         o.sweep = v.sweepPhase();
+        o.filter = { v.filterNow (0), v.filterNow (1) };
     }
 }
 
@@ -204,6 +207,7 @@ void Engine::prepareContext (double bpm) noexcept
     ctx.sweepInc = 1.0 / std::max (1.0, seconds * fs);
     ctx.sweepExp = std::exp2 (2.5f * cur.get (P::EnergyCurve));
     ctx.sweepFade = cur.get (P::EnergyFade);
+    ctx.sweepDelay = cur.get (P::EnergyDelay);
     ctx.sweepCut = cur.on (P::EnergyCut);
 }
 
@@ -600,7 +604,7 @@ void Engine::process (float* left, float* right, int numSamples, const MidiEvent
         const bool fxMod = numFxSlots > 0 && ! kickMode();
         if (fxMod) modulateFx (0);
         const ParamState& fp = fxMod ? fxParams : cur;
-        if (fp.on (P::DistOn))
+        if (fp.on (P::DistOn) && distFirst (fp))
             dist.process (osL.data(), osR.data(), blockN * osFactor, fp.geti (P::DistType), fp.get (P::DistDrive),
                           fp.get (P::DistTone), fp.get (P::DistMix));
 
@@ -689,25 +693,52 @@ void Engine::modulateFx (int sampleInBlock) noexcept
 
 void Engine::processFx (float* l, float* r, int n, double bpm, const ParamState& p) noexcept
 {
-    if (p.on (P::CrushOn))
-        crush.process (l, r, n, p.get (P::CrushBits), p.get (P::CrushRate), p.get (P::CrushMix));
-    if (p.on (P::FshiftOn))
-        fshift.process (l, r, n, p.get (P::FshiftHz), p.get (P::FshiftFb), p.get (P::FshiftSpread), p.get (P::FshiftMix));
-    if (p.on (P::PhaserOn))
-        phaser.process (l, r, n, p.get (P::PhaserRate), p.get (P::PhaserDepth), p.get (P::PhaserFb), p.get (P::PhaserCenter), p.get (P::PhaserMix));
-    if (p.on (P::ChorusOn))
-        chorus.process (l, r, n, p.geti (P::ChorusMode) == 1, p.get (P::ChorusRate), p.get (P::ChorusDepth), p.get (P::ChorusFb), p.get (P::ChorusMix));
-    if (comp.isActive (p.on (P::CompOn)))
-        comp.process (l, r, n, compSettings (p));
-    if (p.on (P::DelayOn))
-    {
-        const float ms = p.on (P::DelaySync) ? (float) (60000.0 / bpm) * syncDivBeats (p.geti (P::DelayDiv)) : p.get (P::DelayMs);
-        delay.process (l, r, n, std::min (ms, 2000.f), p.get (P::DelayFb), p.on (P::DelayPing), p.get (P::DelayLowCut), p.get (P::DelayHighCut), p.get (P::DelayMix));
-    }
-    if (p.on (P::ReverbOn))
-        reverb.process (l, r, n, p.get (P::ReverbSize), p.get (P::ReverbDecay), p.get (P::ReverbDamp), p.get (P::ReverbPre), p.get (P::ReverbMix));
-    if (width.isActive (p.on (P::WidthOn)))   // last, so Low Mono also cleans delay and reverb lows
-        width.process (l, r, n, p.on (P::WidthOn), p.get (P::WidthAmount), p.get (P::WidthStereo), p.get (P::WidthTime), p.get (P::WidthMonoHz));
+    const auto chain = fxChain (p.geti (P::FxOrder));
+    for (int fx : chain)
+        switch ((Fx) fx)
+        {
+            case Fx::Distortion:
+                if (p.on (P::DistOn) && chain[0] != (int) Fx::Distortion)
+                    distLate.process (l, r, n, p.geti (P::DistType), p.get (P::DistDrive), p.get (P::DistTone), p.get (P::DistMix));
+                break;
+            case Fx::Crush:
+                if (p.on (P::CrushOn))
+                    crush.process (l, r, n, p.get (P::CrushBits), p.get (P::CrushRate), p.get (P::CrushMix));
+                break;
+            case Fx::Shift:
+                if (p.on (P::FshiftOn))
+                    fshift.process (l, r, n, p.get (P::FshiftHz), p.get (P::FshiftFb), p.get (P::FshiftSpread), p.get (P::FshiftMix));
+                break;
+            case Fx::Phaser:
+                if (p.on (P::PhaserOn))
+                    phaser.process (l, r, n, p.get (P::PhaserRate), p.get (P::PhaserDepth), p.get (P::PhaserFb), p.get (P::PhaserCenter), p.get (P::PhaserMix));
+                break;
+            case Fx::Chorus:
+                if (p.on (P::ChorusOn))
+                    chorus.process (l, r, n, p.geti (P::ChorusMode) == 1, p.get (P::ChorusRate), p.get (P::ChorusDepth), p.get (P::ChorusFb), p.get (P::ChorusMix));
+                break;
+            case Fx::Compressor:
+                if (comp.isActive (p.on (P::CompOn)))
+                    comp.process (l, r, n, compSettings (p));
+                break;
+            case Fx::Delay:
+                if (p.on (P::DelayOn))
+                {
+                    const float ms = p.on (P::DelaySync) ? (float) (60000.0 / bpm) * syncDivBeats (p.geti (P::DelayDiv)) : p.get (P::DelayMs);
+                    delay.process (l, r, n, std::min (ms, 2000.f), p.get (P::DelayFb), p.on (P::DelayPing), p.get (P::DelayLowCut), p.get (P::DelayHighCut), p.get (P::DelayMix));
+                }
+                break;
+            case Fx::Reverb:
+                if (p.on (P::ReverbOn))
+                    reverb.process (l, r, n, p.get (P::ReverbSize), p.get (P::ReverbDecay), p.get (P::ReverbDamp), p.get (P::ReverbPre), p.get (P::ReverbMix));
+                break;
+            case Fx::Width:   // last by default, so Low Mono also cleans the delay and reverb lows
+                if (width.isActive (p.on (P::WidthOn)))
+                    width.process (l, r, n, p.on (P::WidthOn), p.get (P::WidthAmount), p.get (P::WidthStereo), p.get (P::WidthTime), p.get (P::WidthMonoHz));
+                break;
+            case Fx::Count:
+                break;
+        }
 
     // the patch's own level (set when it is generated, so every patch plays
     // about as loud), then the user's volume

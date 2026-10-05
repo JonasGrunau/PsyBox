@@ -1284,11 +1284,13 @@ namespace
     }
 
     // A reverse bass lasts a set length and stops dead (Cut at End): one beat
-    // (1/4 bar), now and then two. Returns the length in beats; Time mode
-    // gets the same length at 140 BPM, the tempo of the reference shots.
-    float reverseLength (B& b)
+    // (1/4 bar), now and then two when `twoBeats` allows. Returns the length
+    // in beats; Time mode gets the same length at 140 BPM, the tempo of the
+    // reference shots.
+    float reverseLength (B& b, bool twoBeats)
     {
-        const int bars = b.pick (P::EnergyBars, { B1_4, B1_2 }, { 0.85f, 0.15f });
+        const int bars = twoBeats ? b.pick (P::EnergyBars, { B1_4, B1_2 }, { 0.85f, 0.15f })
+                                  : b.pick (P::EnergyBars, { B1_4 });
         const float beats = energyBarsValue (bars) * 4.f;
         b.set (P::EnergySec, beats * 60.f / 140.f);
         b.set (P::EnergyFade, 0.f);
@@ -1297,10 +1299,17 @@ namespace
     }
 
     // Reverse bass: a bass shot played backwards, in the beat before a kick.
-    // Modelled on reference one-shots (one beat at 140 BPM, E1 and G#1 when
-    // played at E2 and G#2): a nearly raw saw, gently low-passed, that swells
-    // to full level over 35-55 % of the beat (from a straight rise to slow
-    // then fast), holds, and stops dead at the end of its length. Mono, dry.
+    // Fitted to the bright reverse shots in Bass Shots 2 (017 E first, then
+    // 024, 043, 049-051, 055, 062, 072, 074, 079, 080: one beat at 128-142
+    // BPM) by rendering and measuring. Every one keeps the shape: the note is
+    // already there, quietly, swells late and fast, holds, and stops dead;
+    // a saw with its phases turned (round, with a spike each cycle) and the
+    // fizz of a distorted top (hiss above 10 kHz, as loud against the spike as
+    // in 017 E). Around that the references differ, and so do the patches:
+    // how quietly it starts (-9 to -33 dB) and how late it is full (32-60 %
+    // of the beat), how bright it is, a dip around 500 Hz, the filter
+    // opening through the swell, an octave saw for a strong second harmonic,
+    // a fall onto the note at the end, a stereo top over a mono low end.
     void reverseBass (B& b)
     {
         monoVoice (b, false, 0.f, 0.f);
@@ -1308,31 +1317,102 @@ namespace
         b.set (P::VelSens, 0.15f);
         b.set (P::Accent, 0.f);
 
-        analogA (b, kSaw, 0.85f);
-        filter1 (b, ft (FilterType::LP12), 600.f, 2500.f, 0.f, 0.15f, 0.f, 0.f);
-        b.uni (P::F1Key, 0.5f, 0.8f);
-        b.uni (P::F1Drive, 0.f, 0.3f);
-        b.on (P::DistOn, true);   // a touch of tube: the second harmonic a little above a raw saw's
-        b.set (P::DistType, (float) DistType::Tube);
-        b.uni (P::DistDrive, 6.f, 12.f);
-        b.uni (P::DistMix, 0.2f, 0.4f);
-        b.uni (P::DistTone, 4000.f, 12000.f);
+        analogA (b, b.chance (0.75f) ? kSaw : b.rnd (kSaw, kSaw + 0.6f), 0.85f);   // now and then towards a square
+        if (b.chance (0.3f))   // the octave: a second harmonic as loud as the first (049-051)
+        {
+            b.on (P::OscBOn, true);
+            b.set (P::OscBType, (float) OscType::Analog);
+            b.set (P::OscBShape, kSaw);
+            b.set (P::OscBCoarse, 12.f);
+            b.set (P::OscBFine, 0.f);
+            b.uni (P::OscBLevel, 0.3f, 0.7f);
+        }
 
-        const float beatMs = reverseLength (b) * 60000.f / 140.f;
-        ampEnv (b, 0.45f * beatMs, 0.65f * beatMs, 1000.f, 1000.f, 1.f, 1.f, 2.f, 5.f);   // the release is the cut
-        b.uni (P::AenvCurve, 0.05f, 0.5f);
+        // the brightness: wide open (a 6 dB slope keeps the top), or darker
+        const bool open = b.chance (0.6f);
+        filter1 (b, open ? ft (FilterType::LP6) : ft (FilterType::LP12), open ? 12000.f : 2800.f, open ? 20000.f : 8000.f,
+                 0.f, 0.2f, 0.f, 0.f);
+        b.set (P::F1Key, 0.f);
+        b.uni (P::F1Drive, 0.f, 0.2f);
+        if (b.chance (0.6f))   // the dip around 500 Hz (017): a notch beside the main path
+        {
+            b.set (P::F2Type, (float) ft (FilterType::Notch));
+            b.uni (P::F2Cutoff, 380.f, 700.f);
+            b.uni (P::F2Reso, 0.f, 0.15f);
+            b.set (P::F2Key, 0.f);
+            b.set (P::F2Env, 0.f);
+            b.set (P::FRouting, 1.f);   // parallel: half the signal skips the notch, a dip of about 7 dB
+        }
+
+        // The phases turned: the phaser, fully wet and standing still, is an
+        // all-pass (017: crest 6.7 dB against a saw's 4.7).
+        if (b.chance (0.8f))
+        {
+            b.on (P::PhaserOn, true);
+            b.set (P::PhaserMix, 1.f);
+            b.set (P::PhaserDepth, 0.f);
+            b.set (P::PhaserFb, 0.f);
+            b.set (P::PhaserRate, 0.02f);
+            b.uni (P::PhaserCenter, 150.f, 450.f);
+        }
+
+        // The bite: a fizz above 10 kHz under the spike of every cycle.
+        b.set (P::NoiseType, 3.f);
+        b.on (P::NoiseDirect, true);
+        b.uni (P::NoiseLevel, 0.12f, 0.28f);
+        if (b.chance (0.3f))   // more grit in the body
+        {
+            b.on (P::DistOn, true);
+            b.pick (P::DistType, { (int) DistType::Tube, (int) DistType::Hard });
+            b.uni (P::DistDrive, 6.f, 14.f);
+            b.uni (P::DistMix, 0.2f, 0.5f);
+            b.set (P::DistTone, 20000.f);
+        }
+
+        // the swell: the start level and how late it is full
+        const float lengthMs = reverseLength (b, false) * 60000.f / 140.f;   // always the references' one beat
+        ampEnv (b, 0.26f * lengthMs, 0.66f * lengthMs, 1000.f, 1000.f, 1.f, 1.f, 2.f, 5.f);   // the release is the cut
+        b.uni (P::AenvCurve, 0.55f, 0.95f);
+        b.uni (P::AenvStart, 0.025f, 0.35f);
+
+        // Through the sweep (0 -> 1 over the beat): a fall onto the note at the
+        // end (043, 080), or the filter opening as it swells (062, 072, 074).
+        const int move = b.weighted ({ 0.45f, 0.2f, 0.35f });
+        if (move == 1)
+        {
+            static constexpr float falls[] = { 3.f, 4.f, 5.f, 7.f };
+            const float semis = falls[b.weighted ({ 0.2f, 0.35f, 0.3f, 0.15f })];
+            b.set (P::OscACoarse, semis);   // starts above the note, lands on it
+            if (b.state().on (P::OscBOn)) b.set (P::OscBCoarse, semis + 12.f);
+            b.route (S::Sweep, D::PitchAll, -semis / 24.f, -semis / 24.f);
+            b.uni (P::EnergyDelay, 0.6f, 0.72f);
+            b.uni (P::EnergyCurve, -0.3f, 0.f);
+        }
+        else if (move == 2)
+        {
+            b.uni (P::F1Cutoff, 500.f, 1600.f);
+            b.route (S::Sweep, D::F1Cutoff, 0.35f, 0.55f);
+            b.uni (P::EnergyCurve, 0.2f, 0.7f);
+        }
+
+        // a stereo top over a mono low end, in about half the references
+        fxWidth (b, 0.45f, 0.3f, 0.75f);
 
         b.route (S::Macro1, D::F1Cutoff, 0.2f, 0.35f);
         fxGainBass (b, 5.5f, 7.5f);
-        b.macros ({ D::F1Reso, D::DistDrive, D::F1Drive });
+        b.macros ({ D::NoiseLevel, D::F2Cutoff, D::F1Reso, D::DistDrive, D::F1Drive });
     }
 
-    // Reverse sub: a sine sub played backwards. Modelled on reference
-    // one-shots (one beat at 140 BPM): a sine with a little warmth (second
-    // harmonic about -16 dB) swells from around -32 dB to full level over
-    // 50-80 % of the beat, slow then fast, and slides late in the beat by a
-    // fourth, fifth or octave: down from an octave up (two in three) or up
-    // from the note. Stops dead at the end of its length. Mono, dry.
+    // Reverse sub: a sub played backwards. Fitted to the reference shots
+    // (Bass Shots 2/018 E, 025 G#, 026 G#: one beat at 140 BPM) by rendering
+    // and comparing level, pitch and harmonics. It swells from silence (about
+    // -40 dB after 30 ms, -12 dB at 180 ms) to full at 55-60 % of the beat,
+    // holds its pitch, then slides from just past the middle to the end: a
+    // fifth or an octave down from an octave up, or a fourth or fifth up from
+    // the note, easing in. A fall is a warm sine (a quieter sine an octave up
+    // for the second harmonic, a little tube for the third); a rise is a saw
+    // through a band-pass that follows the key (the fundamental 6 dB under
+    // the second harmonic), as in the references. Stops dead. Mono, dry.
     void reverseSub (B& b)
     {
         monoVoice (b, false, 0.f, 0.f);
@@ -1340,29 +1420,101 @@ namespace
         b.set (P::VelSens, 0.15f);
         b.set (P::Accent, 0.f);
 
-        analogA (b, kSine, 0.85f);
-        b.on (P::DistOn, true);   // tube: the warmth is mostly the second harmonic
-        b.set (P::DistType, (float) DistType::Tube);
-        b.uni (P::DistDrive, 14.f, 22.f);
-        b.uni (P::DistMix, 0.65f, 0.95f);
-        b.uni (P::DistTone, 2000.f, 5000.f);
-
-        const float beatMs = reverseLength (b) * 60000.f / 140.f;
-        ampEnv (b, 0.5f * beatMs, 0.7f * beatMs, 1000.f, 1000.f, 1.f, 1.f, 2.f, 5.f);
-        b.uni (P::AenvCurve, 0.4f, 0.6f);
-
-        // the slide: the sweep's curve keeps it in the second half of the length
         const float interval = b.chance (0.5f) ? 12.f : (b.chance (0.5f) ? 7.f : 5.f);
         const bool down = b.chance (0.67f);
-        b.set (P::OscACoarse, down ? 12.f : 0.f);
+        const float startOct = down ? 12.f : 0.f;   // falls start an octave up
+
+        if (down)   // the falling references are warm sines, the rising one is the band-passed saw
+        {
+            analogA (b, kSine, 0.85f);
+            b.on (P::OscBOn, true);   // the second harmonic, clean at any level
+            b.set (P::OscBType, (float) OscType::Analog);
+            b.set (P::OscBShape, kSine);
+            b.set (P::OscBFine, 0.f);
+            b.uni (P::OscBLevel, 0.08f, 0.2f);
+            // the third harmonic; more drive would squash the swell and,
+            // through the octave, raise the fourth above the references'
+            b.on (P::DistOn, true);
+            b.set (P::DistType, (float) DistType::Tube);
+            b.uni (P::DistDrive, 19.f, 24.f);
+            b.uni (P::DistMix, 0.6f, 0.75f);
+            b.uni (P::DistTone, 2000.f, 5000.f);
+            b.set (P::F1Type, (float) ft (FilterType::Off));
+        }
+        else
+        {
+            analogA (b, kSaw, 0.85f);
+            filter1 (b, ft (FilterType::BP24), 300.f, 420.f, 0.f, 0.2f, 0.f, 0.f);
+            b.set (P::F1Key, 1.f);   // the band sits on the second harmonic of every key
+            b.set (P::DistOn, 0.f);
+        }
+        b.set (P::OscACoarse, startOct);
+        b.set (P::OscBCoarse, startOct + 12.f);
+
+        const float beatMs = reverseLength (b, false) * 60000.f / 140.f;   // always the references' one beat
+        ampEnv (b, 0.53f * beatMs, 0.6f * beatMs, 1000.f, 1000.f, 1.f, 1.f, 2.f, 5.f);
+        b.uni (P::AenvCurve, 0.62f, 0.78f);
+
+        // the slide: still until just past the middle, then straight down,
+        // or easing in going up
         const float amt = (down ? -interval : interval) / 24.f;
         b.route (S::Sweep, D::PitchAll, amt, amt);
-        b.uni (P::EnergyCurve, 0.8f, 0.95f);
+        b.uni (P::EnergyDelay, 0.55f, 0.63f);
+        if (down) b.uni (P::EnergyCurve, -0.5f, -0.15f);
+        else b.uni (P::EnergyCurve, -0.4f, -0.2f);
 
         fxGainBass (b, 4.f, 6.f);
-        b.macros ({ D::DistDrive, D::DistMix });
+        b.macros ({ D::DistDrive, D::LevelB, D::F1Cutoff });
     }
 } // namespace
+
+// Leads and pads spread their oscillators like a Serum patch would: a
+// handful of voices, a little detune, wide. Basses keep one voice: detuned
+// voices under 100 Hz cancel each other and the low end wobbles from note to
+// note. The supersaw is already seven voices and is left alone.
+void unisonRecipe (Category c, RecipeBuilder& b)
+{
+    struct Spread { float chanceA, chanceB; int nLo, nHi; float detLo, detHi, blendLo, blendHi, widthLo, widthHi; bool random; };
+    Spread sp {};
+    switch (c)
+    {
+        case Category::PsyLead:    sp = { 0.6f, 0.4f, 3, 7, 0.1f, 0.28f, 0.6f, 0.85f, 0.6f, 1.f, false }; break;
+        case Category::Pluck:      sp = { 0.4f, 0.3f, 2, 4, 0.05f, 0.15f, 0.4f, 0.7f, 0.4f, 0.8f, false }; break;
+        case Category::Stab:       sp = { 0.5f, 0.35f, 3, 5, 0.08f, 0.22f, 0.5f, 0.8f, 0.6f, 1.f, false }; break;
+        case Category::Screech:    sp = { 0.3f, 0.2f, 2, 3, 0.04f, 0.12f, 0.3f, 0.6f, 0.3f, 0.7f, false }; break;
+        case Category::Metallic:   sp = { 0.2f, 0.15f, 2, 3, 0.03f, 0.1f, 0.3f, 0.6f, 0.5f, 0.9f, true }; break;
+        case Category::Atmos:      sp = { 0.7f, 0.5f, 4, 7, 0.12f, 0.35f, 0.7f, 0.9f, 0.8f, 1.f, true }; break;
+        case Category::Drone:      sp = { 0.6f, 0.4f, 3, 6, 0.08f, 0.25f, 0.6f, 0.9f, 0.7f, 1.f, true }; break;
+        case Category::Riser:
+        case Category::Uplifter:
+        case Category::Downlifter: sp = { 0.5f, 0.35f, 4, 7, 0.15f, 0.4f, 0.7f, 0.9f, 0.9f, 1.f, false }; break;
+        default:
+            if (familyOf (c) == Family::Bass)
+            {
+                b.set (P::OscAUnison, 1.f);
+                b.set (P::OscBUnison, 1.f);
+            }
+            return;
+    }
+
+    const auto osc = [&] (bool isB, float chance) {
+        const bool roll = b.chance (chance);   // always drawn, so the seeds stay put
+        const P on = isB ? P::OscBOn : P::OscAOn, type = isB ? P::OscBType : P::OscAType;
+        if (! roll || ! b.state().on (on) || b.state().geti (type) == (int) OscType::Supersaw)
+            return;
+        b.uni (isB ? P::OscBUnison : P::OscAUnison, (float) sp.nLo, (float) sp.nHi);
+        b.uni (isB ? P::OscBDetune : P::OscADetune, sp.detLo, sp.detHi);
+        b.uni (isB ? P::OscBBlend : P::OscABlend, sp.blendLo, sp.blendHi);
+        b.uni (isB ? P::OscBUniWidth : P::OscAUniWidth, sp.widthLo, sp.widthHi);
+        const int modes[] = { (int) UniMode::Linear, (int) UniMode::Super, (int) UniMode::Random };
+        b.pick (isB ? P::OscBUniMode : P::OscAUniMode, { modes[0], modes[1], modes[2] },
+                { 0.5f, sp.random ? 0.2f : 0.5f, sp.random ? 0.3f : 0.f });
+        if (sp.random && b.state().geti (type) == (int) OscType::Wavetable)
+            b.uni (isB ? P::OscBUniSpread : P::OscAUniSpread, 0.f, 0.3f);
+    };
+    osc (false, sp.chanceA);
+    osc (true, sp.chanceB);
+}
 
 Recipe recipeFor (Category c) noexcept
 {

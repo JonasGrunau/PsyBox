@@ -55,16 +55,29 @@ namespace choices
     extern const std::vector<std::string> voiceMode, glideMode, quality, oscType, wavetable,
         subOct, subShape, noiseType, penvDest, filterType, filterRouting, lfoShape, syncDiv,
         modSrc, modDst, distType, chorusMode, compMode, arpMode, engineMode, kickClick, kickDrive,
-        energyMode, energyBars;
+        energyMode, energyBars, uniMode, uniStack, arpKey, arpScale;
 }
 
 // Sync divisions expressed in beats (quarter notes), index-aligned with choices::syncDiv.
 float syncDivBeats (int index) noexcept;
 // Energy lengths in bars, index-aligned with choices::energyBars (4/4: a bar is 4 beats).
 float energyBarsValue (int index) noexcept;
+// The energy sweep at t (0..1 of the length): still for the first `delay`
+// of it, then 0 -> 1 bent by `exponent` (EnergyCurve: 2^(2.5 curve)).
+inline float sweepValue (float t, float delay, float exponent) noexcept
+{
+    if (t >= 1.f) return 1.f;
+    const float u = delay > 0.f ? std::max (0.f, (t - delay) / (1.f - delay)) : t;
+    return std::pow (u, exponent);
+}
 
 enum class VoiceMode : int { Poly, Mono, Legato };
 enum class OscType : int { Analog, Supersaw, Wavetable, FM };
+// Unison (per oscillator, like Serum 2): how the voices are spaced in pitch,
+// and which of them are transposed instead of only detuned.
+enum class UniMode : int { Linear, Super, Exp, Inv, Random };
+enum class UniStack : int { Off, Oct, OctFifth, TwoOct, CenterDown1, CenterDown2 };
+constexpr int kMaxUnison = 16;
 enum class LfoShape : int { Sine, Triangle, SawUp, SawDown, Square, SampleHold, SmoothRandom };
 enum class DistType : int { Soft, Hard, Fold, Tube, Rectify };
 enum class CompMode : int { Normal, Multiband };
@@ -127,6 +140,13 @@ enum class ModDst : int
     X(OscAFm,      "oscA_fm",      "FM",          "Osc A", Power, 0.f, 12.f, 0.f, 2.f, None, nullptr, true) \
     X(OscAFmFb,    "oscA_fmfb",    "Feedback",    "Osc A", Linear, 0.f, 1.f, 0.f, 1.f, Percent, nullptr, false) \
     X(OscARetrig,  "oscA_retrig",  "Retrig",      "Osc A", Toggle, 0, 1, 1, 1.f, None, nullptr, false) \
+    X(OscAUnison,  "oscA_unison",  "Unison",      "Osc A", Linear, 1, 16, 1, 1.f, Int, nullptr, false) \
+    X(OscABlend,   "oscA_blend",   "Blend",       "Osc A", Linear, 0.f, 1.f, 0.75f, 1.f, Percent, nullptr, false) \
+    X(OscAUniWidth,"oscA_uni_width","Width",      "Osc A", Linear, 0.f, 1.f, 1.f, 1.f, Percent, nullptr, false) \
+    X(OscAUniRange,"oscA_uni_range","Range",      "Osc A", Power, 0.f, 48.f, 2.f, 2.f, Semi, nullptr, false) \
+    X(OscAUniMode, "oscA_uni_mode", "Mode",       "Osc A", Choice, 0, 4, 0, 1.f, None, &choices::uniMode, false) \
+    X(OscAUniStack,"oscA_uni_stack","Stack",      "Osc A", Choice, 0, 5, 0, 1.f, None, &choices::uniStack, false) \
+    X(OscAUniSpread,"oscA_uni_spread","Spread",   "Osc A", Linear, 0.f, 1.f, 0.f, 1.f, Percent, nullptr, false) \
     \
     X(OscBOn,      "oscB_on",      "On",          "Osc B", Toggle, 0, 1, 0, 1.f, None, nullptr, false) \
     X(OscBType,    "oscB_type",    "Type",        "Osc B", Choice, 0, 3, 0, 1.f, None, &choices::oscType, false) \
@@ -144,12 +164,19 @@ enum class ModDst : int
     X(OscBRetrig,  "oscB_retrig",  "Retrig",      "Osc B", Toggle, 0, 1, 1, 1.f, None, nullptr, false) \
     X(OscBSync,    "oscB_sync",    "Sync",        "Osc B", Toggle, 0, 1, 0, 1.f, None, nullptr, false) \
     X(OscBXMod,    "oscB_xmod",    "A>B FM",      "Osc B", Power, 0.f, 1.f, 0.f, 2.f, Percent, nullptr, true) \
+    X(OscBUnison,  "oscB_unison",  "Unison",      "Osc B", Linear, 1, 16, 1, 1.f, Int, nullptr, false) \
+    X(OscBBlend,   "oscB_blend",   "Blend",       "Osc B", Linear, 0.f, 1.f, 0.75f, 1.f, Percent, nullptr, false) \
+    X(OscBUniWidth,"oscB_uni_width","Width",      "Osc B", Linear, 0.f, 1.f, 1.f, 1.f, Percent, nullptr, false) \
+    X(OscBUniRange,"oscB_uni_range","Range",      "Osc B", Power, 0.f, 48.f, 2.f, 2.f, Semi, nullptr, false) \
+    X(OscBUniMode, "oscB_uni_mode", "Mode",       "Osc B", Choice, 0, 4, 0, 1.f, None, &choices::uniMode, false) \
+    X(OscBUniStack,"oscB_uni_stack","Stack",      "Osc B", Choice, 0, 5, 0, 1.f, None, &choices::uniStack, false) \
+    X(OscBUniSpread,"oscB_uni_spread","Spread",   "Osc B", Linear, 0.f, 1.f, 0.f, 1.f, Percent, nullptr, false) \
     \
     X(SubLevel,    "sub_level",    "Sub",         "Mixer", Linear, 0.f, 1.f, 0.f, 1.f, Percent, nullptr, true) \
     X(SubOct,      "sub_oct",      "Sub Oct",     "Mixer", Choice, 0, 1, 0, 1.f, None, &choices::subOct, false) \
     X(SubShape,    "sub_shape",    "Sub Wave",    "Mixer", Choice, 0, 2, 0, 1.f, None, &choices::subShape, false) \
     X(NoiseLevel,  "noise_level",  "Noise",       "Mixer", Power, 0.f, 1.f, 0.f, 2.f, Percent, nullptr, true) \
-    X(NoiseType,   "noise_type",   "Noise Type",  "Mixer", Choice, 0, 2, 0, 1.f, None, &choices::noiseType, false) \
+    X(NoiseType,   "noise_type",   "Noise Type",  "Mixer", Choice, 0, 3, 0, 1.f, None, &choices::noiseType, false) \
     X(NoiseDirect, "noise_direct", "Noise Direct","Mixer", Toggle, 0, 1, 0, 1.f, None, nullptr, false) \
     X(RingLevel,   "ring_level",   "Ring",        "Mixer", Linear, 0.f, 1.f, 0.f, 1.f, Percent, nullptr, true) \
     \
@@ -180,6 +207,7 @@ enum class ModDst : int
     X(AenvS,       "aenv_s",       "Sustain",     "Amp Env", Linear, 0.f, 1.f, 0.8f, 1.f, Percent, nullptr, false) \
     X(AenvR,       "aenv_r",       "Release",     "Amp Env", Power, 1.f, 15000.f, 120.f, 3.f, Ms, nullptr, false) \
     X(AenvCurve,   "aenv_curve",   "Curve",       "Amp Env", Linear, 0.f, 1.f, 0.f, 1.f, Percent, nullptr, false) \
+    X(AenvStart,   "aenv_start",   "Start",       "Amp Env", Power, 0.f, 0.9f, 0.f, 2.f, Percent, nullptr, false) \
     X(FenvA,       "fenv_a",       "Attack",      "Env 1", Power, 0.f, 10000.f, 0.f, 3.f, Ms, nullptr, false) \
     X(FenvD,       "fenv_d",       "Decay",       "Env 1", Power, 1.f, 10000.f, 250.f, 3.f, Ms, nullptr, false) \
     X(FenvS,       "fenv_s",       "Sustain",     "Env 1", Linear, 0.f, 1.f, 0.f, 1.f, Percent, nullptr, false) \
@@ -287,11 +315,13 @@ enum class ModDst : int
     X(WidthStereo, "width_stereo", "Stereoize",   "Width", Linear, 0.f, 1.f, 0.f, 1.f, Percent, nullptr, false) \
     X(WidthTime,   "width_time",   "Time",        "Width", Power, 1.f, 30.f, 12.f, 2.f, Ms, nullptr, false) \
     X(WidthMonoHz, "width_mono",   "Low Mono",    "Width", Exp, 20.f, 500.f, 120.f, 1.f, Hz, nullptr, false) \
+    X(FxOrder,     "fx_order",     "Order",       "FX", Linear, 0, 362879, 0, 1.f, Int, nullptr, false) \
     \
     X(EnergyMode,  "energy_mode",  "Length In",   "Energy", Choice, 0, 1, 0, 1.f, None, &choices::energyMode, false) \
     X(EnergyBars,  "energy_bars",  "Length",      "Energy", Choice, 0, 7, 4, 1.f, None, &choices::energyBars, false) \
     X(EnergySec,   "energy_sec",   "Length",      "Energy", Power, 0.1f, 60.f, 6.f, 2.f, Sec, nullptr, false) \
     X(EnergyCurve, "energy_curve", "Curve",       "Energy", BiPower, -1.f, 1.f, 0.f, 1.f, Percent, nullptr, false) \
+    X(EnergyDelay, "energy_delay", "Delay",       "Energy", Linear, 0.f, 0.9f, 0.f, 1.f, Percent, nullptr, false) \
     X(EnergyFade,  "energy_fade",  "Fade",        "Energy", BiPower, -1.f, 1.f, 0.f, 1.f, Percent, nullptr, false) \
     X(EnergyCut,   "energy_cut",   "Cut at End",  "Energy", Toggle, 0, 1, 0, 1.f, None, nullptr, false) \
     \
@@ -303,6 +333,8 @@ enum class ModDst : int
     X(ArpSwing,    "arp_swing",    "Swing",       "Arp", Linear, 0.f, 0.75f, 0.f, 1.f, Percent, nullptr, false) \
     X(ArpHold,     "arp_hold",     "Hold",        "Arp", Toggle, 0, 1, 0, 1.f, None, nullptr, false) \
     X(ArpLength,   "arp_length",   "Steps",       "Arp", Linear, 1, 16, 16, 1.f, Int, nullptr, false) \
+    X(ArpKey,      "arp_key",      "Key",         "Arp", Choice, 0, 12, 0, 1.f, None, &choices::arpKey, false) \
+    X(ArpScale,    "arp_scale",    "Scale",       "Arp", Choice, 0, 5, 0, 1.f, None, &choices::arpScale, false) \
     PSY_ARP_STEP (X, 1)  PSY_ARP_STEP (X, 2)  PSY_ARP_STEP (X, 3)  PSY_ARP_STEP (X, 4) \
     PSY_ARP_STEP (X, 5)  PSY_ARP_STEP (X, 6)  PSY_ARP_STEP (X, 7)  PSY_ARP_STEP (X, 8) \
     PSY_ARP_STEP (X, 9)  PSY_ARP_STEP (X, 10) PSY_ARP_STEP (X, 11) PSY_ARP_STEP (X, 12) \
@@ -382,6 +414,20 @@ float modDepthNorm (ModDst d) noexcept;
 // Effect targets are modulated in their parameter's normalised range, once
 // for all voices, after the voices are mixed.
 constexpr bool isFxTarget (ModDst d) noexcept { return (int) d >= (int) ModDst::DistDrive && d != ModDst::Count; }
+
+// The effects in their default signal order. FxOrder holds the order the
+// chain plays them in, as the index of that permutation (0 = this order).
+enum class Fx : int { Distortion, Crush, Shift, Phaser, Chorus, Compressor, Delay, Reverb, Width, Count };
+constexpr int kNumFx = (int) Fx::Count;
+using FxChain = std::array<int, kNumFx>;   // effect ids, first to last
+FxChain fxChain (int orderCode) noexcept;
+int fxOrderCode (const FxChain&) noexcept;   // -1 unless every effect appears once
+
+// The arp's key (ArpKey: 0 off, 1..12 C..B) and scale. With a key the arp
+// plays every note in that scale, and generated lines are written in it.
+constexpr int kNumArpScales = 6;
+const std::array<int, 7>& arpScaleSteps (int scale) noexcept;   // semitones of the 7 degrees
+int quantizeToScale (int note, int key, int scale) noexcept;    // key 0..11; nearest scale note, down on a tie
 
 // Arp pattern lanes, per step: plays, accent, slide, note (see PSY_ARP_STEP).
 constexpr int kArpSteps = 16;

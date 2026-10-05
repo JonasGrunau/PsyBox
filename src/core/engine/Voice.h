@@ -4,6 +4,7 @@
 #include "dsp/Filters.h"
 #include "dsp/Modulators.h"
 #include "dsp/Oscillators.h"
+#include "dsp/Unison.h"
 
 #include <array>
 
@@ -27,7 +28,7 @@ struct VoiceContext
     // curve's exponent, how much the level follows it, and whether the note
     // ends when it reaches the end.
     double sweepInc = 0.0;
-    float sweepExp = 1.f, sweepFade = 0.f;
+    float sweepExp = 1.f, sweepFade = 0.f, sweepDelay = 0.f;
     bool sweepCut = false;
     // Active matrix slots, pre-filtered by the engine.
     struct Slot { int src, dst; float amt; };
@@ -67,14 +68,37 @@ public:
     const dsp::Adsr& envelope (int i) const noexcept { return i == 0 ? amp : (i == 1 ? fenv : menv); }
     const dsp::PitchEnv& pitchEnvelope() const noexcept { return penv; }
     const dsp::Lfo& lfo (int i) const noexcept { return lfos[(size_t) i]; }
+    // What each filter slot is set to right now, modulation included, for
+    // the moving filter curves.
+    struct FilterNow { float cutoff = 1000.f, reso = 0.f, vowel = 0.f; };
+    const FilterNow& filterNow (int slot) const noexcept { return filtNow[(size_t) slot]; }
 
 private:
-    dsp::AnalogOsc anA, anB, sub;
+    // One oscillator per unison voice (the supersaw is its own unison).
+    template <typename Osc> using Stack = std::array<Osc, kMaxUnison>;
+    Stack<dsp::AnalogOsc> anA, anB;
+    Stack<dsp::WavetableOsc> wtA, wtB;
+    Stack<dsp::FmOsc> fmA, fmB;
+    dsp::AnalogOsc sub;
     dsp::Supersaw ssA, ssB;
-    dsp::WavetableOsc wtA, wtB;
-    dsp::FmOsc fmA, fmB;
     dsp::Noise noise;
-    dsp::FilterSlot f1, f2;
+    // The right channel's filters run only while a unison oscillator is spread
+    // in stereo; otherwise the voice is mono up to the pan.
+    dsp::FilterSlot f1, f2, f1R, f2R;
+    bool stereo = false;
+    std::array<FilterNow, 2> filtNow {};
+
+    struct Unison
+    {
+        dsp::UnisonLayout layout;
+        std::array<float, kMaxUnison> ratio {}, gL {}, gR {};
+        int n = -1, mode = -1, stack = -1;
+        float detune = -1.f, range = -1.f, blend = -1.f, width = -1.f;
+        bool stereo = false;
+        // Recomputes the voices when a setting moved; true when something changed.
+        bool update (int count, float det, float rng, int md, int stk, float bl, float wd, bool st) noexcept;
+    };
+    Unison uniA, uniB;
     dsp::Adsr amp, fenv, menv;
     dsp::PitchEnv penv;
     std::array<dsp::Lfo, kNumLfos> lfos;
@@ -90,8 +114,9 @@ private:
     bool gliding = false;
     int typeA = -1, typeB = -1;
 
-    float oscSample (int which, int type, double inc, float shape, float pw, float detune, int table, float wtPos,
+    float oscSample (int which, int k, int type, double inc, float shape, float pw, float detune, int table, float wtPos,
                      float fmRatio, float fmIndex, float fmFb, const dsp::SyncInfo* sync, float xmodPm, float harmonicLimit) noexcept;
+    void resetOscs (int which, bool retrig, dsp::Rng& phases) noexcept;
 };
 
 } // namespace psy

@@ -13,9 +13,14 @@
 // upwards, and prints PASS/FAIL for each step.
 // PSYSNAP_ARP=1 generates with an arp.
 // PSYSNAP_PARAMS="comp_on=1,comp_mode=0" sets plain parameter values after Generate.
+// PSYSNAP_UNISON=1 opens Osc A's unison settings (the gear), =2 holds Osc A's
+// voice lines up as if the mouse were on its UNISON field.
+// PSYSNAP_CHAINDRAG=n holds the FX chain's first row dragged to row n (use
+// with PSYSNAP_VIEW=1): the rows make room and its landing place stays empty.
 
 #include "plugin/PluginEditor.h"
 #include "plugin/PluginProcessor.h"
+#include "ui/FxPage.h"
 
 #include <typeinfo>
 
@@ -81,13 +86,17 @@ static int runDragAndDropTest (PsyBoxProcessor& proc, juce::AudioProcessorEditor
     };
     auto* handle = findChild<ModSourceHandle> (editor, [] (ModSourceHandle& h) { return h.getSource() == psy::ModSrc::Lfo2; });
     auto* knob = findChild<ParamKnob> (editor, [] (ParamKnob& k) { return k.getParam() == psy::P::OscALevel; });
-    auto* fine = findChild<ParamKnob> (editor, [] (ParamKnob& k) { return k.getParam() == psy::P::OscAFine; });
-    if (handle == nullptr || knob == nullptr || fine == nullptr) { std::printf ("FAIL controls not found\n"); return 1; }
+    auto* blend = findChild<ParamKnob> (editor, [] (ParamKnob& k) { return k.getParam() == psy::P::OscABlend; });
+    auto* semi = findChild<NumberBox> (editor, [] (NumberBox& b) { return b.getParam() == psy::P::OscACoarse; });
+    if (handle == nullptr || knob == nullptr || blend == nullptr || semi == nullptr) { std::printf ("FAIL controls not found\n"); return 1; }
 
     // drop
     const juce::DragAndDropTarget::SourceDetails d (moddrag::describe (handle->getSource()), handle, {});
     check (knob->isInterestedInDragSource (d), "Osc A level takes a dragged LFO");
-    check (! fine->isInterestedInDragSource (d), "Osc A fine (no mod target) refuses it");
+    check (! blend->isInterestedInDragSource (d), "Osc A blend (no mod target) refuses it");
+    check (semi->isInterestedInDragSource (d), "Osc A's SEM field takes it (Pitch A)");
+    semi->itemDropped (d);
+    check (proc.findModSlot (psy::ModSrc::Lfo2, psy::ModDst::PitchA) >= 0, "the drop on SEM added LFO 2 -> Pitch A");
     knob->itemDropped (d);
     const int slot = proc.findModSlot (psy::ModSrc::Lfo2, psy::ModDst::LevelA);
     check (slot >= 0, "the drop added LFO 2 -> Level A in slot " + juce::String (slot));
@@ -114,6 +123,32 @@ static int runDragAndDropTest (PsyBoxProcessor& proc, juce::AudioProcessorEditor
     check (after > before + 0.2f, "dragging the ring up raised the amount " + juce::String (before, 2) + " -> " + juce::String (after, 2));
     check (std::abs (proc.plain (psy::P::OscALevel) - level) < 1e-4f, "the knob's own value stayed put");
     check (proc.uiSelectedSource == psy::ModSrc::Lfo2, "LFO 2 is the selected source");
+    // FX chain: drag Distortion (row 1) below Crush and Freq Shift, then click a row
+    if (auto* ed = dynamic_cast<PsyBoxEditor*> (&editor))
+    {
+        ed->showView (View::Fx);
+        auto* chain = findChild<FxPage::Chain> (editor, [] (FxPage::Chain&) { return true; });
+        check (chain != nullptr, "the FX chain is on the FX page");
+        if (chain != nullptr)
+        {
+            const auto at = [&] (juce::Point<float> pos, juce::Point<float> down, bool dragged) {
+                return juce::MouseEvent (src, pos, juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier), 0.f, 0.f, 0.f, 0.f, 0.f,
+                                         chain, chain, juce::Time::getCurrentTime(), down, juce::Time::getCurrentTime(), 1, dragged);
+            };
+            constexpr float top = 48.f, rowH = 30.f;   // kPad + kHeaderH + kHeaderGap, Chain::kRowH
+            const juce::Point<float> row1 { 60.f, top + rowH * 0.5f }, row3 { 60.f, top + rowH * 2.5f };
+            chain->mouseDown (at (row1, row1, false));
+            chain->mouseDrag (at (row1.translated (0.f, 20.f), row1, true));
+            chain->mouseDrag (at (row3, row1, true));
+            chain->mouseUp (at (row3, row1, true));
+            const auto order = psy::fxChain ((int) proc.plain (psy::P::FxOrder));
+            check (order == psy::FxChain { 1, 2, 0, 3, 4, 5, 6, 7, 8 }, "dragging Distortion two rows down moved it in the chain");
+            const bool crushWas = proc.plain (psy::P::CrushOn) > 0.5f;
+            chain->mouseDown (at (row1, row1, false));
+            chain->mouseUp (at (row1, row1, false));
+            check ((proc.plain (psy::P::CrushOn) > 0.5f) != crushWas, "a click on row 1 (now Crush) switched it");
+        }
+    }
     std::printf ("macro names: %s / %s / %s / %s\n", proc.getMacroName (0).toRawUTF8(), proc.getMacroName (1).toRawUTF8(),
                  proc.getMacroName (2).toRawUTF8(), proc.getMacroName (3).toRawUTF8());
     return failures;
@@ -182,6 +217,26 @@ int main (int argc, char** argv)
         if (auto* m = std::getenv ("PSYSNAP_MODTAB"))
             showModPage (*editor, juce::jlimit (0, 6, juce::String (m).getIntValue()));
         proc.uiDragSource = std::getenv ("PSYSNAP_DRAG") != nullptr ? psy::ModSrc::Lfo1 : psy::ModSrc::None;
+        if (auto* d = std::getenv ("PSYSNAP_CHAINDRAG"))
+            if (auto* chain = findChild<FxPage::Chain> (*editor, [] (FxPage::Chain&) { return true; }))
+            {
+                auto src = juce::Desktop::getInstance().getMainMouseSource();
+                const auto at = [&] (juce::Point<float> pos, juce::Point<float> down, bool dragged) {
+                    return juce::MouseEvent (src, pos, juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier), 0.f, 0.f, 0.f, 0.f, 0.f,
+                                             chain, chain, juce::Time::getCurrentTime(), down, juce::Time::getCurrentTime(), 1, dragged);
+                };
+                const juce::Point<float> row1 { 60.f, 48.f + 15.f };
+                const auto to = row1.translated (0.f, 30.f * (float) (juce::String (d).getIntValue() - 1) + 6.f);
+                chain->mouseDown (at (row1, row1, false));
+                chain->mouseDrag (at (row1.translated (0.f, 10.f), row1, true));
+                chain->mouseDrag (at (to, row1, true));
+            }
+        if (auto* u = std::getenv ("PSYSNAP_UNISON"))
+            if (auto* box = findChild<NumberBox> (*editor, [] (NumberBox& b) { return b.getParam() == psy::P::OscAUnison; }))
+            {
+                if (*u == '1' && box->onGear) box->onGear();
+                if (*u == '2' && box->onActive) box->onActive (true);
+            }
         juce::MessageManager::getInstance()->runDispatchLoopUntil (400);
         if (std::getenv ("PSYSNAP_DNDTEST") != nullptr)
             return runDragAndDropTest (proc, *editor);

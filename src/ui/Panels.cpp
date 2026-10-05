@@ -28,7 +28,7 @@ int Section::titleWidth() const
 // ---------------------------------------------------------------------------
 // Sidebar
 // ---------------------------------------------------------------------------
-Sidebar::Sidebar (PsyBoxProcessor& p) : proc (p)
+Sidebar::Sidebar (PsyBoxProcessor& p) : proc (p), arpKey (p, psy::P::ArpKey), arpScale (p, psy::P::ArpScale)
 {
     generateButton.getProperties().set ("primary", true);
     generateButton.setTooltip ("New sound in this category (locked knobs are kept)");
@@ -44,6 +44,15 @@ Sidebar::Sidebar (PsyBoxProcessor& p) : proc (p)
     keyToggle.setStacked (true);
     keyToggle.onToggle = [this] (bool on) { proc.setKickKeyGeneration (on); };
     addChildComponent (keyToggle);
+    arpKey.setTooltip ("The arp's key: generated lines are written in it, and the arp plays every note in its scale. Off: any key");
+    arpScale.setTooltip ("The scale the arp keeps to when a key is set");
+    addChildComponent (arpKey);
+    addChildComponent (arpScale);
+    keyWatch = std::make_unique<juce::ParameterAttachment> (*p.param (psy::P::ArpKey), [this] (float key) {
+        arpScale.setAlpha (key > 0.5f ? 1.f : 0.45f);
+        repaint (scaleCaption);
+    });
+    keyWatch->sendInitialUpdate();
 
     mutateAmount.setSliderStyle (juce::Slider::LinearHorizontal);
     mutateAmount.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
@@ -88,6 +97,8 @@ void Sidebar::refresh()
     {
         keyToggle.setVisible (proc.isKickCategory());
         arpToggle.setVisible (arp);
+        arpKey.setVisible (arp);
+        arpScale.setVisible (arp);
         resized();
     }
     if (proc.getCategory() != lastCategory)
@@ -303,6 +314,12 @@ void Sidebar::paint (juce::Graphics& g)
     g.drawText ("SEED", seedCaption, juce::Justification::centredLeft, false);
     if (arpToggle.isVisible())
         g.drawText ("ARP", arpCaption, juce::Justification::centredLeft, false);
+    if (arpKey.isVisible())
+    {
+        g.drawText ("KEY", arpKeyCaption, juce::Justification::centredLeft, false);
+        g.setColour (arpScale.getAlpha() < 1.f ? col::textFaint.withAlpha (0.6f) : col::textFaint);
+        g.drawText ("SCALE", scaleCaption, juce::Justification::centredLeft, false);
+    }
     if (keyToggle.isVisible())
         g.drawText ("TUNE TO KEY", keyCaption, juce::Justification::centredLeft, false);
 
@@ -327,10 +344,20 @@ void Sidebar::resized()
     seedCaption = seedRow;
     seedLabel.setBounds (seedRow.removeFromRight (100));
 
-    // "ARP" (categories that have one): whether Generate adds an arp
-    arpCaption = {};
+    // "ARP", "KEY" and "SCALE" (categories that have an arp): whether
+    // Generate adds one, and the key and scale it is written and played in.
+    // Caption left, the choice right, like SEED.
+    arpCaption = arpKeyCaption = scaleCaption = {};
     if (arpToggle.isVisible())
     {
+        a.removeFromBottom (sp::sm);
+        auto scaleRow = a.removeFromBottom (kCtrlH);
+        scaleCaption = scaleRow;
+        arpScale.setBounds (scaleRow.removeFromRight (112));
+        a.removeFromBottom (sp::sm);
+        auto keyRow = a.removeFromBottom (kCtrlH);
+        arpKeyCaption = keyRow;
+        arpKey.setBounds (keyRow.removeFromRight (112));
         a.removeFromBottom (sp::sm);
         auto arpRow = a.removeFromBottom (kLabelH);
         arpCaption = arpRow;

@@ -3,6 +3,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <vector>
 
@@ -380,4 +381,39 @@ TEST_CASE ("Engine: turning the arp off hands the held key back to the voices", 
     float pk = 0.f;
     for (float v : l) pk = std::max (pk, std::abs (v));
     CHECK (pk > 0.05f);
+}
+
+TEST_CASE ("With a key set the arp plays every note in its scale", "[arp]")
+{
+    ArpSettings s;
+    s.pattern = ArpPattern::parse ("x");
+    for (int i = 0; i < kArpSteps; ++i) s.pattern.notes[(size_t) i] = (int8_t) i;   // every semitone
+    s.key = 5;     // F
+    s.scale = 0;   // Phrygian: F Gb Ab Bb C Db Eb
+    const auto& steps = arpScaleSteps (0);
+    for (int held : { 53, 55, 60 })   // F, G (not in the scale), C
+    {
+        auto a = make (s);
+        a.keyOn (held, 0.8f);
+        const auto o = ons (run (a, kSixteenth * 16, 256));
+        REQUIRE (o.size() == 16);
+        for (const auto& e : o)
+        {
+            INFO ("held " << held << " note " << e.note);
+            CHECK (std::find (steps.begin(), steps.end(), ((e.note - 5) % 12 + 12) % 12) != steps.end());
+        }
+    }
+    // in the scale already: untouched; out of it: the nearest scale note, down on a tie
+    CHECK (quantizeToScale (65, 5, 0) == 65);
+    CHECK (quantizeToScale (67, 5, 0) == 66);   // G -> Gb
+    CHECK (quantizeToScale (69, 5, 0) == 68);   // A -> Ab
+
+    // without a key the notes pass as they are
+    s.key = -1;
+    auto free = make (s);
+    free.keyOn (55, 0.8f);
+    const auto o = ons (run (free, kSixteenth * 16, 256));
+    REQUIRE (o.size() == 16);
+    for (size_t i = 0; i < o.size(); ++i)
+        CHECK (o[i].note == 55 + (int) i);
 }

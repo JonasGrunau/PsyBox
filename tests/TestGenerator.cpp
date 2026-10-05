@@ -179,9 +179,19 @@ TEST_CASE ("Generated arp patterns change with the seed and keep each category's
     }
     for (uint32_t seed = 1; seed < 60; ++seed)
     {
-        const auto sweep = pattern (Category::Drone, seed);
-        for (int i = 0; i < sweep.length; ++i)
-            CHECK ((sweep.has (i, ArpPattern::On) && sweep.has (i, ArpPattern::Slide)));
+        // a drone plays every step, tied or struck once a step, and moves
+        const auto drone = pattern (Category::Drone, seed);
+        bool tied = true;
+        std::set<int> notes;
+        for (int i = 0; i < drone.length; ++i)
+        {
+            CHECK (drone.has (i, ArpPattern::On));
+            tied = tied && drone.has (i, ArpPattern::Slide);
+            notes.insert (drone.notes[(size_t) i]);
+        }
+        const bool struck = [&] { for (int i = 0; i < drone.length; ++i) if (drone.has (i, ArpPattern::Slide)) return false; return true; }();
+        CHECK ((tied || struck));
+        CHECK (notes.size() >= 3);
         const auto acid = pattern (Category::Acid, seed);
         CHECK (acid.has (0, ArpPattern::On));
     }
@@ -479,6 +489,7 @@ TEST_CASE ("Macro labels say what a macro drives", "[generator][macro]")
     CHECK (macroLabel (with ({ { S::Macro1, D::F1Cutoff } }), 0) == "Cutoff");
     CHECK (macroLabel (with ({ { S::Macro1, D::F1Cutoff } }), 1).empty());
     CHECK (macroLabel (with ({ { S::Macro2, D::F1Cutoff }, { S::Macro2, D::F2Cutoff } }), 1) == "Cutoff");
+    CHECK (macroLabel (with ({ { S::Macro2, D::F2Cutoff } }), 1) == "Cutoff 2");
     CHECK (macroLabel (with ({ { S::Macro1, D::F1Cutoff }, { S::Macro1, D::F1Reso } }), 0) == "Filter");
     CHECK (macroLabel (with ({ { S::Macro3, D::ReverbMix } }), 2) == "Reverb");
     CHECK (macroLabel (with ({ { S::Macro4, D::F1Cutoff }, { S::Macro4, D::DelayMix } }), 3) == "Cutoff + Delay");
@@ -566,4 +577,104 @@ TEST_CASE ("Generate and Mutate keep both quality settings", "[generator]")
         CHECK (p.geti (P::Quality) == 0);
         CHECK (p.geti (P::RenderQuality) == 1);
     }
+}
+
+TEST_CASE ("No arp category generates a one- or two-note pattern more than now and then", "[generator][arp]")
+{
+    Generator g;
+    for (Category c : categoryDisplayOrder())
+    {
+        if (! hasArp (c)) continue;
+        int lively = 0;
+        constexpr int kSeeds = 100;
+        for (uint32_t seed = 1; seed <= kSeeds; ++seed)
+        {
+            const auto p = ArpPattern::from (g.generate (c, seed * 7919u, ParamState(), LockSet(), true));
+            std::set<int> played;
+            for (int i = 0; i < p.length; ++i)
+                if (p.has (i, ArpPattern::On)) played.insert (p.notes[(size_t) i]);
+            lively += played.size() >= 3 ? 1 : 0;
+        }
+        INFO (categoryInfo()[(size_t) c].name);
+        CHECK (lively >= kSeeds * 9 / 10);
+    }
+}
+
+TEST_CASE ("A key set for the arp keeps through Generate and writes lines in its scale", "[generator][arp]")
+{
+    Generator g;
+    for (int scale = 0; scale < kNumArpScales; ++scale)
+    {
+        ParamState current;
+        current.set (P::ArpKey, 7.f);   // F#
+        current.set (P::ArpScale, (float) scale);
+        const auto& steps = arpScaleSteps (scale);
+        for (Category c : { Category::Acid, Category::PsyLead, Category::Pluck, Category::Atmos, Category::Gate, Category::Stab })
+            for (uint32_t seed = 1; seed <= 20; ++seed)
+            {
+                const auto p = g.generate (c, seed, current, LockSet(), true);
+                INFO (categoryInfo()[(size_t) c].name << " scale " << scale << " seed " << seed);
+                CHECK (p.geti (P::ArpKey) == 7);
+                CHECK (p.geti (P::ArpScale) == scale);
+                const auto a = ArpPattern::from (p);
+                for (int i = 0; i < a.length; ++i)
+                    if (a.has (i, ArpPattern::On))
+                        CHECK (std::find (steps.begin(), steps.end(), ((a.notes[(size_t) i] % 12) + 12) % 12) != steps.end());
+            }
+        // a new pattern alone keeps the scale too
+        const auto base = g.generate (Category::Acid, 3, current, LockSet(), true);
+        const auto next = ArpPattern::from (g.generateArpPattern (Category::Acid, 99, base, LockSet()));
+        for (int i = 0; i < next.length; ++i)
+            if (next.has (i, ArpPattern::On))
+                CHECK (std::find (steps.begin(), steps.end(), ((next.notes[(size_t) i] % 12) + 12) % 12) != steps.end());
+    }
+}
+
+TEST_CASE ("Generated macros start part way along; basses keep their space macros at zero", "[generator][macro]")
+{
+    Generator g;
+    int synthTurned = 0, synthTotal = 0;
+    for (Category c : categoryDisplayOrder())
+    {
+        if (familyOf (c) == Family::Kick) continue;
+        for (uint32_t seed = 1; seed <= 12; ++seed)
+        {
+            const auto p = g.generate (c, seed * 31u, ParamState(), LockSet(), false);
+            INFO (categoryInfo()[(size_t) c].name << " seed " << seed);
+            for (int m = 0; m < 4; ++m)
+            {
+                const float v = p.get ((P) ((int) P::Macro1 + m));
+                CHECK (v >= 0.f);
+                CHECK (v <= 0.7f);
+                const auto label = macroLabel (p, m);
+                if (familyOf (c) == Family::Bass && (label == "Reverb" || label == "Delay" || label == "Chorus"))
+                    CHECK (v == 0.f);
+                if (familyOf (c) == Family::Synth) { synthTurned += v > 0.f ? 1 : 0; ++synthTotal; }
+            }
+        }
+    }
+    CHECK (synthTurned > synthTotal / 2);
+}
+
+TEST_CASE ("Leads and pads get unison now and then, basses never", "[generator][unison]")
+{
+    Generator g;
+    int leads = 0, pads = 0;
+    for (uint32_t seed = 1; seed <= 40; ++seed)
+    {
+        const auto lead = g.generate (Category::PsyLead, seed, ParamState(), LockSet(), false);
+        const auto pad = g.generate (Category::Atmos, seed, ParamState(), LockSet(), false);
+        leads += lead.geti (P::OscAUnison) > 1 || lead.geti (P::OscBUnison) > 1 ? 1 : 0;
+        pads += pad.geti (P::OscAUnison) > 1 || pad.geti (P::OscBUnison) > 1 ? 1 : 0;
+        for (auto c : { Category::PsyBass, Category::ProgBass, Category::OffbeatBass, Category::BassShot, Category::ReverseBass, Category::ReverseSub })
+        {
+            const auto b = g.generate (c, seed, ParamState(), LockSet(), false);
+            CHECK (b.geti (P::OscAUnison) == 1);
+            CHECK (b.geti (P::OscBUnison) == 1);
+            const auto m = g.mutate (1.f, seed, b, LockSet());
+            CHECK (m.geti (P::OscAUnison) == 1);
+        }
+    }
+    CHECK (leads >= 10);
+    CHECK (pads >= 15);
 }

@@ -7,9 +7,35 @@
 // below. Every knob that can be modulated takes a dragged mod source.
 
 // ---------------------------------------------------------------------------
-// One oscillator: the waveform on top, switches under it, knobs below.
-//   row 0: the type's controls, level in the last cell
-//   row 1: coarse, fine (B: A>B FM, ring)
+// The unison settings behind the oscillator's gear (Serum 2): how the voices
+// are spaced, which are stacked an octave or a fifth away, how far Detune
+// reaches, and how much their shape spreads. Shown in place of the waveform.
+// ---------------------------------------------------------------------------
+class UnisonSettings : public juce::Component, private juce::Timer
+{
+public:
+    UnisonSettings (PsyBoxProcessor&, bool isB);
+    void paint (juce::Graphics&) override;
+    void resized() override;
+    void setType (int oscType);   // names the spread after what it moves
+
+private:
+    PsyBoxProcessor& proc;
+    bool isB;
+    ParamCombo mode, stack;
+    KnobSet ks;
+    ParamKnob *range, *spread;
+    juce::Rectangle<int> linesArea;   // the voices as lines, Serum 2 style
+    uint64_t lastPrint = 0;
+    uint64_t print() const;
+    void timerCallback() override;
+};
+
+// ---------------------------------------------------------------------------
+// One oscillator, laid out like Serum 2's: the pitch fields over the
+// waveform, then two rows of five cells.
+//   row 0: the type's main knob, UNISON (gear: settings), DETUNE, BLEND, WIDTH
+//   row 1: the type's other knobs (or the table), B's A>B FM and RING, LEVEL
 // ---------------------------------------------------------------------------
 class OscPanel : public Section, private juce::Timer
 {
@@ -22,13 +48,16 @@ private:
     bool isB;
     ToggleDot onToggle;
     ParamCombo type;
+    NumberBox semi, fine, unison;
     WaveDisplay wave;
+    UnisonSettings settings;
     KnobSet ks;
-    ParamKnob *shape, *pw, *detune, *wtpos, *ratio, *fm, *fb, *coarse, *fine, *level, *xmod = nullptr, *ring = nullptr;
+    ParamKnob *shape, *pw, *wtpos, *ratio, *fm, *fb, *detune, *blend, *width, *level, *xmod = nullptr, *ring = nullptr;
     ParamCombo table;
     ToggleDot retrig;
     std::unique_ptr<ToggleDot> sync;
     int lastType = -1;
+    bool lastOn = true, showSettings = false;
     void timerCallback() override;
 };
 
@@ -169,7 +198,7 @@ private:
     ModSourceHandle sweep;
     Segmented unit;   // bars or seconds
     KnobSet ks;
-    ParamKnob *bars, *seconds, *curve, *fade;
+    ParamKnob *bars, *seconds, *curve, *fade, *delay;
     ToggleDot cut;
     SweepDisplay display;
     bool lastTime = false;

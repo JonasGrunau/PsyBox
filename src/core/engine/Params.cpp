@@ -17,7 +17,7 @@ namespace choices
                                                "Digital Grit", "Sync Sweep", "Bell Spectra", "Acid Morph" };
     const std::vector<std::string> subOct { "-1 Oct", "-2 Oct" };
     const std::vector<std::string> subShape { "Sine", "Triangle", "Square" };
-    const std::vector<std::string> noiseType { "White", "Pink", "Digital" };
+    const std::vector<std::string> noiseType { "White", "Pink", "Digital", "Hiss" };
     const std::vector<std::string> penvDest { "A + B", "Osc A", "Osc B" };
     const std::vector<std::string> filterType { "Off", "LP 6", "LP 12", "LP 18", "LP 24", "HP 6", "HP 12", "HP 18", "HP 24",
                                                 "BP 12", "BP 24", "Notch", "Ladder LP 12", "Ladder LP 24", "Ladder HP",
@@ -46,6 +46,10 @@ namespace choices
     const std::vector<std::string> kickClick { "Noise", "Tick", "Blip" };
     const std::vector<std::string> kickDrive { "Soft", "Tube", "Hard" };
     const std::vector<std::string> energyMode { "Bars", "Time" };
+    const std::vector<std::string> arpKey { "Off", "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" };
+    const std::vector<std::string> arpScale { "Phrygian", "Minor", "Harmonic Min", "Phrygian Dom", "Dorian", "Major" };
+    const std::vector<std::string> uniMode { "Linear", "Super", "Exp", "Inv", "Random" };
+    const std::vector<std::string> uniStack { "Off", "12", "12+7", "24", "Center -12", "Center -24" };
     const std::vector<std::string> energyBars { "1/4 bar", "1/2 bar", "1 bar", "2 bars", "4 bars", "8 bars", "16 bars", "32 bars" };
 } // namespace choices
 
@@ -54,6 +58,76 @@ float syncDivBeats (int index) noexcept
     static constexpr float beats[] = { 16.f, 8.f, 4.f, 2.f, 3.f, 4.f / 3.f, 1.f, 1.5f, 2.f / 3.f,
                                        0.5f, 0.75f, 1.f / 3.f, 0.25f, 0.375f, 1.f / 6.f, 0.125f, 1.f / 12.f, 0.0625f };
     return beats[std::clamp (index, 0, (int) std::size (beats) - 1)];
+}
+
+FxChain fxChain (int code) noexcept
+{
+    // the order's index as a factorial-base number: each digit picks one
+    // of the effects still left, in default order
+    FxChain out {};
+    std::array<int, kNumFx> left {};
+    for (int i = 0; i < kNumFx; ++i) left[(size_t) i] = i;
+    int n = kNumFx;
+    int radix = 1;
+    for (int i = 2; i < kNumFx; ++i) radix *= i;   // (kNumFx - 1)!
+    code = std::clamp (code, 0, radix * kNumFx - 1);
+    for (int i = 0; i < kNumFx; ++i)
+    {
+        const int digit = code / radix;
+        code %= radix;
+        out[(size_t) i] = left[(size_t) digit];
+        for (int k = digit; k < n - 1; ++k) left[(size_t) k] = left[(size_t) k + 1];
+        --n;
+        if (n > 0) radix /= n;
+    }
+    return out;
+}
+
+int fxOrderCode (const FxChain& chain) noexcept
+{
+    std::array<bool, kNumFx> seen {};
+    for (int fx : chain)
+    {
+        if (fx < 0 || fx >= kNumFx || seen[(size_t) fx]) return -1;
+        seen[(size_t) fx] = true;
+    }
+    int code = 0;
+    for (int i = 0; i < kNumFx; ++i)
+    {
+        int smaller = 0;   // effects after this one that come earlier by default
+        for (int k = i + 1; k < kNumFx; ++k)
+            smaller += chain[(size_t) k] < chain[(size_t) i] ? 1 : 0;
+        code = code * (kNumFx - i) + smaller;
+    }
+    return code;
+}
+
+const std::array<int, 7>& arpScaleSteps (int scale) noexcept
+{
+    static constexpr std::array<int, 7> scales[kNumArpScales] = {
+        { 0, 1, 3, 5, 7, 8, 10 },   // Phrygian
+        { 0, 2, 3, 5, 7, 8, 10 },   // natural minor
+        { 0, 2, 3, 5, 7, 8, 11 },   // harmonic minor
+        { 0, 1, 4, 5, 7, 8, 10 },   // Phrygian dominant
+        { 0, 2, 3, 5, 7, 9, 10 },   // Dorian
+        { 0, 2, 4, 5, 7, 9, 11 },   // major
+    };
+    return scales[std::clamp (scale, 0, kNumArpScales - 1)];
+}
+
+int quantizeToScale (int note, int key, int scale) noexcept
+{
+    const auto& steps = arpScaleSteps (scale);
+    const auto inScale = [&] (int n) {
+        const int pc = ((n - key) % 12 + 12) % 12;
+        return std::find (steps.begin(), steps.end(), pc) != steps.end();
+    };
+    for (int d = 0; d < 12; ++d)
+    {
+        if (inScale (note - d)) return note - d;
+        if (inScale (note + d)) return note + d;
+    }
+    return note;
 }
 
 float energyBarsValue (int index) noexcept

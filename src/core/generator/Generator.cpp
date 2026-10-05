@@ -137,16 +137,22 @@ ParamState Generator::generate (Category c, uint32_t seed, const ParamState& cur
     out.set (P::RenderQuality, current.get (P::RenderQuality));
     out.set (P::MasterVol, current.get (P::MasterVol));
     out.set (P::EnergyMode, current.get (P::EnergyMode));
+    // so is the key and scale the arp plays in
+    out.set (P::ArpKey, current.get (P::ArpKey));
+    out.set (P::ArpScale, current.get (P::ArpScale));
 
     ranges.clear();
     dsp::Rng rng (((uint64_t) seed << 8) ^ (uint64_t) ((int) c + 1) * 0x9E3779B97F4A7C15ULL);
     RecipeBuilder b (out, locks, rng, ranges);
+    b.setCategory (c);
     recipeFor (c) (b);
+    unisonRecipe (c, b);
     if (familyOf (c) == Family::Kick)
         b.on (P::KickKeyTrack, kickToKey);
 
     dsp::Rng arpRng (((uint64_t) seed << 8) ^ (uint64_t) ((int) c + 1) * 0xC2B2AE3D27D4EB4FULL ^ 0x41525050ULL);
     RecipeBuilder arp (out, locks, arpRng, ranges);
+    arp.setCategory (c);
     withArp = withArp && hasArp (c);   // basses, kicks and energy sounds have none
     arp.on (P::ArpOn, withArp);
     if (withArp)
@@ -165,6 +171,7 @@ ParamState Generator::generateArpPattern (Category c, uint32_t seed, const Param
     ParamState out = current;
     dsp::Rng rng (((uint64_t) seed << 8) ^ (uint64_t) ((int) c + 1) * 0xD6E8FEB86659FD93ULL ^ 0x50415454ULL);
     RecipeBuilder b (out, locks, rng, ranges);
+    b.setCategory (c);
     arpPatternRecipeFor (c) (b);
     return out;
 }
@@ -185,7 +192,7 @@ ParamState Generator::mutate (float amount, uint32_t seed, const ParamState& cur
         if (locks.test ((size_t) i) || ! r.touched)
             continue;
         if (i == (int) P::Quality || i == (int) P::RenderQuality || i == (int) P::MasterVol || i == (int) P::EngineMode
-            || i == (int) P::EnergyMode)
+            || i == (int) P::EnergyMode || i == (int) P::ArpKey || i == (int) P::ArpScale)
             continue;
 
         if (d.mapping == Mapping::Choice || d.mapping == Mapping::Toggle || d.unit == Unit::Int)

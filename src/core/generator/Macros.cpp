@@ -48,8 +48,8 @@ namespace
             case D::WtPosB:       return osc (true, OscType::Wavetable);
             case D::FmA:          return osc (false, OscType::FM);
             case D::FmB:          return osc (true, OscType::FM);
-            case D::DetuneA:      return osc (false, OscType::Supersaw);
-            case D::DetuneB:      return osc (true, OscType::Supersaw);
+            case D::DetuneA:      return osc (false, OscType::Supersaw) || (s.on (P::OscAOn) && s.geti (P::OscAUnison) > 1);
+            case D::DetuneB:      return osc (true, OscType::Supersaw) || (s.on (P::OscBOn) && s.geti (P::OscBUnison) > 1);
             case D::XMod:         return s.on (P::OscBOn) && s.on (P::OscAOn);
             case D::LevelA:       return s.on (P::OscAOn);
             case D::LevelB:       return s.on (P::OscBOn);
@@ -244,6 +244,59 @@ void RecipeBuilder::macros (std::initializer_list<ModDst> targets)
             route (macroSource (m), ModDst::ChorusMix, 0.3f, 0.5f);
         }
     }
+
+    // Where each macro knob starts: part way along, so it turns both ways
+    // and the same recipe comes out brighter, rougher or wetter from seed to
+    // seed. A cutoff macro takes its filter's knob down by most of what it
+    // opens, so the patch keeps about the brightness the recipe gave it.
+    // Basses keep reverb and delay at 0 (they stay dry), only a little extra
+    // drive and resonance (their level is set by the recipe's glue), and
+    // their cutoff macro gives back exactly what it opens.
+    const bool bass = familyOf (cat) == Family::Bass;
+    for (int m = 0; m < 4; ++m)
+    {
+        ModDst first = ModDst::None;
+        for (int i = 0; i < kNumModSlots && first == ModDst::None; ++i)
+            if (s.geti (modSrcParam (i)) == (int) macroSource (m) && s.geti (modDstParam (i)) > 0)
+                first = (ModDst) s.geti (modDstParam (i));
+        if (first == ModDst::None) continue;
+
+        const bool cutoff = first == ModDst::F1Cutoff || first == ModDst::F2Cutoff;
+        std::pair<float, float> range { 0.f, 0.f };
+        switch (labelOf (first).kind)
+        {
+            case Kind::Filter: range = cutoff ? std::pair { 0.2f, 0.7f } : std::pair { 0.f, bass ? 0.15f : 0.4f }; break;
+            case Kind::Tone:   range = { 0.f, 0.5f }; break;
+            case Kind::Mix:    range = { 0.f, 0.3f }; break;
+            case Kind::Grit:   range = { 0.f, bass ? 0.2f : 0.4f }; break;
+            case Kind::Colour: range = { 0.f, 0.3f }; break;
+            case Kind::Motion: range = { 0.f, 0.5f }; break;
+            case Kind::Space:  range = bass ? std::pair { 0.f, 0.f } : std::pair { 0.f, 0.3f }; break;
+            case Kind::Pitch: case Kind::Amp: case Kind::None: break;
+        }
+        const P knob = (P) ((int) P::Macro1 + m);
+        const float v = uni (knob, range.first, range.second);
+        // synths may come out a little brighter; a bass keeps its exact
+        // brightness (the number is drawn either way, so seeds stay put)
+        const float drawn = rng.range (0.6f, 1.f);
+        const float share = bass ? 1.f : drawn;
+        if (! cutoff || v <= 0.f) continue;
+        for (int i = 0; i < kNumModSlots; ++i)
+        {
+            const int dst = s.geti (modDstParam (i));
+            if (s.geti (modSrcParam (i)) != (int) macroSource (m) || (dst != (int) ModDst::F1Cutoff && dst != (int) ModDst::F2Cutoff))
+                continue;
+            const P knobP = dst == (int) ModDst::F1Cutoff ? P::F1Cutoff : P::F2Cutoff;
+            if (locked (knobP)) continue;
+            // the voice moves cutoff by 8 octaves per unit of macro x amount
+            const float octaves = 8.f * s.get (modAmtParam (i)) * v * share;
+            const auto& d = def (knobP);
+            const float shift = octaves / std::log2 (d.max / d.min);   // in the knob's (log) range
+            auto& r = ranges.e[(size_t) knobP];
+            s.set (knobP, d.toPlain (std::max (0.f, d.toNorm (s.get (knobP)) - shift)));
+            if (r.touched) { r.lo = std::max (0.f, r.lo - shift); r.hi = std::max (0.f, r.hi - shift); }
+        }
+    }
 }
 
 std::string macroLabel (const ParamState& p, int macro)
@@ -261,7 +314,9 @@ std::string macroLabel (const ParamState& p, int macro)
     if (dsts.empty()) return {};
 
     // both cutoffs move together: still just "Cutoff"
-    const bool cutoffsOnly = std::all_of (dsts.begin(), dsts.end(), [] (ModDst d) { return d == ModDst::F1Cutoff || d == ModDst::F2Cutoff; });
+    // (filter 2's alone is "Cutoff 2")
+    const bool cutoffsOnly = std::all_of (dsts.begin(), dsts.end(), [] (ModDst d) { return d == ModDst::F1Cutoff || d == ModDst::F2Cutoff; })
+                          && std::find (dsts.begin(), dsts.end(), ModDst::F1Cutoff) != dsts.end();
     if (dsts.size() == 1 || cutoffsOnly)
         return cutoffsOnly ? "Cutoff" : labelOf (dsts.front()).name;
 

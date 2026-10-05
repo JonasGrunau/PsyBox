@@ -6,6 +6,8 @@
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 
 #include <algorithm>
+#include <set>
+#include <string>
 
 using namespace psy;
 
@@ -476,7 +478,8 @@ TEST_CASE ("Reverse basses swell into the beat and stop at their length, key hel
                 for (size_t i = a; i < b; ++i) sum += (double) out.l[i] * out.l[i];
                 return 10.0 * std::log10 (sum / (double) (b - a) + 1e-20);
             };
-            CHECK (rmsAt (0.0, 0.15 * beat) < rmsAt (0.7 * beat, 0.95 * beat) - 12.0);   // a swell
+            // a swell: the reverse bass references start as little as 9 dB down
+            CHECK (rmsAt (0.0, 0.15 * beat) < rmsAt (0.7 * beat, 0.95 * beat) - (c == Category::ReverseBass ? 7.0 : 12.0));
             CHECK (rmsAt (1.3 * beat, 4.0 * beat) < rmsAt (0.7 * beat, 0.95 * beat) - 30.0);   // then gone
             CHECK (out.peak > 0.1f);   // about level with the other basses
         }
@@ -547,4 +550,324 @@ TEST_CASE ("Offline rendering plays at the Render quality", "[engine]")
     e.setOffline (false);
     e.process (l.data(), r.data(), 256, nullptr, 0, 120.0);
     CHECK (e.latencySamples() == live);
+}
+
+TEST_CASE ("Unison voices spread evenly, keep the level and centre the middle voice", "[engine][unison]")
+{
+    dsp::UnisonLayout u;
+    for (int n = 1; n <= dsp::UnisonLayout::kMax; ++n)
+        for (float blend : { 0.f, 0.5f, 1.f })
+        {
+            u.compute (n, 1.f, 2.f, (int) UniMode::Linear, (int) UniStack::Off, blend, 1.f);
+            REQUIRE (u.count == n);
+            float power = 0.f, lo = 0.f, hi = 0.f;
+            for (int k = 0; k < n; ++k)
+            {
+                power += u.gain[(size_t) k] * u.gain[(size_t) k];
+                lo = std::min (lo, u.semis[(size_t) k]);
+                hi = std::max (hi, u.semis[(size_t) k]);
+            }
+            CHECK_THAT (power, Catch::Matchers::WithinAbs (1.0, 1e-4));
+            if (n > 1)
+            {
+                CHECK_THAT (lo, Catch::Matchers::WithinAbs (-1.0, 1e-5));   // detune 100 % covers the range
+                CHECK_THAT (hi, Catch::Matchers::WithinAbs (1.0, 1e-5));
+            }
+            if (n % 2 == 1)
+                CHECK (u.semis[0] == 0.f);
+        }
+
+    // Linear spacing: 5 voices at -1, -0.5, 0, 0.5, 1 semitones
+    u.compute (5, 1.f, 2.f, (int) UniMode::Linear, (int) UniStack::Off, 1.f, 0.f);
+    std::vector<float> s (u.semis.begin(), u.semis.begin() + 5);
+    std::sort (s.begin(), s.end());
+    for (int k = 0; k < 5; ++k)
+        CHECK_THAT (s[(size_t) k], Catch::Matchers::WithinAbs (-1.0 + 0.5 * k, 1e-5));
+    for (int k = 0; k < 5; ++k)
+        CHECK (u.pan[(size_t) k] == 0.f);   // no width, no pan
+
+    // Super keeps the inner voices closer than Linear, Inv pushes them out
+    const auto inner = [&u] (int mode) {
+        u.compute (7, 1.f, 2.f, mode, (int) UniStack::Off, 1.f, 1.f);
+        return std::abs (u.semis[1]);
+    };
+    CHECK (inner ((int) UniMode::Super) < inner ((int) UniMode::Linear));
+    CHECK (inner ((int) UniMode::Exp) < inner ((int) UniMode::Super));
+    CHECK (inner ((int) UniMode::Inv) > inner ((int) UniMode::Linear));
+
+    // Stack: the centre drops an octave, or the first pair goes up one
+    u.compute (3, 0.f, 2.f, (int) UniMode::Linear, (int) UniStack::CenterDown1, 1.f, 1.f);
+    CHECK (u.semis[0] == -12.f);
+    u.compute (3, 0.f, 2.f, (int) UniMode::Linear, (int) UniStack::Oct, 1.f, 1.f);
+    CHECK (u.semis[1] == 12.f);
+    CHECK (u.semis[2] == 12.f);
+}
+
+TEST_CASE ("Unison spreads an oscillator in stereo at the same loudness", "[engine][unison]")
+{
+    const auto render = [] (int voices, float width, int type) {
+        ParamState p;
+        p.set (P::OscAType, (float) type);
+        p.set (P::OscAUnison, (float) voices);
+        p.set (P::OscADetune, 0.3f);
+        p.set (P::OscABlend, 1.f);
+        p.set (P::OscAUniWidth, width);
+        p.set (P::OscARetrig, 0.f);
+        return hold (p, 1.0);
+    };
+    const auto sideDb = [] (const Render& r) {
+        double side = 0.0, mid = 0.0;
+        for (size_t i = 0; i < r.l.size(); ++i)
+        {
+            const double m = 0.5 * (r.l[i] + r.r[i]), s = 0.5 * (r.l[i] - r.r[i]);
+            mid += m * m;
+            side += s * s;
+        }
+        return 10.0 * std::log10 ((side + 1e-20) / (mid + 1e-20));
+    };
+
+    for (int type : { (int) OscType::Analog, (int) OscType::Wavetable, (int) OscType::FM })
+    {
+        INFO ("type " << type);
+        const auto one = render (1, 1.f, type);
+        const auto wide = render (7, 1.f, type);
+        const auto narrow = render (7, 0.f, type);
+        CHECK (sideDb (one) < -100.0);       // one voice: mono
+        CHECK (sideDb (narrow) < -100.0);    // no width: mono
+        CHECK (sideDb (wide) > -15.0);       // spread: a real stereo image
+        CHECK (std::abs (wide.rmsDb - one.rmsDb) < 3.0);
+        CHECK (std::abs (narrow.rmsDb - one.rmsDb) < 3.0);
+    }
+
+    // the supersaw is its own unison: the count changes nothing
+    const auto ss1 = render (1, 1.f, (int) OscType::Supersaw);
+    const auto ss7 = render (7, 1.f, (int) OscType::Supersaw);
+    CHECK (ss1.l == ss7.l);
+    CHECK (ss1.r == ss7.r);
+}
+
+TEST_CASE ("The mod view shows each filter where its modulation has moved it", "[engine][notes]")
+{
+    ParamState p;
+    p.set (P::F1Type, (float) FilterType::LP24);
+    p.set (P::F1Cutoff, 500.f);
+    p.set (P::F1Env, 1.f);
+    p.set (P::FenvA, 0.f);
+    p.set (P::FenvD, 2000.f);
+    p.set (P::FenvS, 0.f);
+    Engine e;
+    e.setParams (p);
+    e.prepare (48000.0, 480);
+    std::vector<float> l (480), r (480);
+    const MidiEvent note[] = { { 0, MidiEvent::NoteOn, 60, 1.f } };
+    e.process (l.data(), r.data(), 480, note, 1, 120.0);
+    ModView v;
+    e.getModView (v);
+    REQUIRE (v.numVoices == 1);
+    const float early = v.voices[0].filter[0].cutoff;
+    CHECK (early > 4000.f);   // the envelope opens it far above the knob
+    for (int i = 0; i < 100; ++i) e.process (l.data(), r.data(), 480, nullptr, 0, 120.0);   // a second later
+    e.getModView (v);
+    REQUIRE (v.numVoices == 1);
+    CHECK (v.voices[0].filter[0].cutoff < early);
+    CHECK (v.voices[0].filter[0].cutoff >= 500.f);
+}
+
+TEST_CASE ("The effect order round-trips and changes the sound; the default is the old chain", "[engine][fx]")
+{
+    CHECK (fxChain (0) == FxChain { 0, 1, 2, 3, 4, 5, 6, 7, 8 });
+    for (int code : { 0, 1, 2, 40319, 40320, 123456, 362879 })
+        CHECK (fxOrderCode (fxChain (code)) == code);
+    CHECK (fxOrderCode (FxChain { 0, 0, 2, 3, 4, 5, 6, 7, 8 }) == -1);
+    const FxChain reverbFirst { 7, 0, 1, 2, 3, 4, 5, 6, 8 };
+    CHECK (fxChain (fxOrderCode (reverbFirst)) == reverbFirst);
+
+    ParamState p;
+    p.set (P::DistOn, 1.f);
+    p.set (P::DistDrive, 30.f);
+    p.set (P::ReverbOn, 1.f);
+    p.set (P::ReverbMix, 0.5f);
+    const auto dryFirst = hold (p, 0.5);
+    p.set (P::FxOrder, (float) fxOrderCode (reverbFirst));
+    const auto wetFirst = hold (p, 0.5);
+    double diff = 0.0;
+    for (size_t i = 0; i < dryFirst.l.size(); ++i) diff += std::abs (dryFirst.l[i] - wetFirst.l[i]);
+    CHECK (diff > 1.0);   // distorting the reverb tail is a different sound
+    CHECK (wetFirst.peak < 1.f);
+}
+
+TEST_CASE ("Reverse Bass stays in its references' family and varies from patch to patch", "[engine][bass]")
+{
+    // The bright reverse shots in Bass Shots 2 (017 E, 024, 043, 049-051,
+    // 055, 062, 072, 074, 079, 080): one beat; already there 9-33 dB down,
+    // full by 32-60 % of the beat; 2-8 kHz 18-35 dB under the whole; crest
+    // 5.4-7.8 dB; a hiss on top (017 E's bite). Around that they differ.
+    Generator g;
+    const double fs = 48000.0, beat = 60.0 / 140.0;
+    std::set<std::string> kinds;
+    double startLo = 0.0, startHi = -100.0;
+    for (uint32_t seed = 1; seed <= 24; ++seed)
+    {
+        INFO ("seed " << seed);
+        auto p = g.generate (Category::ReverseBass, seed * 7919u, ParamState(), LockSet());
+        CHECK (p.geti (P::EnergyBars) == 0);   // one beat
+        CHECK (p.geti (P::NoiseType) == 3);    // the hiss
+        CHECK (p.get (P::NoiseLevel) >= 0.1f);
+        const auto out = hold (p, beat, -1.0, 40, 140.0);
+        const auto rms = [&] (double t0, double t1) {
+            double s = 0.0;
+            const auto a = (size_t) (t0 * fs), b = (size_t) (t1 * fs);
+            for (size_t i = a; i < b; ++i) s += (double) out.l[i] * out.l[i];
+            return 10.0 * std::log10 (s / (double) (b - a) + 1e-20);
+        };
+        const double full = rms (0.72 * beat, 0.95 * beat);
+        const double start = rms (0.05 * beat, 0.15 * beat) - full;
+        CHECK (start > -36.0);   // already there...
+        CHECK (start < -4.0);    // ...but quiet
+        CHECK (rms (0.66 * beat, 0.72 * beat) > full - 3.0);   // full by two thirds
+        startLo = std::min (startLo, start);
+        startHi = std::max (startHi, start);
+
+        std::vector<std::complex<double>> a (1 << 14);
+        const auto from = (size_t) (0.7 * beat * fs);
+        for (size_t i = 0; i < a.size(); ++i) a[i] = out.l[from + i] * (0.5 - 0.5 * std::cos (2.0 * M_PI * (double) i / (double) a.size()));
+        testutil::fft (a);
+        double hi = 0.0, all = 0.0;
+        for (size_t i = 1; i < a.size() / 2; ++i)
+        {
+            const double f = (double) i * fs / (double) a.size(), pw = std::norm (a[i]);
+            all += pw;
+            if (f >= 2000.0 && f < 8000.0) hi += pw;
+        }
+        const double hiDb = 10.0 * std::log10 (hi / all);
+        CHECK (hiDb > -38.0);
+        CHECK (hiDb < -15.0);
+
+        float pk = 0.f;
+        double sq = 0.0, side = 0.0, mid = 0.0;
+        const auto b0 = (size_t) (0.7 * beat * fs), b1 = (size_t) (0.95 * beat * fs);
+        for (size_t i = b0; i < b1; ++i)
+        {
+            pk = std::max (pk, std::abs (out.l[i]));
+            sq += (double) out.l[i] * out.l[i];
+            side += 0.25 * (double) (out.l[i] - out.r[i]) * (out.l[i] - out.r[i]);
+            mid += 0.25 * (double) (out.l[i] + out.r[i]) * (out.l[i] + out.r[i]);
+        }
+        const double crest = 20.0 * std::log10 (pk / std::sqrt (sq / (double) (b1 - b0)));
+        CHECK (crest > 4.0);
+        CHECK (crest < 9.5);
+        CHECK (side < mid * 0.16);   // a stereo top at most: the side 8 dB under the middle
+
+        // what this patch does on top of the shape
+        std::string kind;
+        kind += p.on (P::OscBOn) ? 'o' : '-';
+        kind += p.geti (P::F2Type) != 0 ? 'n' : '-';
+        kind += p.on (P::WidthOn) ? 'w' : '-';
+        kind += p.on (P::DistOn) ? 'd' : '-';
+        for (int i = 0; i < kNumModSlots; ++i)
+            if (p.geti (modSrcParam (i)) == (int) ModSrc::Sweep)
+                kind += p.geti (modDstParam (i)) == (int) ModDst::PitchAll ? 'f' : 'c';
+        kinds.insert (kind);
+    }
+    CHECK (kinds.size() >= 10);             // not one patch over and over
+    CHECK (startHi - startLo > 10.0);
+}
+
+TEST_CASE ("Reverse Sub matches its reference shots: a swell from silence, a held pitch, a late slide", "[engine][bass]")
+{
+    // Traits of Bass Shots 2/018 E, 025 G# and 026 G# (one beat at 140 BPM):
+    // near silence at first, full by 60 % of the beat; the pitch holds until
+    // just past the middle and then slides the whole interval by the end;
+    // falls are warm sines (second harmonic 8-20 dB down), the rise a
+    // band-passed saw whose second harmonic tops the fundamental. Mono.
+    Generator g;
+    const double fs = 48000.0, beat = 60.0 / 140.0;
+    // the period by autocorrelation (YIN's cumulative mean normalised
+    // difference), 30-300 Hz: robust for the sine and the band-passed saw
+    const auto pitchHz = [&] (const std::vector<float>& x, double t0, double t1) {
+        const auto from = (size_t) (t0 * fs), n = (size_t) ((t1 - t0) * fs);
+        const int lo = (int) (fs / 300.0), hi = (int) (fs / 30.0);
+        const int w = (int) n - hi;
+        std::vector<double> d ((size_t) hi + 1, 0.0);
+        for (int tau = 1; tau <= hi; ++tau)
+            for (int i = 0; i < w; ++i)
+            {
+                const double e = (double) x[from + (size_t) i] - (double) x[from + (size_t) (i + tau)];
+                d[(size_t) tau] += e * e;
+            }
+        double run = 0.0;
+        int best = lo;
+        double bestV = 1e9;
+        for (int tau = 1; tau <= hi; ++tau)
+        {
+            run += d[(size_t) tau];
+            const double cm = d[(size_t) tau] * tau / (run + 1e-20);
+            if (tau >= lo && cm < 0.2) { best = tau; while (best < hi && d[(size_t) best + 1] < d[(size_t) best]) ++best; break; }
+            if (tau >= lo && cm < bestV) { bestV = cm; best = tau; }
+        }
+        return fs / (double) best;
+    };
+    int falls = 0, rises = 0;
+    for (uint32_t seed = 1; seed <= 16; ++seed)
+    {
+        INFO ("seed " << seed);
+        auto p = g.generate (Category::ReverseSub, seed * 7919u, ParamState(), LockSet());
+        CHECK (p.geti (P::EnergyBars) == 0);
+        float semis = 0.f;
+        for (int i = 0; i < kNumModSlots; ++i)
+            if (p.geti (modSrcParam (i)) == (int) ModSrc::Sweep && p.geti (modDstParam (i)) == (int) ModDst::PitchAll)
+                semis = p.get (modAmtParam (i)) * 24.f;
+        REQUIRE (std::abs (semis) >= 5.f);
+        const auto out = hold (p, beat, -1.0, 44, 140.0);
+        const auto rms = [&] (double t0, double t1) {
+            double s = 0.0;
+            const auto a = (size_t) (t0 * fs), b = (size_t) (t1 * fs);
+            for (size_t i = a; i < b; ++i) s += (double) out.l[i] * out.l[i];
+            return 10.0 * std::log10 (s / (double) (b - a) + 1e-20);
+        };
+        const double full = rms (0.62 * beat, 0.75 * beat);
+        CHECK (rms (0.0, 0.08 * beat) < full - 25.0);
+        CHECK (rms (0.6 * beat, 0.66 * beat) > full - 3.0);
+
+        // the pitch: held, then the whole interval by the end
+        const double held = pitchHz (out.l, 0.3 * beat, 0.42 * beat);
+        const double late = pitchHz (out.l, 0.4 * beat, 0.52 * beat);
+        const double end = pitchHz (out.l, 0.8 * beat, 0.99 * beat);
+        CHECK (std::abs (12.0 * std::log2 (late / held)) < 0.8);
+        CHECK (12.0 * std::log2 (end / held) * (semis > 0.f ? 1.0 : -1.0) > 0.6 * std::abs (semis));
+
+        // the tone: a warm sine falling, a band-passed saw rising
+        std::vector<std::complex<double>> a (1 << 16);
+        const auto from = (size_t) (0.3 * beat * fs), n = (size_t) (0.2 * beat * fs);
+        for (size_t i = 0; i < n; ++i) a[i] = out.l[from + i] * (0.5 - 0.5 * std::cos (2.0 * M_PI * (double) i / (double) n));
+        testutil::fft (a);
+        const double f0 = held;
+        const auto level = [&] (double f) {
+            double m = 0.0;
+            for (size_t i = 0; i < a.size() / 2; ++i)
+            {
+                const double fi = (double) i * fs / (double) a.size();
+                if (fi > f * 0.97 && fi < f * 1.03) m = std::max (m, std::abs (a[i]));
+            }
+            return 20.0 * std::log10 (m + 1e-12);
+        };
+        const double h2 = level (2.0 * f0) - level (f0), h4 = level (4.0 * f0) - level (f0);
+        if (semis < 0.f)
+        {
+            ++falls;
+            CHECK (h2 < -8.0);
+            CHECK (h2 > -20.0);
+            CHECK (h4 < -22.0);
+        }
+        else
+        {
+            ++rises;
+            CHECK (h2 > 0.0);
+        }
+        double side = 0.0, sq = 0.0;
+        for (size_t i = 0; i < out.l.size(); ++i) { side += (double) (out.l[i] - out.r[i]) * (out.l[i] - out.r[i]); sq += (double) out.l[i] * out.l[i]; }
+        CHECK (side < 1e-6 * sq);
+    }
+    CHECK (falls > 0);
+    CHECK (rises > 0);
 }
