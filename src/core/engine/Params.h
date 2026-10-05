@@ -101,6 +101,7 @@ enum class ModDst : int
 // X(enumName, "id", "Display Name", "Group", mapping, min, max, default, skew, unit, choices, modulatable)
 #define PSY_PARAMS(X) \
     X(MasterVol,   "master_vol",   "Volume",      "Master", Linear, -48.f, 6.f, -6.f, 1.f, Db, nullptr, false) \
+    X(PatchGain,   "patch_gain",   "Level",       "Master", Linear, -36.f, 24.f, 0.f, 1.f, Db, nullptr, false) \
     X(VoiceMode,   "voice_mode",   "Mode",        "Voice", Choice, 0, 2, 0, 1.f, None, &choices::voiceMode, false) \
     X(PolyVoices,  "poly_voices",  "Voices",      "Voice", Linear, 1, 16, 8, 1.f, Int, nullptr, false) \
     X(Glide,       "glide",        "Glide",       "Voice", Power, 0.f, 2000.f, 0.f, 3.f, Ms, nullptr, false) \

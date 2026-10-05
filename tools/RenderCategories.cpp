@@ -3,6 +3,7 @@
 
 #include "engine/Engine.h"
 #include "generator/Generator.h"
+#include "generator/Loudness.h"
 
 #include <algorithm>
 #include <cmath>
@@ -107,7 +108,7 @@ namespace
         std::vector<int> keys;
         switch (c)
         {
-            case Category::Acid: case Category::Squelch: case Category::Gurgle: keys = { 36, 39, 43 }; break;
+            case Category::Acid: case Category::Squelch: keys = { 36, 39, 43 }; break;
             case Category::Drone: case Category::Zap: case Category::Laser: keys = { 48 }; break;
             default: keys = { 60, 63, 67 }; break;
         }
@@ -130,7 +131,8 @@ int main (int argc, char** argv)
     for (int c = 0; c < kNumCategories; ++c)
         for (int s = 1; s <= seeds; ++s)
         {
-            const ParamState p = g.generate ((Category) c, (uint32_t) s * 1009u, ParamState(), LockSet(), withArp);
+            ParamState p = g.generate ((Category) c, (uint32_t) s * 1009u, ParamState(), LockSet(), withArp);
+            levelPatch (p, (Category) c, LockSet());   // as the plugin's Generate does
             Engine e;
             e.setParams (p);
             e.prepare (fs, 256);

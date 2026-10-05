@@ -495,14 +495,18 @@ void GlobalPage::VoicePanel::resized()
         ks.knobs[(size_t) i]->setBounds (gr.cell (i, 1));
 }
 
+// Volume is yours and stays through Generate; Level is the patch's own,
+// set when it is generated so every patch plays about as loud.
 GlobalPage::OutputPanel::OutputPanel (PsyBoxProcessor& p) : Section ("Output")
 {
     ks.add (*this, p, P::MasterVol);
+    ks.add (*this, p, P::PatchGain);
 }
 
 void GlobalPage::OutputPanel::resized()
 {
     ks.knobs[0]->setBounds (grid().cell (0, 0));
+    ks.knobs[1]->setBounds (grid().cell (1, 0));
 }
 
 void GlobalPage::AboutPanel::paint (juce::Graphics& g)

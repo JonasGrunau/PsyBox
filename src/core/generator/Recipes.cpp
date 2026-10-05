@@ -370,6 +370,9 @@ namespace
         fxPhaser (b, 0.3f);
         fxDelay (b, 0.4f, { D1_16D, D1_8D, D1_16 }, 0.2f, 0.45f, 0.1f, 0.25f);
         fxChorus (b, 0.2f);
+        // The band follows the note, so the squelch sits as loud on a low
+        // line as on a high one (a fixed band swung it by 10 dB over C2-C5).
+        b.uni (P::F1Key, 0.5f, 0.8f);
         b.macros ({ D::F1Reso, D::FilterEnvAmt, D::F1Vowel, D::DistDrive, D::PhaserMix, D::DelayMix });
     }
 
@@ -675,13 +678,17 @@ namespace
             b.uni (P::F2Cutoff, 200.f, 1200.f);
             b.uni (P::F2Reso, 0.3f, 0.7f);
         }
-        ampEnv (b, 5.f, 30.f, 400.f, 800.f, 0.6f, 1.f, 200.f, 600.f);
+        // a quick attack, so 1/32 arps and short notes speak
+        ampEnv (b, 1.f, 8.f, 400.f, 800.f, 0.6f, 1.f, 200.f, 600.f);
         b.route (S::Macro1, D::Lfo3Rate, 0.2f, 0.4f);
 
         fxPhaser (b, 0.5f);
         fxChorus (b, 0.4f);
         fxDelay (b, 0.5f, { D1_16D, D1_8D }, 0.3f, 0.5f, 0.1f, 0.25f);
         fxReverb (b, 0.4f, 1.5f, 4.f, 0.1f, 0.25f);
+        // The band follows the note: a fixed one leaves low notes only their
+        // weak upper harmonics to chatter with (18 dB quieter two octaves down).
+        b.uni (P::F1Key, 0.6f, 0.9f);
         b.macros ({ D::F1Cutoff, D::F1Reso, D::F1Vowel, D::PhaserMix, D::ChorusMix, D::DelayMix, D::ReverbMix });
     }
 

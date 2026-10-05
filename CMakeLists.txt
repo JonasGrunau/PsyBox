@@ -28,6 +28,7 @@ add_library(psybox_core STATIC
     src/core/generator/Macros.cpp
     src/core/generator/ArpRecipes.cpp
     src/core/generator/KickRecipes.cpp
+    src/core/generator/Loudness.cpp
 )
 target_include_directories(psybox_core PUBLIC src/core)
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
@@ -142,7 +143,8 @@ if(PSYBOX_BUILD_TESTS)
         tests/TestEngine.cpp
         tests/TestGenerator.cpp
         tests/TestArp.cpp
-        tests/TestKick.cpp)
+        tests/TestKick.cpp
+        tests/TestLoudness.cpp)
     target_link_libraries(psybox_tests PRIVATE psybox_core Catch2::Catch2WithMain)
 
     add_executable(psybox_render tools/RenderCategories.cpp)

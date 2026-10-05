@@ -1,6 +1,7 @@
 #include "PluginProcessor.h"
 
 #include "PluginEditor.h"
+#include "generator/Loudness.h"
 
 using namespace psy;
 
@@ -379,7 +380,9 @@ void PsyBoxProcessor::generateWithSeed (uint32_t s)
 {
     beginPatchChange();
     seed = s;
-    applyState (generator.generate (category, seed, currentState(), locks, arpGeneration, kickKeyGeneration));
+    auto patch = generator.generate (category, seed, currentState(), locks, arpGeneration, kickKeyGeneration);
+    levelPatch (patch, category, locks);   // every new patch about as loud as the last
+    applyState (patch);
     resetMacroNames();   // a new sound: the macros are named after what they now drive
     presetName = juce::String (categoryInfo()[(size_t) category].name) + " #" + juce::String::toHexString ((int) seed).toUpperCase().paddedLeft ('0', 6);
     pushHistory();
@@ -408,7 +411,9 @@ void PsyBoxProcessor::setArpPattern (const ArpPattern& p)
 // No patch-swap fade here: the sound stays, only the steps change.
 void PsyBoxProcessor::generateArpPattern()
 {
-    applyState (generator.generateArpPattern (category, (uint32_t) random.nextInt(), currentState(), locks));
+    auto patch = generator.generateArpPattern (category, (uint32_t) random.nextInt(), currentState(), locks);
+    levelPatch (patch, category, locks);
+    applyState (patch);
     if (! presetName.endsWith ("*"))
         presetName << "*";
     pushHistory();
@@ -418,7 +423,9 @@ void PsyBoxProcessor::generateArpPattern()
 void PsyBoxProcessor::mutate()
 {
     beginPatchChange();
-    applyState (generator.mutate (mutateAmount, (uint32_t) random.nextInt(), currentState(), locks));
+    auto patch = generator.mutate (mutateAmount, (uint32_t) random.nextInt(), currentState(), locks);
+    levelPatch (patch, category, locks);
+    applyState (patch);
     if (! presetName.endsWith ("*"))
         presetName << "*";
     pushHistory();

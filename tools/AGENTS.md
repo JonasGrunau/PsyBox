@@ -9,7 +9,7 @@ Developer executables that let you check sound and UI without a DAW.
 ## Key Files
 | File | Description |
 |------|-------------|
-| `RenderCategories.cpp` | `psybox_render <out-dir> [seeds-per-category]`: generates patches per category and writes WAVs for listening checks. Energy sounds hold one note for their length (`energy_bars`) plus a tail. Core-only (no JUCE); built when `PSYBOX_BUILD_TESTS=ON` |
+| `RenderCategories.cpp` | `psybox_render <out-dir> [seeds-per-category]`: generates patches per category, levels them like the plugin's Generate (`levelPatch`), and writes WAVs for listening checks. Energy sounds hold one note for their length (`energy_bars`) plus a tail. Core-only (no JUCE); built when `PSYBOX_BUILD_TESTS=ON` |
 | `Snapshot.cpp` | `psybox_snapshot <out-dir> [category-index ...]`: renders the editor offscreen to one PNG per category. `PSYSNAP_VIEW=n` opens a view (0 Osc/Kick, 1 FX, 2 Matrix, 3 Arp, 4 Global), `PSYSNAP_MODTAB=n` a modulator page, `PSYSNAP_TAB=n` switches every tab strip, `PSYSNAP_DRAG=1` shows the drag highlight, `PSYSNAP_DROP="7:oscA_level"` drops mod source 7 on a knob, `PSYSNAP_ARP=1` generates with an arp, `PSYSNAP_PARAMS="comp_on=1,comp_mode=0"` sets plain values after Generate. `PSYSNAP_DNDTEST=1` runs the knob drop and ring-drag checks instead of rendering. Needs JUCE; built when `PSYBOX_BUILD_PLUGIN=ON` |
 
 ## For AI Agents

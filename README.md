@@ -104,6 +104,13 @@ body holds flat to about 160 ms and is down 30 dB by about 220 ms.
   move, which LFOs and effects are routed where.
 - **Mutate** nudges the current sound and stays inside the category's ranges.
   The amount slider sets how far.
+- **Every patch plays about as loud.** After Generate, Mutate or a new arp
+  pattern, the patch is played offline the ways it is usually played (a held
+  key and 16ths from C2 to C5, the arp, a riser over its length, kicks four to
+  the floor) and its loudest moment is measured (K-weighted, 400 ms, like
+  LUFS). **Level** (Global view, next to Volume) is set so that moment lands on
+  -16 LUFS, so a new patch never jumps out louder than the last. Volume stays
+  yours; lock Level to keep your own.
 - **Lock** a knob (right-click it, or alt-click) and Generate and Mutate leave
   it alone.
 - Tick **Arp** next to Generate and every new Main, FX or Background sound

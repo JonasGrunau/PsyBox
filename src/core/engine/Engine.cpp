@@ -671,7 +671,9 @@ void Engine::processFx (float* l, float* r, int n, double bpm, const ParamState&
     if (width.isActive (p.on (P::WidthOn)))   // last, so Low Mono also cleans delay and reverb lows
         width.process (l, r, n, p.on (P::WidthOn), p.get (P::WidthAmount), p.get (P::WidthStereo), p.get (P::WidthTime), p.get (P::WidthMonoHz));
 
-    const float g = dsp::dbToGain (p.get (P::MasterVol));
+    // the patch's own level (set when it is generated, so every patch plays
+    // about as loud), then the user's volume
+    const float g = dsp::dbToGain (p.get (P::MasterVol) + p.get (P::PatchGain));
     float pk = 0.f;
     for (int i = 0; i < n; ++i)
     {
