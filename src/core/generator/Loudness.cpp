@@ -128,7 +128,7 @@ float auditionLoudness (const ParamState& patch, Category c)
         for (int b = 0; b < 8; ++b) fourToTheFloor.push_back ({ (double) b, 0.25 });
         run (patch, fourToTheFloor, keys[0], 8.0);
     }
-    else if (isEnergy (c))
+    else if (hasLength (c))
     {
         // the whole gesture, then a beat of tail; a long one shrinks to two bars
         ParamState p = patch;

@@ -11,7 +11,7 @@ Builds as **VST3**, **Audio Unit** and **Standalone** (macOS).
 
 ## Categories
 
-32 kinds of sound, each with its own recipe, in six groups in the sidebar.
+34 kinds of sound, each with its own recipe, in six groups in the sidebar.
 Each group is a header; click one to open it and its sounds fold out under
 it, while closed groups show a dot per sound. The accents run as one rainbow
 down the whole list: red at the first sound of the first group, through
@@ -41,9 +41,9 @@ Uplifter is a noise sweep that opens upward.
 
 ### Basses
 
-Four bass styles, under the **Bass** tab:
+Six bass styles, under the **Bass** tab:
 
-Bass Shot · Offbeat Bass · Prog Bass · Psy Bass
+Bass Shot · Offbeat Bass · Prog Bass · Psy Bass · Reverse Bass · Reverse Sub
 
 Basses play on the synth engine, mono and dry, and have no arp: you play their
 rhythm. Their **Knock** panel (under Voicing) holds the pitch drop at the start
@@ -61,8 +61,17 @@ knock, envelope, loudness, stereo):
 - **Bass Shot**: the progressive-trance one-shot. A saw over a body
   oscillator, a kick-like pitch drop, saturation and direct noise grit,
   multiband compression, and width above a mono low end.
+- **Reverse Bass**: a bass shot played backwards, for the beat before a kick.
+  A nearly raw saw that swells to full level over half the beat, holds, and
+  stops dead after its **Length** (1/4 bar by default, however long the key
+  is held).
+- **Reverse Sub**: the same for a sine sub with a little tube warmth. It swells
+  from about -32 dB and slides late in the beat by a fourth, fifth or
+  octave: down from an octave up, or up from the note.
 
-A glue compressor with make-up gain puts the basses level with the kicks.
+A glue compressor with make-up gain puts the basses level with the kicks; the
+reverse basses only get the make-up, so their swell keeps its shape. Their
+Length panel sits where the other basses have the Knock.
 
 ### Kicks
 
@@ -198,8 +207,9 @@ slide. Voices run at 1x, 2x or 4x and come back through linear-phase half-band
 FIR decimators. Drive happens before decimation and uses antiderivative
 anti-aliasing.
 
-Amp, filter, mod and pitch envelopes, 3 LFOs (tempo sync, retrigger, S&H,
-smooth random), the energy Sweep, 4 macros and a 16-slot mod matrix whose
+Amp, filter, mod and pitch envelopes (the amp's attack has a Curve: from an
+analog-style charge to a slow-then-fast swell), 3 LFOs (tempo sync, retrigger,
+S&H, smooth random), the energy Sweep, 4 macros and a 16-slot mod matrix whose
 targets include the effects.
 
 Arpeggiator (Arp view): Up, Down, Up/Down, Random and played order

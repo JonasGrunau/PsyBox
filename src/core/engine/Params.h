@@ -178,6 +178,7 @@ enum class ModDst : int
     X(AenvD,       "aenv_d",       "Decay",       "Amp Env", Power, 1.f, 10000.f, 300.f, 3.f, Ms, nullptr, false) \
     X(AenvS,       "aenv_s",       "Sustain",     "Amp Env", Linear, 0.f, 1.f, 0.8f, 1.f, Percent, nullptr, false) \
     X(AenvR,       "aenv_r",       "Release",     "Amp Env", Power, 1.f, 15000.f, 120.f, 3.f, Ms, nullptr, false) \
+    X(AenvCurve,   "aenv_curve",   "Curve",       "Amp Env", Linear, 0.f, 1.f, 0.f, 1.f, Percent, nullptr, false) \
     X(FenvA,       "fenv_a",       "Attack",      "Filter Env", Power, 0.f, 10000.f, 0.f, 3.f, Ms, nullptr, false) \
     X(FenvD,       "fenv_d",       "Decay",       "Filter Env", Power, 1.f, 10000.f, 250.f, 3.f, Ms, nullptr, false) \
     X(FenvS,       "fenv_s",       "Sustain",     "Filter Env", Linear, 0.f, 1.f, 0.f, 1.f, Percent, nullptr, false) \

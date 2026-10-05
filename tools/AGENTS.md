@@ -20,7 +20,7 @@ Developer executables that let you check sound and UI without a DAW.
 - Keep `RenderCategories.cpp` JUCE-free so it builds in `build-core`.
 
 ### Testing Requirements
-- Smoke-run after changes: `./build-core/psybox_render /tmp/psy 1` and check that WAVs appear for all 32 categories (the five kicks play four on the floor on F, F, G and D#; the basses roll or play offbeats on E, E, G, D; energy sounds run their length). With `arp`, basses, kicks and energy sounds keep their own pattern.
+- Smoke-run after changes: `./build-core/psybox_render /tmp/psy 1` and check that WAVs appear for all 34 categories (the five kicks play four on the floor on F, F, G and D#; the basses roll or play offbeats on E, E, G, D, the reverse basses play the beat before every other kick; energy sounds run their length). With `arp`, basses, kicks and energy sounds keep their own pattern.
 - After UI changes: `PSYSNAP_DNDTEST=1 ./build/psybox_snapshot_artefacts/Release/psybox_snapshot /tmp 0` must print only PASS lines.
 
 ## Dependencies

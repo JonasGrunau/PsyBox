@@ -701,7 +701,7 @@ juce::File PsyBoxProcessor::bounceToFile()
     const double attack = st.get (P::AenvA) / 1000.0, decay = st.get (P::AenvD) / 1000.0;
     const double beat = 60.0 / bpm;
     // Energy sounds are held for their whole length.
-    const double gateSec = isEnergyCategory() ? juce::jlimit (0.1, 60.0, energyLengthSeconds())
+    const double gateSec = hasLength() ? juce::jlimit (0.1, 60.0, energyLengthSeconds())
                          : st.get (P::AenvS) < 0.05f ? juce::jlimit (0.1, 8.0, attack + decay)
                                                      : juce::jlimit (beat, 8.0, attack + decay + 0.25);
     const int gate = (int) (gateSec * fs);

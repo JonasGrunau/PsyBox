@@ -140,6 +140,7 @@ void Voice::render (float* outL, float* outR, int chunkOffsetBase, int nBase, co
     const float osRate = ctx.osRate;
 
     amp.set (p.get (P::AenvA), p.get (P::AenvD), p.get (P::AenvS), p.get (P::AenvR));
+    amp.setAttackCurve (p.get (P::AenvCurve));
     const float accentAmt = accent ? p.get (P::Accent) : 0.f;
     // 303-style accent: shorter, harder filter envelope
     fenv.set (p.get (P::FenvA), p.get (P::FenvD) * (1.f - 0.5f * accentAmt), p.get (P::FenvS), p.get (P::FenvR));

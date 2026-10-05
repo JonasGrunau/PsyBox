@@ -291,7 +291,7 @@ TEST_CASE ("Every category has a name, a short name and a blurb", "[generator]")
         listed += (int) categoriesIn (f).size();
     }
     CHECK (listed == kNumCategories);
-    CHECK (familySize (Family::Bass) == 4);
+    CHECK (familySize (Family::Bass) == 6);
     CHECK (familySize (Family::Kick) == 5);
 }
 
@@ -519,5 +519,34 @@ TEST_CASE ("Energy sounds hang their motion on the sweep and keep the user's len
                 sweep = sweep || (p.geti (modSrcParam (s)) == (int) ModSrc::Sweep && p.get (modAmtParam (s)) != 0.f);
             CHECK (sweep);
             CHECK (g.generate (c, seed, ParamState(), LockSet()).geti (P::EnergyMode) == (int) EnergyMode::Bars);   // bars by default
+        }
+}
+
+TEST_CASE ("Reverse basses last their length, and reverse subs slide by a musical interval", "[generator][bass]")
+{
+    Generator g;
+    for (Category c : { Category::ReverseBass, Category::ReverseSub })
+        for (uint32_t seed = 1; seed <= 30; ++seed)
+        {
+            INFO (categoryInfo()[(size_t) c].name << " seed " << seed);
+            const auto p = g.generate (c, seed, ParamState(), LockSet());
+            CHECK (familyOf (c) == Family::Bass);
+            CHECK (hasLength (c));
+            CHECK_FALSE (hasArp (c));
+            CHECK (p.on (P::EnergyCut));
+            CHECK (energyBarsValue (p.geti (P::EnergyBars)) <= 0.5f);   // one beat, or two
+            CHECK (p.geti (P::VoiceMode) != (int) VoiceMode::Poly);
+            if (c != Category::ReverseSub) continue;
+            int slides = 0;
+            for (int s = 0; s < kNumModSlots; ++s)
+                if (p.geti (modSrcParam (s)) == (int) ModSrc::Sweep && p.geti (modDstParam (s)) == (int) ModDst::PitchAll)
+                {
+                    ++slides;
+                    const float semis = p.get (modAmtParam (s)) * 24.f;
+                    const float interval = std::abs (semis);
+                    CHECK ((std::abs (interval - 5.f) < 0.05f || std::abs (interval - 7.f) < 0.05f || std::abs (interval - 12.f) < 0.05f));
+                    CHECK (p.get (P::OscACoarse) == (semis < 0.f ? 12.f : 0.f));   // falls start an octave up
+                }
+            CHECK (slides == 1);
         }
 }

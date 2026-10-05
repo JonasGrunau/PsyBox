@@ -147,6 +147,48 @@ TEST_CASE ("ADSR segment times are exact", "[env]")
     CHECK_THAT ((double) rel, Catch::Matchers::WithinRel (200.0 * 48.0, 0.1));
 }
 
+TEST_CASE ("The amp attack curve bends the rise into a swell and keeps its time", "[env]")
+{
+    const float fs = 48000.f;
+    const auto levelAt = [fs] (float curve, float fraction, int* attackSamples = nullptr) {
+        Adsr env;
+        env.setSampleRate (fs);
+        env.setAttackCurve (curve);
+        env.set (200.f, 100.f, 1.f, 50.f);
+        env.noteOn();
+        const int target = (int) (fraction * 0.2f * fs);
+        float at = 0.f;
+        int n = 0;
+        while (env.getStage() == Adsr::Stage::Attack)
+        {
+            const float v = env.process();
+            if (++n == target) at = v;
+        }
+        if (attackSamples != nullptr) *attackSamples = n;
+        return at;
+    };
+    int straight = 0, swell = 0;
+    const float rcHalf = levelAt (0.f, 0.5f, &straight);
+    const float swellHalf = levelAt (0.5f, 0.5f, &swell);
+    CHECK_THAT ((double) straight, Catch::Matchers::WithinRel (9600.0, 0.02));
+    CHECK_THAT ((double) swell, Catch::Matchers::WithinRel (9600.0, 0.02));
+    CHECK (rcHalf > 0.6f);                             // the RC charge is past half way at half time
+    CHECK (swellHalf < 0.2f);                          // a swell is still quiet
+    CHECK (levelAt (1.f, 0.5f) < swellHalf);           // and quieter the further the curve goes
+    CHECK (levelAt (0.5f, 0.9f) > 0.5f);               // most of the rise comes late
+
+    // a retrigger mid-swell carries on from the level it is at
+    Adsr env;
+    env.setSampleRate (fs);
+    env.setAttackCurve (0.6f);
+    env.set (100.f, 100.f, 1.f, 30.f);
+    env.noteOn();
+    for (int i = 0; i < 4000; ++i) env.process();
+    const float before = env.value();
+    env.noteOn();
+    CHECK_THAT (env.process(), Catch::Matchers::WithinAbs (before, 0.01));
+}
+
 namespace
 {
     // Runs the width stage over stereo buffers in blocks, after a silent

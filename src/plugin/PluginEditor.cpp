@@ -50,9 +50,9 @@ void PsyBoxEditor::Root::showView (View v)
 
 void PsyBoxEditor::Root::updateMode()
 {
-    // 0 melodic synth (arp page), 1 energy (length), 2 bass, 3 kick
+    // 0 melodic synth (arp page), 1 energy and reverse basses (length), 2 bass, 3 kick
     const bool kickMode = proc.plain (psy::P::EngineMode) > 0.5f;
-    const int mode = kickMode ? 3 : (proc.categoryHasArp() ? 0 : (proc.isEnergyCategory() ? 1 : 2));
+    const int mode = kickMode ? 3 : (proc.categoryHasArp() ? 0 : (proc.hasLength() ? 1 : 2));
     if (mode == lastMode) return;
     lastMode = mode;
     kickLayout = kickMode;

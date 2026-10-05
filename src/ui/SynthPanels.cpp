@@ -236,6 +236,7 @@ ModPanel::ModPanel (PsyBoxProcessor& p) : Section ("Modulation"), proc (p), envD
     for (int e = 0; e < 3; ++e)
         for (int i = 0; i < 4; ++i)
             pages[(size_t) e].push_back (ks.add (*this, p, envIds[e][i]));
+    pages[AmpEnv].push_back (ks.add (*this, p, P::AenvCurve));   // the attack's bend: RC charge to swell
 
     for (auto [prm, name] : { std::pair { P::PenvAmt, "Amount" }, std::pair { P::PenvAttack, "Attack" },
                               std::pair { P::PenvDecay, "Decay" }, std::pair { P::PenvCurve, "Curve" } })
@@ -319,7 +320,7 @@ void ModPanel::paint (juce::Graphics& g)
     // a hint beside the knobs, centred on their dials
     const auto b = body();
     const int knobsY = b.getBottom() - kCtrlH - sp::md - kCellH;
-    const int used = current == PitchEnv ? 6 : (current >= Lfo1 ? 6 : 4);
+    const int used = current == PitchEnv || current >= Lfo1 ? 6 : (int) pages[(size_t) current].size();
     auto hint = juce::Rectangle<int> (b.getX() + used * kCellW, knobsY, b.getRight() - b.getX() - used * kCellW, kKnobD);
     g.setFont (label (10.5f));
     g.drawFittedText ("Drag a source's arrows onto any knob to modulate it. Drag the ring that appears to set the amount, "
@@ -348,8 +349,8 @@ void ModPanel::resized()
 
     captions.clear();
     for (int e = 0; e <= ModEnv; ++e)
-        for (int i = 0; i < 4; ++i)
-            pages[(size_t) e][(size_t) i]->setBounds (gr.cell (i, 0));
+        for (size_t i = 0; i < pages[(size_t) e].size(); ++i)   // ADSR, and the amp's Curve
+            pages[(size_t) e][i]->setBounds (gr.cell ((int) i, 0));
     for (int i = 0; i < 4; ++i)
         pages[PitchEnv][(size_t) i]->setBounds (gr.cell (i, 0));
     pages[PitchEnv][4]->setBounds (gr.captioned (4, 0, 2));

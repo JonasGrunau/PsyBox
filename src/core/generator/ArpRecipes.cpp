@@ -934,6 +934,8 @@ Recipe arpPatternRecipeFor (Category c) noexcept
         case Category::BassShot:
         case Category::OffbeatBass:
         case Category::ProgBass:
+        case Category::ReverseBass:
+        case Category::ReverseSub:
         case Category::KickFullOn:
         case Category::KickGoa:
         case Category::KickDarkForest:
@@ -975,6 +977,8 @@ Recipe arpRecipeFor (Category c) noexcept
         case Category::BassShot:
         case Category::OffbeatBass:
         case Category::ProgBass:
+        case Category::ReverseBass:
+        case Category::ReverseSub:
         case Category::KickFullOn:
         case Category::KickGoa:
         case Category::KickDarkForest:

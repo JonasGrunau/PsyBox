@@ -2,6 +2,7 @@
 
 #include "dsp/Dynamics.h"
 #include "dsp/Filters.h"
+#include "dsp/Modulators.h"
 #include "dsp/Shapers.h"
 #include "engine/KickVoice.h"
 #include "dsp/Wavetable.h"
@@ -263,7 +264,7 @@ void FilterDisplay::paintContent (juce::Graphics& g, juce::Rectangle<float> r)
 // ---------------------------------------------------------------------------
 uint64_t EnvDisplay::fingerprint() const
 {
-    return hashParams ({ P::AenvA, P::AenvD, P::AenvS, P::AenvR, P::FenvA, P::FenvD, P::FenvS, P::FenvR,
+    return hashParams ({ P::AenvA, P::AenvD, P::AenvS, P::AenvR, P::AenvCurve, P::FenvA, P::FenvD, P::FenvS, P::FenvR,
                          P::MenvA, P::MenvD, P::MenvS, P::MenvR }) + (uint64_t) env;
 }
 
@@ -286,11 +287,12 @@ void EnvDisplay::paintContent (juce::Graphics& g, juce::Rectangle<float> r)
     juce::Path p;
     p.startNewSubPath (X (0), Y (0));
     const int steps = 24;
-    for (int i = 1; i <= steps; ++i)  // attack: convex RC charge
+    // attack: the RC charge, or the amp envelope's bend towards a swell
+    const float bend = psy::dsp::attackBend (env == 0 ? proc.plain (P::AenvCurve) : 0.f);
+    for (int i = 1; i <= steps; ++i)
     {
         const float u = (float) i / steps;
-        const float v = (1.f - std::exp (-u * 1.5f)) / (1.f - std::exp (-1.5f));
-        p.lineTo (X (tw (a) * u), Y (v));
+        p.lineTo (X (tw (a) * u), Y (psy::dsp::attackShape (u, bend)));
     }
     for (int i = 1; i <= steps; ++i)  // decay: exponential
     {

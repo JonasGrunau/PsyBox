@@ -58,7 +58,7 @@ public:
     bool getKickKeyGeneration() const noexcept { return kickKeyGeneration; }
     void setKickKeyGeneration (bool on);
     bool isKickCategory() const noexcept { return psy::familyOf (category) == psy::Family::Kick; }
-    bool isEnergyCategory() const noexcept { return psy::isEnergy (category); }
+    bool hasLength() const noexcept { return psy::hasLength (category); }   // Length panel: energy sounds, reverse basses
     bool categoryHasArp() const noexcept { return psy::hasArp (category); }
     double getBpm() const noexcept { return lastBpm.load (std::memory_order_relaxed); }
     int getLastPlayedNote() const noexcept { return lastPlayedNote.load (std::memory_order_relaxed); }

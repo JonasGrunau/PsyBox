@@ -86,6 +86,13 @@ namespace
                 for (int b = 0; b < 16; ++b) p.push_back ({ b + 0.5, 0.4, bars[b / 4], 0.8f });
                 break;
             }
+            case Category::ReverseBass:   // the beat before every kick, E1 E1 G1 D1 (the patch cuts each at 1/4 bar)
+            case Category::ReverseSub:
+            {
+                static const int bars[4] = { 40, 40, 43, 38 };
+                for (int b = 0; b < 16; b += 2) p.push_back ({ b + 1.0, 1.0, bars[b / 4], 0.9f });
+                break;
+            }
             case Category::KickFullOn: case Category::KickGoa: case Category::KickDarkForest:
             case Category::KickHiTech: case Category::KickProgressive:
                 // four on the floor; the key changes every bar (F, F, G, D#) to hear the tracking

@@ -136,7 +136,7 @@ TEST_CASE ("Every category generates playable, finite, non-silent patches", "[en
             const auto cat = (Category) c;
             // energy sounds are one gesture per note: hold one through the render
             const bool sustained = cat == Category::Atmos || cat == Category::Drone;
-            const Render out = isEnergy (cat) ? hold (p, 6.0) : play (p, sustained ? 6.0 : 3.0, 48000.0, 256, sustained ? 40.0 : 0.6);
+            const Render out = hasLength (cat) ? hold (p, 6.0) : play (p, sustained ? 6.0 : 3.0, 48000.0, 256, sustained ? 40.0 : 0.6);
             INFO (categoryInfo()[(size_t) c].name << " seed " << seed << ": peak " << out.peak << " rms " << out.rmsDb << " dB");
             CHECK (out.peak <= 1.0f);
             CHECK (out.rmsDb > -60.0);
@@ -455,5 +455,28 @@ TEST_CASE ("Notes held through a voice-mode change still end", "[engine][notes]"
             b.set (P::VoiceMode, (float) to);
             CHECK (tailPeak (a, { { on (60) }, { on (64) }, {}, {}, {}, {}, { off (60) }, { off (64) } }, { { 3, b } }) < 1e-4f);
             CHECK (tailPeak (a, { { on (60) }, { on (64) }, {}, {}, {}, {}, { off (64) }, { off (60) } }, { { 3, b } }) < 1e-4f);
+        }
+}
+
+TEST_CASE ("Reverse basses swell into the beat and stop at their length, key held or not", "[engine][bass]")
+{
+    Generator g;
+    for (Category c : { Category::ReverseBass, Category::ReverseSub })
+        for (uint32_t seed = 1; seed <= 12; ++seed)
+        {
+            INFO (categoryInfo()[(size_t) c].name << " seed " << seed);
+            auto p = g.generate (c, seed, ParamState(), LockSet());
+            p.set (P::EnergyBars, 0.f);   // 1/4 bar: one beat
+            const double beat = 60.0 / 140.0;
+            const auto out = hold (p, 4.0 * beat, -1.0, 40, 140.0);   // the key stays down for four beats
+            const auto rmsAt = [&] (double t0, double t1) {
+                double sum = 0.0;
+                const auto a = (size_t) (t0 * 48000.0), b = (size_t) (t1 * 48000.0);
+                for (size_t i = a; i < b; ++i) sum += (double) out.l[i] * out.l[i];
+                return 10.0 * std::log10 (sum / (double) (b - a) + 1e-20);
+            };
+            CHECK (rmsAt (0.0, 0.15 * beat) < rmsAt (0.7 * beat, 0.95 * beat) - 12.0);   // a swell
+            CHECK (rmsAt (1.3 * beat, 4.0 * beat) < rmsAt (0.7 * beat, 0.95 * beat) - 30.0);   // then gone
+            CHECK (out.peak > 0.1f);   // about level with the other basses
         }
 }

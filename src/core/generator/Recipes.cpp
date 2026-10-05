@@ -1266,6 +1266,102 @@ namespace
         fxCompBass (b);
         b.macros ({ D::F1Reso, D::PitchEnvAmt, D::F1Drive });
     }
+
+    // ---- reverse basses ------------------------------------------------------
+
+    // Their level: the compressor as a clean gain stage. The threshold sits
+    // above the swell, so its shape stays as drawn, and the make-up brings
+    // the peak level with the other basses.
+    void fxGainBass (B& b, float dbLo, float dbHi)
+    {
+        b.on (P::CompOn, true);
+        b.set (P::CompMode, (float) CompMode::Normal);
+        b.set (P::CompThresh, -6.f);
+        b.set (P::CompRatio, 2.f);
+        b.set (P::CompKnee, 6.f);
+        b.set (P::CompMix, 1.f);
+        b.uni (P::CompOut, dbLo, dbHi);
+    }
+
+    // A reverse bass lasts a set length and stops dead (Cut at End): one beat
+    // (1/4 bar), now and then two. Returns the length in beats; Time mode
+    // gets the same length at 140 BPM, the tempo of the reference shots.
+    float reverseLength (B& b)
+    {
+        const int bars = b.pick (P::EnergyBars, { B1_4, B1_2 }, { 0.85f, 0.15f });
+        const float beats = energyBarsValue (bars) * 4.f;
+        b.set (P::EnergySec, beats * 60.f / 140.f);
+        b.set (P::EnergyFade, 0.f);
+        b.on (P::EnergyCut, true);
+        return beats;
+    }
+
+    // Reverse bass: a bass shot played backwards, in the beat before a kick.
+    // Modelled on reference one-shots (one beat at 140 BPM, E1 and G#1 when
+    // played at E2 and G#2): a nearly raw saw, gently low-passed, that swells
+    // to full level over 35-55 % of the beat (from a straight rise to slow
+    // then fast), holds, and stops dead at the end of its length. Mono, dry.
+    void reverseBass (B& b)
+    {
+        monoVoice (b, false, 0.f, 0.f);
+        b.set (P::Octave, -1.f);
+        b.set (P::VelSens, 0.15f);
+        b.set (P::Accent, 0.f);
+
+        analogA (b, kSaw, 0.85f);
+        filter1 (b, ft (FilterType::LP12), 600.f, 2500.f, 0.f, 0.15f, 0.f, 0.f);
+        b.uni (P::F1Key, 0.5f, 0.8f);
+        b.uni (P::F1Drive, 0.f, 0.3f);
+        b.on (P::DistOn, true);   // a touch of tube: the second harmonic a little above a raw saw's
+        b.set (P::DistType, (float) DistType::Tube);
+        b.uni (P::DistDrive, 6.f, 12.f);
+        b.uni (P::DistMix, 0.2f, 0.4f);
+        b.uni (P::DistTone, 4000.f, 12000.f);
+
+        const float beatMs = reverseLength (b) * 60000.f / 140.f;
+        ampEnv (b, 0.45f * beatMs, 0.65f * beatMs, 1000.f, 1000.f, 1.f, 1.f, 2.f, 5.f);   // the release is the cut
+        b.uni (P::AenvCurve, 0.05f, 0.5f);
+
+        b.route (S::Macro1, D::F1Cutoff, 0.2f, 0.35f);
+        fxGainBass (b, 5.5f, 7.5f);
+        b.macros ({ D::F1Reso, D::DistDrive, D::F1Drive });
+    }
+
+    // Reverse sub: a sine sub played backwards. Modelled on reference
+    // one-shots (one beat at 140 BPM): a sine with a little warmth (second
+    // harmonic about -16 dB) swells from around -32 dB to full level over
+    // 50-80 % of the beat, slow then fast, and slides late in the beat by a
+    // fourth, fifth or octave: down from an octave up (two in three) or up
+    // from the note. Stops dead at the end of its length. Mono, dry.
+    void reverseSub (B& b)
+    {
+        monoVoice (b, false, 0.f, 0.f);
+        b.set (P::Octave, -1.f);
+        b.set (P::VelSens, 0.15f);
+        b.set (P::Accent, 0.f);
+
+        analogA (b, kSine, 0.85f);
+        b.on (P::DistOn, true);   // tube: the warmth is mostly the second harmonic
+        b.set (P::DistType, (float) DistType::Tube);
+        b.uni (P::DistDrive, 14.f, 22.f);
+        b.uni (P::DistMix, 0.65f, 0.95f);
+        b.uni (P::DistTone, 2000.f, 5000.f);
+
+        const float beatMs = reverseLength (b) * 60000.f / 140.f;
+        ampEnv (b, 0.5f * beatMs, 0.7f * beatMs, 1000.f, 1000.f, 1.f, 1.f, 2.f, 5.f);
+        b.uni (P::AenvCurve, 0.4f, 0.6f);
+
+        // the slide: the sweep's curve keeps it in the second half of the length
+        const float interval = b.chance (0.5f) ? 12.f : (b.chance (0.5f) ? 7.f : 5.f);
+        const bool down = b.chance (0.67f);
+        b.set (P::OscACoarse, down ? 12.f : 0.f);
+        const float amt = (down ? -interval : interval) / 24.f;
+        b.route (S::Sweep, D::PitchAll, amt, amt);
+        b.uni (P::EnergyCurve, 0.8f, 0.95f);
+
+        fxGainBass (b, 4.f, 6.f);
+        b.macros ({ D::DistDrive, D::DistMix });
+    }
 } // namespace
 
 Recipe recipeFor (Category c) noexcept
@@ -1299,6 +1395,8 @@ Recipe recipeFor (Category c) noexcept
         case Category::BassShot:    return bassShot;
         case Category::OffbeatBass: return offbeatBass;
         case Category::ProgBass:    return progBass;
+        case Category::ReverseBass: return reverseBass;
+        case Category::ReverseSub:  return reverseSub;
         case Category::KickFullOn:
         case Category::KickGoa:
         case Category::KickDarkForest:

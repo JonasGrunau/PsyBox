@@ -12,6 +12,31 @@ namespace psy::dsp
 // coefficient is solved so each segment lands on its target at `time`.
 // Retriggering continues from the current level, so there are no clicks.
 // ---------------------------------------------------------------------------
+// Attack shape family: (1 - e^(-k*p)) / (1 - e^(-k)) for phase p in 0..1.
+// k = ln(1.3 / 0.3) is the RC charge below, k = 0 a straight line, negative
+// k a swell (slow, then fast: in dB close to a straight rise, like a decay
+// played backwards). The amp envelope's Curve 0..1 maps onto k = 1.47 .. -8.
+inline float attackBend (float curve) noexcept
+{
+    constexpr float kRc = 1.4663371f;   // ln (1.3 / 0.3)
+    return kRc - curve * (kRc + 8.f);
+}
+
+inline float attackShape (float phase, float bend) noexcept
+{
+    phase = std::clamp (phase, 0.f, 1.f);
+    if (std::abs (bend) < 1e-3f) return phase;
+    return (1.f - std::exp (-bend * phase)) / (1.f - std::exp (-bend));
+}
+
+// Inverse of attackShape: where on the curve a level sits.
+inline float attackPhase (float level, float bend) noexcept
+{
+    level = std::clamp (level, 0.f, 1.f);
+    if (std::abs (bend) < 1e-3f) return level;
+    return -std::log (1.f - level * (1.f - std::exp (-bend))) / bend;
+}
+
 class Adsr
 {
 public:
@@ -19,9 +44,17 @@ public:
 
     void setSampleRate (float sr) noexcept { fs = sr; }
 
+    // 0 keeps the RC charge; above it the attack bends into a swell (see attackBend).
+    void setAttackCurve (float curve) noexcept { aCurve = curve; }
+
     void set (float attackMs, float decayMs, float sustain, float releaseMs) noexcept
     {
-        if (attackMs != aMs) { aMs = attackMs; calc (aMs, kAttackRatio, 1.f + kAttackRatio, aCoef, aBase); }
+        if (attackMs != aMs)
+        {
+            aMs = attackMs;
+            calc (aMs, kAttackRatio, 1.f + kAttackRatio, aCoef, aBase);
+            aInc = 1.f / std::max (aMs * 0.001f * fs, 1.f);
+        }
         if (decayMs != dMs || sustain != sus)
         {
             dMs = decayMs;
@@ -32,7 +65,7 @@ public:
         if (releaseMs != rMs) { rMs = releaseMs; calc (rMs, kDecayRatio, 0.f, rCoef, rBase); rBase = -kDecayRatio * (1.f - rCoef); }
     }
 
-    void noteOn() noexcept { stage = Stage::Attack; }
+    void noteOn() noexcept { stage = Stage::Attack; aPhase = -1.f; }
     void noteOff() noexcept { if (stage != Stage::Idle) stage = Stage::Release; }
     void kill() noexcept { stage = Stage::Idle; out = 0.f; }
     bool active() const noexcept { return stage != Stage::Idle; }
@@ -45,8 +78,20 @@ public:
         {
             case Stage::Idle: break;
             case Stage::Attack:
-                out = aBase + out * aCoef;
-                if (out >= 1.f || aMs <= 0.05f) { out = 1.f; stage = Stage::Decay; }
+                if (aCurve <= 0.f)
+                {
+                    out = aBase + out * aCoef;
+                    if (out >= 1.f || aMs <= 0.05f) { out = 1.f; stage = Stage::Decay; }
+                    break;
+                }
+                // bent attack: walk the curve, starting where the level is (a retrigger)
+                {
+                    const float bend = attackBend (aCurve);
+                    if (aPhase < 0.f) aPhase = attackPhase (out, bend);
+                    aPhase += aInc;
+                    out = attackShape (aPhase, bend);
+                    if (aPhase >= 1.f || aMs <= 0.05f) { out = 1.f; stage = Stage::Decay; }
+                }
                 break;
             case Stage::Decay:
                 out = dBase + out * dCoef;
@@ -72,6 +117,7 @@ private:
     float out = 0.f;
     float aMs = -1.f, dMs = -1.f, rMs = -1.f, sus = -1.f;
     float aCoef = 0.f, aBase = 0.f, dCoef = 0.f, dBase = 0.f, rCoef = 0.f, rBase = 0.f;
+    float aCurve = 0.f, aInc = 1.f, aPhase = -1.f;
 
     void calc (float ms, float ratio, float target, float& coef, float& base) const noexcept
     {
