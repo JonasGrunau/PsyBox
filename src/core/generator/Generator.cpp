@@ -134,6 +134,7 @@ ParamState Generator::generate (Category c, uint32_t seed, const ParamState& cur
     // The global quality and volume are the user's, never the recipe's, and
     // so is the unit an energy length is shown in (bars or seconds).
     out.set (P::Quality, current.get (P::Quality));
+    out.set (P::RenderQuality, current.get (P::RenderQuality));
     out.set (P::MasterVol, current.get (P::MasterVol));
     out.set (P::EnergyMode, current.get (P::EnergyMode));
 
@@ -183,7 +184,8 @@ ParamState Generator::mutate (float amount, uint32_t seed, const ParamState& cur
         const float u = rng.uniform();
         if (locks.test ((size_t) i) || ! r.touched)
             continue;
-        if (i == (int) P::Quality || i == (int) P::MasterVol || i == (int) P::EngineMode || i == (int) P::EnergyMode)
+        if (i == (int) P::Quality || i == (int) P::RenderQuality || i == (int) P::MasterVol || i == (int) P::EngineMode
+            || i == (int) P::EnergyMode)
             continue;
 
         if (d.mapping == Mapping::Choice || d.mapping == Mapping::Toggle || d.unit == Unit::Int)

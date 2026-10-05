@@ -190,6 +190,7 @@ void PsyBoxProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
     buffer.clear();
     float* l = buffer.getWritePointer (0);
     float* r = buffer.getNumChannels() > 1 ? buffer.getWritePointer (1) : l;
+    engine.setOffline (isNonRealtime());   // a host render plays at the Render quality
     engine.process (l, r, n, midiEvents.data(), (int) midiEvents.size(), transport);
 
     if (swap == Swap::FadingOut)
@@ -285,6 +286,9 @@ void PsyBoxProcessor::applyState (const ParamState& state)
     // categories keep an arp (old basses and kicks may have one switched on).
     auto s = state;
     s.set (P::EngineMode, (float) (isKickCategory() ? EngineMode::Kick : EngineMode::Synth));
+    // the qualities are global settings, not part of a sound (init and undo keep them too)
+    s.set (P::Quality, plain (P::Quality));
+    s.set (P::RenderQuality, plain (P::RenderQuality));
     if (! hasArp (category))
         s.set (P::ArpOn, 0.f);
     const auto& defs = paramDefs();
@@ -328,8 +332,7 @@ void PsyBoxProcessor::switchCategory (Category c)
     const auto& slot = slots[(size_t) c];
     if (! slot.valid) return;
     auto s = slot.state;
-    s.set (P::Quality, plain (P::Quality));     // global settings are not part of a sound
-    s.set (P::MasterVol, plain (P::MasterVol));
+    s.set (P::MasterVol, plain (P::MasterVol));   // global settings are not part of a sound (applyState keeps the qualities)
     seed = slot.seed;
     presetName = slot.name;
     macroNames = slot.macros;
@@ -710,6 +713,7 @@ juce::File PsyBoxProcessor::bounceToFile()
     const int maxLen = (int) ((gateSec + 32.0) * fs);
 
     Engine e;
+    e.setOffline (true);   // a bounce plays at the Render quality
     e.setParams (st);   // before prepare, so the first note and the latency see this patch
     e.prepare (fs, block);
     const int latency = e.latencySamples();
@@ -889,7 +893,6 @@ bool PsyBoxProcessor::loadPreset (const juce::File& file)
         if (idx >= 0)
             s.v[(size_t) idx] = paramDefs()[(size_t) idx].snap ((float) child.getProperty ("value"));
     }
-    s.set (P::Quality, plain (P::Quality));
     s.set (P::MasterVol, plain (P::MasterVol));
     saveSlot();
     category = (Category) juce::jlimit (0, kNumCategories - 1, (int) tree.getProperty ("category", (int) category));

@@ -550,3 +550,20 @@ TEST_CASE ("Reverse basses last their length, and reverse subs slide by a musica
             CHECK (slides == 1);
         }
 }
+
+TEST_CASE ("Generate and Mutate keep both quality settings", "[generator]")
+{
+    Generator g;
+    ParamState current;
+    current.set (P::Quality, 0.f);
+    current.set (P::RenderQuality, 1.f);
+    for (int c = 0; c < kNumCategories; ++c)
+    {
+        auto p = g.generate ((Category) c, 7, current, LockSet());
+        CHECK (p.geti (P::Quality) == 0);
+        CHECK (p.geti (P::RenderQuality) == 1);
+        p = g.mutate (1.f, 11, p, LockSet());
+        CHECK (p.geti (P::Quality) == 0);
+        CHECK (p.geti (P::RenderQuality) == 1);
+    }
+}

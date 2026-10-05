@@ -54,11 +54,16 @@ void Engine::prepare (double sampleRate, int maxBlockSize)
     width.prepare (f);
     for (auto& d : outDc) d.prepare (f);
 
-    osFactor = factorForQuality (target.geti (P::Quality));
+    osFactor = wantedFactor();
     applyQuality();
     reset();
     cur = target;  // notes in the very first block must see the real patch
     firstBlock = false;
+}
+
+int Engine::wantedFactor() const noexcept
+{
+    return factorForQuality (target.geti (offline ? P::RenderQuality : P::Quality));
 }
 
 void Engine::applyQuality()
@@ -539,7 +544,7 @@ void Engine::process (float* left, float* right, int numSamples, const MidiEvent
         firstBlock = false;
     }
 
-    const int wantFactor = factorForQuality (target.geti (P::Quality));
+    const int wantFactor = wantedFactor();
     if (wantFactor != osFactor)
     {
         osFactor = wantFactor;

@@ -117,9 +117,9 @@ body holds flat to about 160 ms and is down 30 dB by about 220 ms.
   pattern, the patch is played offline the ways it is usually played (a held
   key and 16ths from C2 to C5, the arp, a riser over its length, kicks four to
   the floor) and its loudest moment is measured (K-weighted, 400 ms, like
-  LUFS). **Level** (Global view, next to Volume) is set so that moment lands on
-  -16 LUFS, so a new patch never jumps out louder than the last. Volume stays
-  yours; lock Level to keep your own.
+  LUFS). The patch's **Level** (a host parameter, not on screen) is set so that
+  moment lands on -16 LUFS, so a new patch never jumps out louder than the
+  last. Volume stays yours.
 - **Lock** a knob (right-click it, or alt-click) and Generate and Mutate leave
   it alone.
 - Tick **Arp** next to Generate and every new Main, FX or Background sound
@@ -166,8 +166,9 @@ Laid out like Serum. The tabs in the top bar switch views:
 - **Arp** (Main, FX, Background): the step editor (play, note, accent and
   slide lanes, a ruler for the loop length), rate, octaves, gate, swing,
   generate a new pattern, and the templates as cards under the steps.
-- **Global**: oversampling quality, the full voice settings, output and a
-  short guide. Always the last tab.
+- **Global**: oversampling quality, once for playing (Live) and once for
+  renders (Render: host export, bounce or freeze, and the WAV dragged out of
+  the output window; 4x by default). Always the last tab.
 
 **Drag and drop modulation.** Every mod source has a four-way arrow: the
 envelope and LFO tabs, the macros, the Sweep and the strip of other sources

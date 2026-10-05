@@ -94,7 +94,8 @@ private:
 };
 
 // ---------------------------------------------------------------------------
-// GLOBAL: quality, the full voice settings, output.
+// GLOBAL: the oversampling quality, live and for renders. Everything else
+// lives next to the sound (Voicing on the OSC page, Vol in the top bar).
 // ---------------------------------------------------------------------------
 class GlobalPage : public Page
 {
@@ -111,37 +112,10 @@ private:
         void resized() override;
 
     private:
-        Segmented quality;
-    };
-    class VoicePanel : public Section
-    {
-    public:
-        explicit VoicePanel (PsyBoxProcessor&);
-        void resized() override;
-
-    private:
-        Segmented mode, glideMode;
-        KnobSet ks;
-    };
-    class OutputPanel : public Section
-    {
-    public:
-        explicit OutputPanel (PsyBoxProcessor&);
-        void resized() override;
-
-    private:
-        KnobSet ks;
-    };
-    class AboutPanel : public Section
-    {
-    public:
-        AboutPanel() : Section ("Guide") {}
-        void paint (juce::Graphics&) override;
+        Segmented live, render;
+        std::array<juce::Rectangle<int>, 2> notes;   // the text beside each selector
     };
     QualityPanel quality;
-    VoicePanel voice;
-    OutputPanel output;
-    AboutPanel about;
 };
 
 // ---------------------------------------------------------------------------

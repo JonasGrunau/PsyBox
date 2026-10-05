@@ -513,3 +513,38 @@ TEST_CASE ("The mod view shows every sounding voice, the newest first", "[engine
     CHECK (v.voices[0].lfo[0] < v.voices[1].lfo[0]);            // retriggered per note
     CHECK (v.voices[0].lfo[1] == v.voices[1].lfo[1]);           // free running: one LFO for all
 }
+
+TEST_CASE ("Offline rendering plays at the Render quality", "[engine]")
+{
+    // The oversampling factor shows in the decimator's latency.
+    const auto latency = [] (int live, int render, bool offline) {
+        ParamState p;
+        p.set (P::Quality, (float) live);
+        p.set (P::RenderQuality, (float) render);
+        Engine e;
+        e.setOffline (offline);
+        e.setParams (p);
+        e.prepare (48000.0, 256);
+        return e.latencySamples();
+    };
+    CHECK (latency (0, 2, false) == latency (0, 0, false));
+    CHECK (latency (0, 2, true) == latency (2, 0, false));
+    CHECK (latency (2, 0, true) == latency (0, 0, false));
+    CHECK (latency (0, 2, true) != latency (0, 2, false));
+
+    // and follows the switch between blocks
+    ParamState p;
+    p.set (P::Quality, 0.f);
+    p.set (P::RenderQuality, 2.f);
+    Engine e;
+    e.setParams (p);
+    e.prepare (48000.0, 256);
+    std::vector<float> l (256), r (256);
+    const int live = e.latencySamples();
+    e.setOffline (true);
+    e.process (l.data(), r.data(), 256, nullptr, 0, 120.0);
+    CHECK (e.latencySamples() == latency (2, 2, false));
+    e.setOffline (false);
+    e.process (l.data(), r.data(), 256, nullptr, 0, 120.0);
+    CHECK (e.latencySamples() == live);
+}

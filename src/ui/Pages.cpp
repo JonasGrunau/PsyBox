@@ -208,113 +208,50 @@ void MatrixPage::Panel::resized()
 // ---------------------------------------------------------------------------
 // GlobalPage
 // ---------------------------------------------------------------------------
-GlobalPage::GlobalPage (PsyBoxProcessor& p) : quality (p), voice (p), output (p)
+GlobalPage::GlobalPage (PsyBoxProcessor& p) : quality (p)
 {
-    for (juce::Component* c : std::initializer_list<juce::Component*> { &quality, &voice, &output, &about })
-        addAndMakeVisible (c);
+    addAndMakeVisible (quality);
 }
 
 void GlobalPage::resized()
 {
-    const int w = getWidth();
-    voice.setBounds (0, 0, w / 2, kRowH);
-    quality.setBounds (w / 2, 0, w / 4, kRowH);
-    output.setBounds (w / 2 + w / 4, 0, w - w / 2 - w / 4, kRowH);
-    about.setBounds (0, kRowH, w, getHeight() - kRowH);
+    quality.setBounds (0, 0, getWidth(), kRowH);
 }
 
-GlobalPage::QualityPanel::QualityPanel (PsyBoxProcessor& p) : Section ("Quality"), quality (p, P::Quality, { "Eco", "2x", "4x" })
+GlobalPage::QualityPanel::QualityPanel (PsyBoxProcessor& p)
+    : Section ("Quality"), live (p, P::Quality, { "Eco", "2x", "4x" }), render (p, P::RenderQuality, { "Eco", "2x", "4x" })
 {
-    quality.setTooltip ("Oscillator oversampling: Eco 1x, 2x (default), 4x");
-    addAndMakeVisible (quality);
+    live.setTooltip ("Oscillator oversampling while you play: Eco 1x, 2x (default), 4x");
+    render.setTooltip ("Oscillator oversampling when the track is rendered: Eco 1x, 2x, 4x (default)");
+    addAndMakeVisible (live);
+    addAndMakeVisible (render);
 }
 
 void GlobalPage::QualityPanel::paint (juce::Graphics& g)
 {
     Section::paint (g);
-    auto b = body().withTrimmedTop (kKnobD + kLabelGap);
+    static constexpr const char* text[] = {
+        "While you play. Oscillators run oversampled: less aliasing on high notes and hard sync, more CPU. Eco plays "
+        "one sample per sample.",
+        "When the host renders the track (export, bounce, freeze) and when you drag a WAV out of the output window. A "
+        "render has no deadline, so the higher setting only costs time.",
+    };
     g.setColour (col::textFaint);
     g.setFont (label (10.5f));
-    g.drawFittedText ("Oscillators run oversampled: less aliasing on high notes and hard sync, more CPU. Eco plays one "
-                      "sample per sample.", b, juce::Justification::topLeft, 4, 1.f);
+    for (size_t i = 0; i < notes.size(); ++i)
+        g.drawFittedText (text[i], notes[i], juce::Justification::centredLeft, 3, 1.f);
 }
 
 void GlobalPage::QualityPanel::resized()
 {
-    quality.setBounds (grid().control (0, 0, 3));
-}
-
-GlobalPage::VoicePanel::VoicePanel (PsyBoxProcessor& p)
-    : Section ("Voice"), mode (p, P::VoiceMode), glideMode (p, P::GlideMode, { "Always", "Legato" })
-{
-    addAndMakeVisible (mode);
-    addAndMakeVisible (glideMode);
-    for (auto prm : { P::PolyVoices, P::Glide, P::Octave, P::Accent, P::VelSens, P::BendRange })
-        ks.add (*this, p, prm);
-}
-
-void GlobalPage::VoicePanel::resized()
-{
     const auto gr = grid();
     captions.clear();
-    mode.setBounds (gr.control (0, 0, 3));
-    addCaption ("Play Mode", gr.cell (0, 0, 3));
-    glideMode.setBounds (gr.control (3, 0, 3));
-    addCaption ("Glide", gr.cell (3, 0, 3));
-    for (int i = 0; i < (int) ks.knobs.size(); ++i)
-        ks.knobs[(size_t) i]->setBounds (gr.cell (i, 1));
-}
-
-// Volume is yours and stays through Generate; Level is the patch's own,
-// set when it is generated so every patch plays about as loud.
-GlobalPage::OutputPanel::OutputPanel (PsyBoxProcessor& p) : Section ("Output")
-{
-    ks.add (*this, p, P::MasterVol);
-    ks.add (*this, p, P::PatchGain);
-}
-
-void GlobalPage::OutputPanel::resized()
-{
-    ks.knobs[0]->setBounds (grid().cell (0, 0));
-    ks.knobs[1]->setBounds (grid().cell (1, 0));
-}
-
-void GlobalPage::AboutPanel::paint (juce::Graphics& g)
-{
-    Section::paint (g);
-    // one card per idea, three to a row
-    static constexpr std::pair<const char*, const char*> tips[] = {
-        { "Generate", "Pick a sound in the sidebar and press Generate for a new patch in that style. Same sound and seed, "
-                      "same patch: double-click the seed to type one." },
-        { "Lock", "Right-click a knob and pick Lock (or alt-click it) to keep its value through the next Generate." },
-        { "Modulate", "Drag the arrows of an envelope, LFO, macro or the Sweep onto any knob. Drag the ring that appears "
-                      "to set the amount; right-click to invert or remove." },
-        { "Macros", "Every Generate gives the four macros a job and names them after it. Double-click a name to type "
-                    "your own." },
-        { "Length", "Energy sounds run over a length in bars or seconds, and the whole gesture stretches with it: pitch, "
-                    "filter and level." },
-        { "Arp", "Melodic sounds get a 16-step arp on the ARP page: paint steps, accents and slides, or start from a "
-                 "template." },
-    };
-    constexpr int kCols = 3, kCardH = 100;
-    const auto b = body();
-    const int cardW = (b.getWidth() - (kCols - 1) * sp::md) / kCols;
-    for (int i = 0; i < (int) std::size (tips); ++i)
+    for (int row = 0; row < 2; ++row)
     {
-        const juce::Rectangle<int> r (b.getX() + (i % kCols) * (cardW + sp::md), b.getY() + (i / kCols) * (kCardH + sp::md),
-                                      cardW, kCardH);
-        g.setColour (col::panel);
-        g.fillRoundedRectangle (r.toFloat(), 6.f);
-        g.setColour (col::line);
-        g.drawRoundedRectangle (r.toFloat().reduced (0.5f), 6.f, 1.f);
-        auto t = r.reduced (kPad);
-        g.setColour (col::text);
-        g.setFont (labelStrong (12.5f));
-        g.drawText (tips[i].first, t.removeFromTop (18), juce::Justification::centredLeft, false);
-        t.removeFromTop (sp::xs);
-        g.setColour (col::textDim);
-        g.setFont (label (11.5f));
-        g.drawFittedText (tips[i].second, t, juce::Justification::topLeft, 3, 1.f);
+        (row == 0 ? live : render).setBounds (gr.control (0, row, 3));
+        addCaption (row == 0 ? "Live" : "Render", gr.cell (0, row, 3));
+        const auto ctl = gr.control (0, row, 3);
+        notes[(size_t) row] = juce::Rectangle<int> (gr.cell (3, row).getX() + sp::lg, ctl.getCentreY() - 20, 440, 40);
     }
 }
 

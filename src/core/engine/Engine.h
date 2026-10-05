@@ -64,6 +64,9 @@ public:
         process (left, right, numSamples, events, numEvents, Transport { bpm, 0.0, false });
     }
 
+    // Offline (a host render, a bounce) plays at the Render quality instead
+    // of the live one.
+    void setOffline (bool isOffline) noexcept { offline = isOffline; }
     int latencySamples() const noexcept { return decimL.latency (osFactor); }
     int activeVoices() const noexcept;
     int arpStep() const noexcept { return arpActive ? arp.currentStep() : -1; }   // pattern step playing, or -1
@@ -77,6 +80,7 @@ private:
     double fs = 48000.0;
     int maxBlock = 512;
     int osFactor = 2;
+    bool offline = false;
 
     ParamState target, cur;
     bool firstBlock = true;
@@ -128,6 +132,7 @@ private:
 
     float peak = 0.f;
 
+    int wantedFactor() const noexcept;   // oversampling for the live or the render quality
     void applyQuality();
     void smoothParams (int numSamples) noexcept;
     void prepareContext (double bpm) noexcept;

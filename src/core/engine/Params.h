@@ -327,7 +327,9 @@ enum class ModDst : int
     X(KickClickTone, "kick_click_tone", "Tone",   "Kick Click", Exp, 300.f, 16000.f, 4000.f, 1.f, Hz, nullptr, false) \
     X(KickDriveType, "kick_drive_type", "Type",   "Kick Drive", Choice, 0, 2, 1, 1.f, None, &choices::kickDrive, false) \
     X(KickDrive,   "kick_drive",   "Drive",       "Kick Drive", Linear, -30.f, 30.f, -27.f, 1.f, Db, nullptr, false) \
-    X(KickTone,    "kick_tone",    "Tone",        "Kick Drive", Exp, 200.f, 20000.f, 20000.f, 1.f, Hz, nullptr, false)
+    X(KickTone,    "kick_tone",    "Tone",        "Kick Drive", Exp, 200.f, 20000.f, 20000.f, 1.f, Hz, nullptr, false) \
+    \
+    X(RenderQuality, "render_quality", "Quality", "Render", Choice, 0, 2, 2, 1.f, None, &choices::quality, false)
 
 // One modulation slot: source, target, bipolar amount.
 #define PSY_MOD_SLOT(X, n) \
