@@ -164,6 +164,15 @@ void Engine::prepareContext (double bpm) noexcept
         else
             ctx.slots[(size_t) ctx.numSlots++] = { src, dst, amt };
     }
+
+    // Energy sweep: the length in bars follows the tempo (4/4).
+    const double seconds = cur.geti (P::EnergyMode) == (int) EnergyMode::Time
+                             ? (double) cur.get (P::EnergySec)
+                             : (double) energyBarsValue (cur.geti (P::EnergyBars)) * 4.0 * 60.0 / bpm;
+    ctx.sweepInc = 1.0 / std::max (1.0, seconds * fs);
+    ctx.sweepExp = std::exp2 (2.5f * cur.get (P::EnergyCurve));
+    ctx.sweepFade = cur.get (P::EnergyFade);
+    ctx.sweepCut = cur.on (P::EnergyCut);
 }
 
 // ---------------------------------------------------------------------------

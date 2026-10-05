@@ -70,7 +70,7 @@ namespace
 
 namespace
 {
-    // One note held for `seconds`, at 145 BPM.
+    // One note held for `seconds` (energy sounds: risers, impacts...), at 145 BPM.
     Render hold (const ParamState& state, double seconds, double noteSeconds = -1.0, int note = 48, double bpm = 145.0)
     {
         Engine e;
@@ -134,9 +134,9 @@ TEST_CASE ("Every category generates playable, finite, non-silent patches", "[en
         {
             const ParamState p = g.generate ((Category) c, seed, current, locks);
             const auto cat = (Category) c;
-            const bool sustained = cat == Category::Riser || cat == Category::Uplifter || cat == Category::Downlifter
-                                || cat == Category::NoiseFx || cat == Category::Atmos || cat == Category::Drone;
-            const Render out = play (p, sustained ? 6.0 : 3.0, 48000.0, 256, sustained ? 40.0 : 0.6);
+            // energy sounds are one gesture per note: hold one through the render
+            const bool sustained = cat == Category::Atmos || cat == Category::Drone;
+            const Render out = isEnergy (cat) ? hold (p, 6.0) : play (p, sustained ? 6.0 : 3.0, 48000.0, 256, sustained ? 40.0 : 0.6);
             INFO (categoryInfo()[(size_t) c].name << " seed " << seed << ": peak " << out.peak << " rms " << out.rmsDb << " dB");
             CHECK (out.peak <= 1.0f);
             CHECK (out.rmsDb > -60.0);
@@ -322,6 +322,62 @@ TEST_CASE ("Noise Direct adds the noise after the filters", "[engine]")
     };
     CHECK (highShare (false) < 1e-4);
     CHECK (highShare (true) > 0.3);
+}
+
+namespace
+{
+    // A plain saw that swells over the energy length and stops at its end.
+    ParamState cutAtEnd()
+    {
+        ParamState p;
+        p.set (P::OscAType, (float) OscType::Analog);
+        p.set (P::OscAShape, 2.f);
+        p.set (P::AenvA, 1.f);
+        p.set (P::AenvS, 1.f);
+        p.set (P::AenvR, 2.f);
+        p.set (P::EnergyFade, 0.5f);
+        p.set (P::EnergyCut, 1.f);
+        return p;
+    }
+
+    double lastSoundSeconds (const std::vector<float>& x)
+    {
+        for (size_t i = x.size(); i-- > 0;)
+            if (std::abs (x[i]) > 1e-3f) return (double) i / 48000.0;
+        return 0.0;
+    }
+} // namespace
+
+TEST_CASE ("An energy sweep lasts its length in bars at the host tempo, or its time in seconds", "[engine][energy]")
+{
+    auto p = cutAtEnd();
+    p.set (P::EnergyBars, 2.f);   // 1 bar
+    CHECK (std::abs (lastSoundSeconds (hold (p, 4.0, -1.0, 48, 120.0).l) - 2.0) < 0.03);     // 4 beats at 120
+    CHECK (std::abs (lastSoundSeconds (hold (p, 4.0, -1.0, 48, 145.0).l) - 240.0 / 145.0) < 0.03);
+    p.set (P::EnergyBars, 1.f);   // 1/2 bar
+    CHECK (std::abs (lastSoundSeconds (hold (p, 4.0, -1.0, 48, 120.0).l) - 1.0) < 0.03);
+    p.set (P::EnergyMode, (float) EnergyMode::Time);
+    p.set (P::EnergySec, 1.5f);
+    CHECK (std::abs (lastSoundSeconds (hold (p, 4.0, -1.0, 48, 120.0).l) - 1.5) < 0.03);
+}
+
+TEST_CASE ("The sweep source climbs from 0 to 1 and the level follows the fade", "[engine][energy]")
+{
+    auto p = cutAtEnd();
+    p.set (P::EnergyCut, 0.f);
+    p.set (P::EnergyFade, 1.f);   // full fade in: silent at the start, full at the end
+    p.set (P::EnergyMode, (float) EnergyMode::Time);
+    p.set (P::EnergySec, 2.f);
+    const auto out = hold (p, 3.0);
+    const auto rmsAt = [&] (double t) {
+        double s = 0.0;
+        const int a = (int) (t * 48000.0), n = 2400;
+        for (int i = a; i < a + n; ++i) s += (double) out.l[(size_t) i] * out.l[(size_t) i];
+        return std::sqrt (s / n);
+    };
+    CHECK (rmsAt (0.1) < 0.2 * rmsAt (2.5));
+    CHECK (rmsAt (1.0) < rmsAt (1.9));
+    CHECK (rmsAt (2.5) > 0.01);
 }
 
 TEST_CASE ("Effects follow their matrix modulation", "[engine][fx]")

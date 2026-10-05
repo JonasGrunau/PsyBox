@@ -38,7 +38,7 @@ PsyBoxEditor::Root::Root (PsyBoxProcessor& p)
 void PsyBoxEditor::Root::updateMode()
 {
     const bool kick = proc.plain (psy::P::EngineMode) > 0.5f;
-    const bool arp = psy::hasArp (psy::familyOf (proc.getCategory()));
+    const bool arp = psy::hasArp (proc.getCategory());
     if (arp != arpLayout)
     {
         arpLayout = arp;

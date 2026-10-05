@@ -28,7 +28,8 @@ namespace choices
                                              "1/8", "1/8D", "1/8T", "1/16", "1/16D", "1/16T", "1/32", "1/32T", "1/64" };
     const std::vector<std::string> modSrc { "None", "Amp Env", "Filter Env", "Mod Env", "Pitch Env", "LFO 1",
                                             "LFO 2", "LFO 3", "Velocity", "Note", "Mod Wheel", "Aftertouch",
-                                            "Pitch Bend", "Random", "Macro 1", "Macro 2", "Macro 3", "Macro 4" };
+                                            "Pitch Bend", "Random", "Macro 1", "Macro 2", "Macro 3", "Macro 4",
+                                            "Sweep" };
     const std::vector<std::string> modDst { "None", "Pitch", "Pitch A", "Pitch B", "Shape A", "Shape B", "PW A",
                                             "PW B", "WT Pos A", "WT Pos B", "FM A", "FM B", "Detune A", "Detune B",
                                             "A>B FM", "Level A", "Level B", "Sub Level", "Noise Level", "Ring Level",
@@ -44,6 +45,8 @@ namespace choices
     const std::vector<std::string> engineMode { "Synth", "Kick" };
     const std::vector<std::string> kickClick { "Noise", "Tick", "Blip" };
     const std::vector<std::string> kickDrive { "Soft", "Tube", "Hard" };
+    const std::vector<std::string> energyMode { "Bars", "Time" };
+    const std::vector<std::string> energyBars { "1/4 bar", "1/2 bar", "1 bar", "2 bars", "4 bars", "8 bars", "16 bars", "32 bars" };
 } // namespace choices
 
 float syncDivBeats (int index) noexcept
@@ -51,6 +54,12 @@ float syncDivBeats (int index) noexcept
     static constexpr float beats[] = { 16.f, 8.f, 4.f, 2.f, 3.f, 4.f / 3.f, 1.f, 1.5f, 2.f / 3.f,
                                        0.5f, 0.75f, 1.f / 3.f, 0.25f, 0.375f, 1.f / 6.f, 0.125f, 1.f / 12.f, 0.0625f };
     return beats[std::clamp (index, 0, (int) std::size (beats) - 1)];
+}
+
+float energyBarsValue (int index) noexcept
+{
+    static constexpr float bars[] = { 0.25f, 0.5f, 1.f, 2.f, 4.f, 8.f, 16.f, 32.f };
+    return bars[std::clamp (index, 0, (int) std::size (bars) - 1)];
 }
 
 namespace

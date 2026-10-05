@@ -71,49 +71,6 @@ namespace
         swing (b, 0.05f);
     }
 
-    // Sweeps live on seconds-long envelopes, so their arps tie (gate >= 100 %,
-    // no rests): the voice steps through the notes while the sweep runs on.
-    void riser (B& b)
-    {
-        b.pick (P::ArpDiv, { D1_16, D1_16T }, { 0.75f, 0.25f });
-        b.pick (P::ArpMode, { Up });
-        b.pick (P::ArpOctaves, { 3, 4 });
-        gate (b, 1.f, 1.3f);
-    }
-
-    void downlifter (B& b)
-    {
-        b.pick (P::ArpDiv, { D1_16, D1_16T });
-        b.pick (P::ArpMode, { Down });
-        b.pick (P::ArpOctaves, { 3, 4 });
-        gate (b, 1.f, 1.3f);
-    }
-
-    void noiseFx (B& b)
-    {
-        b.pick (P::ArpDiv, { D1_16, D1_8, D1_16T }, { 0.5f, 0.3f, 0.2f });
-        b.pick (P::ArpMode, { Random, Up }, { 0.6f, 0.4f });
-        b.pick (P::ArpOctaves, { 2, 3 });
-        gate (b, 1.f, 1.3f);
-    }
-
-    void uplifter (B& b)
-    {
-        b.pick (P::ArpDiv, { D1_16, D1_16T }, { 0.75f, 0.25f });
-        b.pick (P::ArpMode, { Up });
-        b.pick (P::ArpOctaves, { 3, 4 });
-        gate (b, 1.f, 1.3f);
-    }
-
-    // A boom on the one: quarter-note steps, the pattern keeps them sparse.
-    void impact (B& b)
-    {
-        b.pick (P::ArpDiv, { D1_4 });
-        b.pick (P::ArpMode, { Down, Order }, { 0.6f, 0.4f });
-        b.pick (P::ArpOctaves, { 1 });
-        gate (b, 1.2f, 1.5f);
-    }
-
     // The voice is already gated by its LFO; each step retriggers the LFO, so
     // the arp only moves the chord and keeps the chop on the grid.
     void gated (B& b)
@@ -132,15 +89,6 @@ namespace
         b.pick (P::ArpOctaves, { 1, 2 });
         gate (b, 0.2f, 0.6f);
         swing (b, 0.1f);
-    }
-
-    // Each step swells for its length and is cut when the next one starts.
-    void reverse (B& b)
-    {
-        b.pick (P::ArpDiv, { D1_4, D1_2, D1_8D }, { 0.5f, 0.3f, 0.2f });
-        b.pick (P::ArpMode, { Up, UpDown }, { 0.65f, 0.35f });
-        b.pick (P::ArpOctaves, { 1, 2 });
-        gate (b, 1.f, 1.2f);
     }
 
     // ---- tonal ------------------------------------------------------------------
@@ -547,14 +495,6 @@ namespace
         write (b, p);
     }
 
-    // One boom on the one (quarter-note steps), now and then every two bars
-    // or with a pickup into the next bar.
-    void impactPattern (B& b)
-    {
-        const char* bars[] = { "X---", "X-------", "X------x", "X-----x-" };
-        write (b, ArpPattern::parse (choose (b, bars, { 0.5f, 0.25f, 0.15f, 0.1f })));
-    }
-
     // The voice's LFO does the chopping; the arp moves the chord on the grid,
     // straight or 3-3-2.
     void gatePattern (B& b)
@@ -577,17 +517,11 @@ namespace
         write (b, p);
     }
 
-    // Each step swells for its length and is cut by the next: straight, or a
-    // tresillo for a lopsided suck-back.
-    void reversePattern (B& b)
-    {
-        write (b, b.chance (0.6f) ? ArpPattern::parse ("x") : euclid (3, 8));
-    }
-
-    // Sweeps and beds: every step tied, so the envelopes run through.
+    // Beds: every step tied, so the envelopes run through.
     void sweepPattern (B& b) { riserPattern (b); }
 
-    // Basses and kicks never get an arp (hasArp): you play their rhythm.
+    // Basses, kicks and energy sounds never get an arp (hasArp): you play
+    // their rhythm, or they are one gesture over their length.
     void noArp (B&) {}
 } // namespace
 
@@ -625,16 +559,16 @@ Recipe arpPatternRecipeFor (Category c) noexcept
         case Category::Gurgle:      return gurglePattern;
         case Category::Wobble:      return wobblePattern;
         case Category::Metallic:    return metallicPattern;
-        case Category::Impact:      return impactPattern;
         case Category::Gate:        return gatePattern;
         case Category::Glitch:      return glitchPattern;
-        case Category::Reverse:     return reversePattern;
+        case Category::Atmos:
+        case Category::Drone:       return sweepPattern;
         case Category::Riser:
         case Category::Uplifter:
         case Category::Downlifter:
         case Category::NoiseFx:
-        case Category::Atmos:
-        case Category::Drone:       return sweepPattern;
+        case Category::Impact:
+        case Category::Reverse:
         case Category::PsyBass:
         case Category::BassShot:
         case Category::OffbeatBass:
@@ -666,16 +600,16 @@ Recipe arpRecipeFor (Category c) noexcept
         case Category::Gurgle:      return gurgle;
         case Category::Wobble:      return wobble;
         case Category::Metallic:    return metallic;
-        case Category::Riser:       return riser;
-        case Category::Downlifter:  return downlifter;
-        case Category::NoiseFx:     return noiseFx;
         case Category::Atmos:       return atmos;
         case Category::Drone:       return drone;
-        case Category::Uplifter:    return uplifter;
-        case Category::Impact:      return impact;
         case Category::Gate:        return gated;
         case Category::Glitch:      return glitch;
-        case Category::Reverse:     return reverse;
+        case Category::Riser:
+        case Category::Downlifter:
+        case Category::NoiseFx:
+        case Category::Uplifter:
+        case Category::Impact:
+        case Category::Reverse:
         case Category::PsyBass:
         case Category::BassShot:
         case Category::OffbeatBass:

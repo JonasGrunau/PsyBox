@@ -139,6 +139,18 @@ namespace
         b.set (P::OscALevel, 0.8f);
     }
 
+    // Energy sounds run over a length: bars by default (the tempo follows),
+    // or seconds. The Sweep source climbs 0 -> 1 over it from the note start,
+    // and the recipes hang pitch, filter and level on the sweep, so the
+    // Length control stretches the whole gesture.
+    enum Bars { B1_4, B1_2, B1, B2, B4, B8, B16, B32 };
+
+    void energyLength (B& b, std::initializer_list<int> bars, std::initializer_list<float> weights, float secLo, float secHi)
+    {
+        b.pick (P::EnergyBars, bars, weights);
+        b.uni (P::EnergySec, secLo, secHi);
+    }
+
     // ---- effects --------------------------------------------------------------
 
     void fxDelay (B& b, float p, std::initializer_list<int> divs, float fbLo, float fbHi, float mixLo, float mixHi)
@@ -723,8 +735,9 @@ namespace
         fxChorus (b, 0.3f, false);
     }
 
-    // Tonal: the pitch climbs one to two octaves while the filter opens.
-    // Noise is at most a trace of air; the noise sweep is the Uplifter.
+    // Tonal: the pitch climbs one to two octaves over the length while the
+    // filter opens and the level fades in. Noise is at most a trace of air;
+    // the noise sweep is the Uplifter.
     void riser (B& b)
     {
         if (b.chance (0.5f)) polyVoice (b, 2, 4);
@@ -738,19 +751,22 @@ namespace
         }
         if (b.chance (0.4f)) { b.pick (P::NoiseType, { 0, 1 }); b.uni (P::NoiseLevel, 0.02f, 0.1f); }
 
-        modEnv (b, 2000.f, 8000.f, 1000.f, 1000.f, 1.f, 1.f, 300.f, 1500.f);
-        b.route (S::ModEnv, D::PitchAll, 0.45f, 1.f);
+        energyLength (b, { B4, B8, B16 }, { 0.35f, 0.45f, 0.2f }, 4.f, 16.f);
+        b.uni (P::EnergyCurve, 0.2f, 0.7f);   // slow start, the climb speeds up into the drop
+        b.uni (P::EnergyFade, 0.5f, 0.85f);   // starts quiet, never from silence
+        b.on (P::EnergyCut, b.chance (0.3f));
+        b.route (S::Sweep, D::PitchAll, 0.45f, 1.f);
         filter1 (b, ft (FilterType::LP12), 400.f, 1500.f, 0.2f, 0.5f, 0.f, 0.f);
-        b.route (S::ModEnv, D::F1Cutoff, 0.4f, 0.7f);
+        b.route (S::Sweep, D::F1Cutoff, 0.4f, 0.7f);
         if (b.chance (0.5f))
         {
             // spiral: a wobble that speeds up as the pitch climbs
             b.lfo (1, LfoShape::Sine, 2.f, 5.f, true);
             if (b.chance (0.5f)) b.route (S::Lfo2, D::PitchAll, 0.02f, 0.06f);
             else b.route (S::Lfo2, D::F1Cutoff, 0.05f, 0.15f);
-            b.route (S::ModEnv, D::Lfo2Rate, 0.3f, 0.6f);
+            b.route (S::Sweep, D::Lfo2Rate, 0.3f, 0.6f);
         }
-        ampEnv (b, 1000.f, 6000.f, 1000.f, 1000.f, 1.f, 1.f, 500.f, 2000.f);
+        ampEnv (b, 5.f, 40.f, 1000.f, 1000.f, 1.f, 1.f, 500.f, 2000.f);   // the sweep shapes the level
         b.route (S::Macro1, D::F1Reso, 0.2f, 0.4f);
 
         fxReverb (b, 0.9f, 4.f, 10.f, 0.3f, 0.5f);
@@ -760,7 +776,8 @@ namespace
         fxShift (b, 0.2f, 5.f, 200.f, 0.2f, 0.6f);
     }
 
-    // Noise sweep: the filter opens upward and the pitch stays put.
+    // Noise sweep: the filter opens upward over the length and the pitch
+    // stays put.
     void uplifter (B& b)
     {
         polyVoice (b, 2, 4);
@@ -769,23 +786,26 @@ namespace
         if (b.chance (0.2f)) { supersawA (b, 0.3f, 0.7f); b.uni (P::OscALevel, 0.05f, 0.15f); }
         else b.on (P::OscAOn, false);
 
+        energyLength (b, { B2, B4, B8 }, { 0.25f, 0.5f, 0.25f }, 3.f, 12.f);
+        b.uni (P::EnergyCurve, 0.1f, 0.6f);
+        b.uni (P::EnergyFade, 0.5f, 0.85f);
+        b.on (P::EnergyCut, b.chance (0.3f));
         filter1 (b, b.chance (0.4f) ? ft (FilterType::BP12) : (b.chance (0.5f) ? ft (FilterType::HP12) : ft (FilterType::LP12)),
                  150.f, 500.f, 0.2f, 0.6f, 0.f, 0.f);
-        modEnv (b, 2000.f, 8000.f, 1000.f, 1000.f, 1.f, 1.f, 300.f, 1500.f);
-        b.route (S::ModEnv, D::F1Cutoff, 0.6f, 0.95f);
+        b.route (S::Sweep, D::F1Cutoff, 0.6f, 0.95f);
         if (b.chance (0.4f))
         {
             // a high-pass that follows, so the bottom thins out as it rises
             b.set (P::F2Type, (float) ft (FilterType::HP12));
             b.uni (P::F2Cutoff, 100.f, 300.f);
-            b.route (S::ModEnv, D::F2Cutoff, 0.3f, 0.6f);
+            b.route (S::Sweep, D::F2Cutoff, 0.3f, 0.6f);
         }
         if (b.chance (0.5f))
         {
             b.lfoSync (1, LfoShape::Triangle, { D1_16, D1_8, D1_16T }, false);
             b.route (S::Lfo2, D::F1Cutoff, 0.05f, 0.15f);
         }
-        ampEnv (b, 1000.f, 6000.f, 1000.f, 1000.f, 1.f, 1.f, 500.f, 2000.f);
+        ampEnv (b, 5.f, 40.f, 1000.f, 1000.f, 1.f, 1.f, 500.f, 2000.f);
         b.route (S::Macro1, D::F1Reso, 0.2f, 0.4f);
 
         fxPhaser (b, 0.5f);
@@ -794,26 +814,26 @@ namespace
         fxDelay (b, 0.5f, { D1_8D, D1_4 }, 0.3f, 0.55f, 0.15f, 0.3f);
     }
 
+    // The reverse of a riser: pitch and filter fall over the length, fast
+    // at first, and the level fades out with them.
     void downlifter (B& b)
     {
         if (b.chance (0.5f)) polyVoice (b, 2, 4);
         else monoVoice (b, false, 0.f, 0.f);
+        b.pick (P::Octave, { 0, 1 });
         b.pick (P::NoiseType, { 0, 1 });
         b.uni (P::NoiseLevel, 0.3f, 0.8f);
         if (b.chance (0.5f)) supersawA (b, 0.2f, 0.6f);
         else analogA (b, kSaw);
 
-        b.set (P::PenvAttack, 0.f);
-        b.set (P::PenvDest, 0.f);
-        b.uni (P::PenvAmt, 24.f, 48.f);
-        b.uni (P::PenvDecay, 1500.f, 6000.f);
-        b.uni (P::PenvCurve, 0.3f, 0.7f);
-
-        filter1 (b, ft (FilterType::LP12), 200.f, 800.f, 0.2f, 0.6f, 0.f, 0.f);
-        modEnv (b, 0.f, 0.f, 2000.f, 6000.f, 0.f, 0.f, 500.f, 1500.f);
-        b.route (S::ModEnv, D::F1Cutoff, 0.5f, 0.9f);
-        ampEnv (b, 0.f, 50.f, 2000.f, 6000.f, 0.f, 0.f, 500.f, 2000.f);
-        b.route (S::Macro1, D::PitchEnvAmt, 0.2f, 0.4f);
+        energyLength (b, { B1, B2, B4 }, { 0.3f, 0.45f, 0.25f }, 1.5f, 6.f);
+        b.uni (P::EnergyCurve, -0.6f, 0.f);
+        b.uni (P::EnergyFade, -1.f, -0.7f);
+        b.route (S::Sweep, D::PitchAll, -1.f, -0.5f);
+        filter1 (b, ft (FilterType::LP12), 1500.f, 6000.f, 0.2f, 0.6f, 0.f, 0.f);
+        b.route (S::Sweep, D::F1Cutoff, -0.9f, -0.5f);
+        ampEnv (b, 0.f, 30.f, 1000.f, 1000.f, 1.f, 1.f, 500.f, 2000.f);
+        b.route (S::Macro1, D::F1Reso, 0.2f, 0.4f);
 
         fxReverb (b, 0.9f, 3.f, 9.f, 0.25f, 0.45f);
         fxDelay (b, 0.6f, { D1_8D, D1_4 }, 0.3f, 0.55f, 0.15f, 0.3f);
@@ -826,6 +846,8 @@ namespace
         }
     }
 
+    // A filtered-noise whoosh: swells in over the length while an LFO moves
+    // the filter.
     void noiseFx (B& b)
     {
         polyVoice (b, 2, 4);
@@ -834,6 +856,9 @@ namespace
         if (b.chance (0.3f)) { analogA (b, kSaw, 0.2f); b.uni (P::OscALevel, 0.05f, 0.25f); }
         else b.on (P::OscAOn, false);
 
+        energyLength (b, { B2, B4, B8 }, { 0.3f, 0.45f, 0.25f }, 2.f, 10.f);
+        b.uni (P::EnergyCurve, -0.2f, 0.6f);
+        b.uni (P::EnergyFade, 0.3f, 0.8f);
         const int f = b.pick (P::F1Type, { ft (FilterType::BP12), ft (FilterType::BP24), ft (FilterType::Notch), ft (FilterType::LadderBP),
                                            ft (FilterType::CombPos), ft (FilterType::Formant) },
                               { 0.25f, 0.15f, 0.15f, 0.15f, 0.15f, 0.15f });
@@ -841,6 +866,7 @@ namespace
         b.uni (P::F1Cutoff, 300.f, 4000.f);
         b.uni (P::F1Reso, 0.3f, 0.9f);
         b.uni (P::F1Vowel, 0.f, 1.f);
+        b.route (S::Sweep, D::F1Cutoff, 0.2f, 0.5f);
         if (b.chance (0.5f)) b.lfo (0, LfoShape::Sine, 0.1f, 1.f, true);
         else b.lfoSync (0, LfoShape::Triangle, { D1_2, D1_1, D2_1 }, true);
         b.route (S::Lfo1, D::F1Cutoff, 0.3f, 0.7f);
@@ -849,7 +875,7 @@ namespace
             b.set (P::F2Type, (float) ft (FilterType::HP12));
             b.uni (P::F2Cutoff, 200.f, 1000.f);
         }
-        ampEnv (b, 50.f, 1500.f, 1000.f, 1000.f, 0.6f, 1.f, 300.f, 2000.f);
+        ampEnv (b, 20.f, 200.f, 1000.f, 1000.f, 0.6f, 1.f, 300.f, 2000.f);
         b.route (S::Macro1, D::F1Cutoff, 0.3f, 0.5f);
 
         fxPhaser (b, 0.5f);
@@ -926,8 +952,8 @@ namespace
         fxChorus (b, 0.3f, false);
     }
 
-    // A boom that falls into the sub: bright noise transient, seconds of
-    // tail. Deeper and longer than a Zap, and the tail outlasts the note.
+    // A boom that falls into the sub: bright noise transient, then a tail
+    // that dies away over the length (fast at first) and outlasts the note.
     void impact (B& b)
     {
         monoVoice (b, false, 0.f, 0.f);
@@ -941,11 +967,15 @@ namespace
         b.uni (P::PenvDecay, 300.f, 1500.f);
         b.uni (P::PenvCurve, 0.3f, 0.7f);
 
+        energyLength (b, { B1_2, B1, B2 }, { 0.25f, 0.5f, 0.25f }, 1.f, 4.f);
+        b.uni (P::EnergyCurve, -1.f, -0.5f);
+        b.set (P::EnergyFade, -1.f);
+
         b.pick (P::NoiseType, { 0, 1 });
         b.uni (P::NoiseLevel, 0.2f, 0.5f);
         filter1 (b, ft (FilterType::LP12), 300.f, 1000.f, 0.f, 0.25f, 0.4f, 0.8f);
         filterEnv (b, 0.f, 0.f, 80.f, 400.f, 0.f, 0.f, 100.f, 400.f);
-        ampEnv (b, 0.f, 0.f, 1500.f, 5000.f, 0.f, 0.f, 1500.f, 5000.f);
+        ampEnv (b, 0.f, 0.f, 1000.f, 1000.f, 1.f, 1.f, 800.f, 2500.f);   // the sweep fades the tail
         b.route (S::Macro1, D::PitchEnvAmt, 0.2f, 0.4f);
         b.route (S::Velocity, D::F1Cutoff, 0.1f, 0.25f);
 
@@ -1022,9 +1052,9 @@ namespace
         fxReverb (b, 0.3f, 0.5f, 1.5f, 0.1f, 0.2f);
     }
 
-    // Swells and cuts at the peak like a reversed hit: the amp envelope
-    // drops to nothing a few ms after its attack, whatever the note length.
-    // The filter opens with it. Little reverb, so no tail softens the cut.
+    // Swells over the length and cuts at the peak like a reversed hit,
+    // however long the note is held. The filter opens with it. Little
+    // reverb, so no tail softens the cut.
     void reverse (B& b)
     {
         polyVoice (b, 4, 8);
@@ -1039,9 +1069,13 @@ namespace
         else fmA (b, { 1.41f, 2.76f, 3.5f, 1.5f }, 1.f, 4.f, 0.f, 0.3f);
         if (b.chance (0.3f)) { b.pick (P::NoiseType, { 0, 1 }); b.uni (P::NoiseLevel, 0.1f, 0.3f); }
 
-        filter1 (b, ft (FilterType::LP12), 300.f, 1200.f, 0.1f, 0.4f, 0.4f, 0.8f);
-        filterEnv (b, 300.f, 2000.f, 1000.f, 1000.f, 1.f, 1.f, 20.f, 80.f);
-        ampEnv (b, 300.f, 1800.f, 5.f, 40.f, 0.f, 0.f, 5.f, 40.f);
+        energyLength (b, { B1_2, B1, B2 }, { 0.3f, 0.45f, 0.25f }, 0.8f, 3.f);
+        b.uni (P::EnergyCurve, 0.4f, 1.f);
+        b.set (P::EnergyFade, 1.f);
+        b.on (P::EnergyCut, true);
+        filter1 (b, ft (FilterType::LP12), 300.f, 1200.f, 0.1f, 0.4f, 0.f, 0.f);
+        b.route (S::Sweep, D::F1Cutoff, 0.4f, 0.8f);
+        ampEnv (b, 0.f, 10.f, 1000.f, 1000.f, 1.f, 1.f, 5.f, 40.f);   // the release is the cut
         b.route (S::Macro1, D::F1Cutoff, 0.2f, 0.4f);
 
         fxReverb (b, 0.5f, 1.f, 3.f, 0.08f, 0.2f);

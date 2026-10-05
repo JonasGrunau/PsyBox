@@ -72,7 +72,7 @@ TEST_CASE ("Mutate stays near the recipe's ranges", "[generator]")
     }
 }
 
-TEST_CASE ("Risers climb in pitch, uplifters sweep noise", "[generator]")
+TEST_CASE ("Risers climb in pitch over their length, uplifters sweep noise", "[generator]")
 {
     const auto routesTo = [] (const ParamState& p, ModSrc src, ModDst dst) {
         for (int s = 0; s < kNumModSlots; ++s)
@@ -85,14 +85,14 @@ TEST_CASE ("Risers climb in pitch, uplifters sweep noise", "[generator]")
     {
         const auto riser = g.generate (Category::Riser, seed, ParamState(), LockSet());
         INFO ("seed " << seed);
-        CHECK (routesTo (riser, ModSrc::ModEnv, ModDst::PitchAll));
+        CHECK (routesTo (riser, ModSrc::Sweep, ModDst::PitchAll));
         CHECK (riser.get (P::NoiseLevel) <= 0.1f);
 
         const auto up = g.generate (Category::Uplifter, seed, ParamState(), LockSet());
         CHECK (up.get (P::NoiseLevel) >= 0.8f);
         CHECK ((up.geti (P::OscAOn) == 0 || up.get (P::OscALevel) <= 0.15f));
         CHECK_FALSE (routesTo (up, ModSrc::None, ModDst::PitchAll));
-        CHECK (routesTo (up, ModSrc::ModEnv, ModDst::F1Cutoff));
+        CHECK (routesTo (up, ModSrc::Sweep, ModDst::F1Cutoff));
     }
 }
 
@@ -119,7 +119,7 @@ TEST_CASE ("Arp generation is off unless asked for, and on for every synth categ
             INFO ("category " << c << " seed " << seed);
             CHECK_FALSE (g.generate ((Category) c, seed, ParamState(), LockSet()).on (P::ArpOn));
             const auto p = g.generate ((Category) c, seed, ParamState(), LockSet(), true);
-            CHECK (p.on (P::ArpOn) == hasArp (familyOf ((Category) c)));   // basses and kicks never get one
+            CHECK (p.on (P::ArpOn) == hasArp ((Category) c));   // basses, kicks and energy sounds never get one
             CHECK_FALSE (p.on (P::ArpHold));   // a performance switch, never the recipe's
         }
 }
@@ -178,7 +178,7 @@ TEST_CASE ("Generated arp patterns change with the seed and keep each category's
     }
     for (uint32_t seed = 1; seed < 60; ++seed)
     {
-        const auto sweep = pattern (Category::Riser, seed);
+        const auto sweep = pattern (Category::Drone, seed);
         for (int i = 0; i < sweep.length; ++i)
             CHECK ((sweep.has (i, ArpPattern::On) && sweep.has (i, ArpPattern::Slide)));
         const auto acid = pattern (Category::Acid, seed);
@@ -204,9 +204,10 @@ TEST_CASE ("A new arp pattern leaves everything else alone", "[generator][arp]")
 TEST_CASE ("Generated arp patterns are composed: figures repeat, slides land, accents stay sparse", "[generator][arp]")
 {
     Generator g;
-    for (Category c : categoriesIn (Family::Synth))
+    for (Category c : categoryDisplayOrder())
         for (uint32_t seed = 1; seed < 40; ++seed)
         {
+            if (! hasArp (c)) continue;
             const auto p = ArpPattern::from (g.generate (c, seed, ParamState(), LockSet(), true));
             INFO (categoryInfo()[(size_t) c].name << " seed " << seed);
             int notes = 0;
@@ -368,11 +369,11 @@ TEST_CASE ("The key toggle only switches key tracking", "[generator][kick]")
         }
 }
 
-TEST_CASE ("Basses and kicks never get an arp", "[generator][arp]")
+TEST_CASE ("Basses, kicks and energy sounds never get an arp", "[generator][arp]")
 {
     Generator g;
-    for (auto f : { Family::Bass, Family::Kick })
-        for (Category c : categoriesIn (f))
+    for (Category c : categoryDisplayOrder())
+        if (familyOf (c) != Family::Synth || isEnergy (c))
             for (uint32_t seed = 1; seed < 30; ++seed)
             {
                 INFO (categoryInfo()[(size_t) c].name << " seed " << seed);
@@ -403,4 +404,23 @@ TEST_CASE ("The mod matrix lists match their enums, and targets map to knobs bot
         CHECK (modDepthNorm ((ModDst) d) > 0.f);
     }
     CHECK (modTargetFor (P::AenvA) == ModDst::None);
+}
+
+TEST_CASE ("Energy sounds hang their motion on the sweep and keep the user's length unit", "[generator][energy]")
+{
+    Generator g;
+    ParamState current;
+    current.set (P::EnergyMode, (float) EnergyMode::Time);
+    for (Category c : categoriesIn (CategoryGroup::Energy))
+        for (uint32_t seed = 1; seed <= 20; ++seed)
+        {
+            INFO (categoryInfo()[(size_t) c].name << " seed " << seed);
+            const auto p = g.generate (c, seed, current, LockSet());
+            CHECK (p.geti (P::EnergyMode) == (int) EnergyMode::Time);
+            bool sweep = std::abs (p.get (P::EnergyFade)) > 0.1f;
+            for (int s = 0; s < kNumModSlots; ++s)
+                sweep = sweep || (p.geti (modSrcParam (s)) == (int) ModSrc::Sweep && p.get (modAmtParam (s)) != 0.f);
+            CHECK (sweep);
+            CHECK (g.generate (c, seed, ParamState(), LockSet()).geti (P::EnergyMode) == (int) EnergyMode::Bars);   // bars by default
+        }
 }

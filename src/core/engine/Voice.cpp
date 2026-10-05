@@ -43,6 +43,7 @@ void Voice::start (int n, float vel, bool acc, bool retrigger, bool stolen, floa
 
     if (retrigger)
     {
+        sweepT = 0.0;
         amp.noteOn();
         fenv.noteOn();
         menv.noteOn();
@@ -211,6 +212,18 @@ void Voice::render (float* outL, float* outR, int chunkOffsetBase, int nBase, co
         src[(size_t) ModSrc::Macro2] = p.get (P::Macro2);
         src[(size_t) ModSrc::Macro3] = p.get (P::Macro3);
         src[(size_t) ModSrc::Macro4] = p.get (P::Macro4);
+        const float sweep = sweepT >= 1.0 ? 1.f : std::pow ((float) sweepT, ctx.sweepExp);
+        src[(size_t) ModSrc::Sweep] = sweep;
+        if (sweepT < 1.0)
+        {
+            sweepT += ctx.sweepInc;
+            if (sweepT >= 1.0)
+            {
+                sweepT = 1.0;
+                if (ctx.sweepCut && gate) release();   // the note ends at the peak, however long it is held
+            }
+        }
+
         mod.fill (0.f);
         for (int s = 0; s < ctx.numSlots; ++s)
         {
@@ -276,7 +289,9 @@ void Voice::render (float* outL, float* outR, int chunkOffsetBase, int nBase, co
                        clamp01 (p.get (P::F2Drive) + M (ModDst::F2Drive)), clamp01 (p.get (P::F1Vowel) + M (ModDst::F1Vowel)));
         }
 
-        const float gain = aEnv * velGain * accentGain * std::clamp (1.f + M (ModDst::Amp), 0.f, 2.f) * 0.5f;
+        // the level can follow the energy sweep: up (fade in) or down (fade out)
+        const float fade = ctx.sweepFade >= 0.f ? 1.f - ctx.sweepFade * (1.f - sweep) : 1.f + ctx.sweepFade * sweep;
+        const float gain = aEnv * velGain * accentGain * std::clamp (1.f + M (ModDst::Amp), 0.f, 2.f) * fade * 0.5f;
         const float pan = std::clamp (M (ModDst::Pan), -1.f, 1.f);
         const float gL = std::cos ((pan + 1.f) * kPi * 0.25f) * 1.41421356f * gain;
         const float gR = std::sin ((pan + 1.f) * kPi * 0.25f) * 1.41421356f * gain;

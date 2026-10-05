@@ -1113,7 +1113,7 @@ void Sidebar::refresh()
     arpToggle.setOn (proc.getArpGeneration());
     keyToggle.setOn (proc.getKickKeyGeneration());
     // only the generator options that apply to the current category's family
-    const bool arp = psy::hasArp (psy::familyOf (proc.getCategory()));
+    const bool arp = psy::hasArp (proc.getCategory());
     if (keyToggle.isVisible() != proc.isKickCategory() || arpToggle.isVisible() != arp)
     {
         keyToggle.setVisible (proc.isKickCategory());

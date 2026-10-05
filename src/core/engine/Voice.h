@@ -23,6 +23,12 @@ struct VoiceContext
     float modWheel = 0.f, aftertouch = 0.f;
     std::array<const float*, kNumLfos> globalLfo {};  // per-sample values for free-running LFOs
     std::array<float, kNumLfos> lfoHz {};
+    // Energy sweep: linear phase step per base-rate sample (1 / length), the
+    // curve's exponent, how much the level follows it, and whether the note
+    // ends when it reaches the end.
+    double sweepInc = 0.0;
+    float sweepExp = 1.f, sweepFade = 0.f;
+    bool sweepCut = false;
     // Active matrix slots, pre-filtered by the engine.
     struct Slot { int src, dst; float amt; };
     std::array<Slot, kNumModSlots> slots {};
@@ -56,6 +62,7 @@ public:
     // Mod source values at the end of the last render (effect modulation
     // follows the newest voice).
     const std::array<float, (size_t) ModSrc::Count>& sources() const noexcept { return srcNow; }
+    float sweepPhase() const noexcept { return (float) sweepT; }
 
 private:
     dsp::AnalogOsc anA, anB, sub;
@@ -71,6 +78,7 @@ private:
 
     std::array<float, (size_t) ModSrc::Count> srcNow {};
     double syncPhase = 0.0;
+    double sweepT = 0.0;   // energy sweep, 0..1 linear
     int note = 60;
     float velocity = 1.f, randomVal = 0.f;
     bool accent = false, gate = false;

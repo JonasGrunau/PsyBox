@@ -88,6 +88,8 @@ inline const std::array<CategoryInfo, kNumCategories>& categoryInfo() noexcept
     return info;
 }
 
+inline CategoryGroup groupOf (Category c) noexcept { return categoryInfo()[(size_t) c].group; }
+
 // Sidebar order: by section, then alphabetical. The enum order stays fixed
 // because saved sessions store the category index.
 inline const std::array<Category, kNumCategories>& categoryDisplayOrder() noexcept
@@ -106,9 +108,20 @@ inline const std::array<Category, kNumCategories>& categoryDisplayOrder() noexce
     return order;
 }
 
+// One sidebar section's categories, alphabetical.
+inline const std::vector<Category>& categoriesIn (CategoryGroup g) noexcept
+{
+    static const auto lists = [] {
+        std::array<std::vector<Category>, (size_t) CategoryGroup::Count> l;
+        for (Category c : categoryDisplayOrder())
+            l[(size_t) groupOf (c)].push_back (c);
+        return l;
+    }();
+    return lists[(size_t) g];
+}
+
 // Synth sounds, basses and kicks are separate families: the sidebar lists one
-// family at a time, a kick category plays the kick engine (EngineMode::Kick),
-// and only synth sounds get an arp.
+// family at a time, and a kick category plays the kick engine (EngineMode::Kick).
 enum class Family : int { Synth, Bass, Kick, Count };
 
 constexpr Family familyOf (Category c) noexcept
@@ -120,7 +133,13 @@ constexpr Family familyOf (Category c) noexcept
     return Family::Synth;
 }
 
-constexpr bool hasArp (Family f) noexcept { return f == Family::Synth; }
+// Energy sounds (risers, downlifters, impacts...) run over a length in bars
+// or seconds instead of an arp.
+inline bool isEnergy (Category c) noexcept { return groupOf (c) == CategoryGroup::Energy; }
+
+// Only melodic synth sounds get an arp: basses and kicks play what you play,
+// and energy sounds are one long gesture.
+inline bool hasArp (Category c) noexcept { return familyOf (c) == Family::Synth && ! isEnergy (c); }
 
 // One family's categories in sidebar order (by section, then alphabetical).
 inline const std::vector<Category>& categoriesIn (Family f) noexcept

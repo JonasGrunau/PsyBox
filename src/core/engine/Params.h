@@ -54,11 +54,14 @@ namespace choices
 {
     extern const std::vector<std::string> voiceMode, glideMode, quality, oscType, wavetable,
         subOct, subShape, noiseType, penvDest, filterType, filterRouting, lfoShape, syncDiv,
-        modSrc, modDst, distType, chorusMode, compMode, arpMode, engineMode, kickClick, kickDrive;
+        modSrc, modDst, distType, chorusMode, compMode, arpMode, engineMode, kickClick, kickDrive,
+        energyMode, energyBars;
 }
 
 // Sync divisions expressed in beats (quarter notes), index-aligned with choices::syncDiv.
 float syncDivBeats (int index) noexcept;
+// Energy lengths in bars, index-aligned with choices::energyBars (4/4: a bar is 4 beats).
+float energyBarsValue (int index) noexcept;
 
 enum class VoiceMode : int { Poly, Mono, Legato };
 enum class OscType : int { Analog, Supersaw, Wavetable, FM };
@@ -68,13 +71,16 @@ enum class CompMode : int { Normal, Multiband };
 enum class ArpMode : int { Up, Down, UpDown, Random, Order };
 // A patch is a synth sound or a kick; the category decides, never the recipe.
 enum class EngineMode : int { Synth, Kick };
+enum class EnergyMode : int { Bars, Time };
 enum class KickClick : int { Noise, Tick, Blip };
 enum class KickDrive : int { Soft, Tube, Hard };
 
 enum class ModSrc : int
 {
     None, AmpEnv, FilterEnv, ModEnv, PitchEnv, Lfo1, Lfo2, Lfo3, Velocity, Note, ModWheel,
-    Aftertouch, PitchBend, Random, Macro1, Macro2, Macro3, Macro4, Count
+    Aftertouch, PitchBend, Random, Macro1, Macro2, Macro3, Macro4,
+    Sweep,   // energy sounds: 0 -> 1 over the length (bars or seconds) from the note start
+    Count
 };
 
 enum class ModDst : int
@@ -279,6 +285,13 @@ enum class ModDst : int
     X(WidthTime,   "width_time",   "Time",        "Width", Power, 1.f, 30.f, 12.f, 2.f, Ms, nullptr, false) \
     X(WidthMonoHz, "width_mono",   "Low Mono",    "Width", Exp, 20.f, 500.f, 120.f, 1.f, Hz, nullptr, false) \
     \
+    X(EnergyMode,  "energy_mode",  "Length In",   "Energy", Choice, 0, 1, 0, 1.f, None, &choices::energyMode, false) \
+    X(EnergyBars,  "energy_bars",  "Length",      "Energy", Choice, 0, 7, 4, 1.f, None, &choices::energyBars, false) \
+    X(EnergySec,   "energy_sec",   "Length",      "Energy", Power, 0.1f, 60.f, 6.f, 2.f, Sec, nullptr, false) \
+    X(EnergyCurve, "energy_curve", "Curve",       "Energy", BiPower, -1.f, 1.f, 0.f, 1.f, Percent, nullptr, false) \
+    X(EnergyFade,  "energy_fade",  "Fade",        "Energy", BiPower, -1.f, 1.f, 0.f, 1.f, Percent, nullptr, false) \
+    X(EnergyCut,   "energy_cut",   "Cut at End",  "Energy", Toggle, 0, 1, 0, 1.f, None, nullptr, false) \
+    \
     X(ArpOn,       "arp_on",       "On",          "Arp", Toggle, 0, 1, 0, 1.f, None, nullptr, false) \
     X(ArpMode,     "arp_mode",     "Mode",        "Arp", Choice, 0, 4, 0, 1.f, None, &choices::arpMode, false) \
     X(ArpDiv,      "arp_div",      "Rate",        "Arp", Choice, 0, 17, 12, 1.f, None, &choices::syncDiv, false) \
@@ -315,7 +328,7 @@ enum class ModDst : int
 
 // One modulation slot: source, target, bipolar amount.
 #define PSY_MOD_SLOT(X, n) \
-    X(Mod##n##Src, "mod" #n "_src", "Source", "Mod " #n, Choice, 0, 17, 0, 1.f, None, &choices::modSrc, false) \
+    X(Mod##n##Src, "mod" #n "_src", "Source", "Mod " #n, Choice, 0, 18, 0, 1.f, None, &choices::modSrc, false) \
     X(Mod##n##Dst, "mod" #n "_dst", "Target", "Mod " #n, Choice, 0, 46, 0, 1.f, None, &choices::modDst, false) \
     X(Mod##n##Amt, "mod" #n "_amt", "Amount", "Mod " #n, BiPower, -1.f, 1.f, 0.f, 1.5f, Percent, nullptr, false)
 

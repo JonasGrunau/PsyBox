@@ -36,7 +36,8 @@ namespace
         std::fclose (f);
     }
 
-    // Pattern per category: basses roll 16ths, FX get one long note, leads a phrase.
+    // Pattern per category: basses roll 16ths, beds get one long note, leads a
+    // phrase. Energy sounds are held for their length (see main).
     struct Note { double beat, len; int note; float vel; };
 
     std::vector<Note> patternFor (Category c)
@@ -56,20 +57,15 @@ namespace
                     p.push_back ({ i * 0.25, (i % 3 == 0) ? 0.3 : 0.2, line[i % 16], (i % 4 == 2) ? 1.f : 0.7f });
                 break;
             }
-            case Category::Riser: case Category::Uplifter: case Category::Downlifter: case Category::NoiseFx:
             case Category::Atmos: case Category::Drone:
                 p.push_back ({ 0.0, 12.0, 48, 0.8f });
                 break;
-            case Category::Impact:   // one boom every two bars, long enough to hear the tail
-                for (int bar = 0; bar < 4; bar += 2) p.push_back ({ bar * 4.0, 1.0, 36, 0.9f });
-                break;
+
             case Category::Gate:     // held chords, so the chop is what moves
                 for (int k : { 60, 63, 67 })
                     for (int half = 0; half < 2; ++half) p.push_back ({ half * 8.0, 7.5, k, 0.8f });
                 break;
-            case Category::Reverse:  // one swell per bar
-                for (int bar = 0; bar < 4; ++bar) p.push_back ({ bar * 4.0, 2.0, 60, 0.8f });
-                break;
+
             case Category::BassShot:   // one shot per beat, E1 E1 G1 D1 (octave -1 in the recipe)
             {
                 static const int shots[4] = { 40, 40, 43, 38 };
@@ -112,9 +108,7 @@ namespace
         switch (c)
         {
             case Category::Acid: case Category::Squelch: case Category::Gurgle: keys = { 36, 39, 43 }; break;
-            case Category::Riser: case Category::Uplifter: case Category::Downlifter: case Category::NoiseFx:
             case Category::Drone: case Category::Zap: case Category::Laser: keys = { 48 }; break;
-            case Category::Impact: keys = { 36 }; break;
             default: keys = { 60, 63, 67 }; break;
         }
         std::vector<Note> p;
@@ -140,9 +134,16 @@ int main (int argc, char** argv)
             Engine e;
             e.setParams (p);
             e.prepare (fs, 256);
-            const bool arp = withArp && hasArp (familyOf ((Category) c));
-            const auto pattern = arp ? arpPatternFor ((Category) c) : patternFor ((Category) c);
-            const int total = (int) (spb * 17);
+            const bool arp = withArp && hasArp ((Category) c);
+            auto pattern = arp ? arpPatternFor ((Category) c) : patternFor ((Category) c);
+            int total = (int) (spb * 17);
+            if (isEnergy ((Category) c))
+            {
+                // one gesture, held for its whole length (energy_bars, 4/4), then its tail
+                const double beats = energyBarsValue (p.geti (P::EnergyBars)) * 4.0;
+                pattern = { { 0.0, beats, (Category) c == Category::Impact ? 36 : 48, 0.8f } };
+                total = (int) (spb * (beats + 6.0));
+            }
             std::vector<float> l ((size_t) total), r ((size_t) total);
             std::vector<MidiEvent> all;
             for (const auto& n : pattern)

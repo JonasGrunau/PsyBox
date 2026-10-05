@@ -131,9 +131,11 @@ ParamState Generator::generate (Category c, uint32_t seed, const ParamState& cur
         if (locks.test ((size_t) i))
             out.v[(size_t) i] = current.v[(size_t) i];
 
-    // The global quality and volume are the user's, never the recipe's.
+    // The global quality and volume are the user's, never the recipe's, and
+    // so is the unit an energy length is shown in (bars or seconds).
     out.set (P::Quality, current.get (P::Quality));
     out.set (P::MasterVol, current.get (P::MasterVol));
+    out.set (P::EnergyMode, current.get (P::EnergyMode));
 
     ranges.clear();
     dsp::Rng rng (((uint64_t) seed << 8) ^ (uint64_t) ((int) c + 1) * 0x9E3779B97F4A7C15ULL);
@@ -144,7 +146,7 @@ ParamState Generator::generate (Category c, uint32_t seed, const ParamState& cur
 
     dsp::Rng arpRng (((uint64_t) seed << 8) ^ (uint64_t) ((int) c + 1) * 0xC2B2AE3D27D4EB4FULL ^ 0x41525050ULL);
     RecipeBuilder arp (out, locks, arpRng, ranges);
-    withArp = withArp && hasArp (familyOf (c));   // basses and kicks play what you play
+    withArp = withArp && hasArp (c);   // basses, kicks and energy sounds have none
     arp.on (P::ArpOn, withArp);
     if (withArp)
     {
@@ -181,7 +183,7 @@ ParamState Generator::mutate (float amount, uint32_t seed, const ParamState& cur
         const float u = rng.uniform();
         if (locks.test ((size_t) i) || ! r.touched)
             continue;
-        if (i == (int) P::Quality || i == (int) P::MasterVol || i == (int) P::EngineMode)
+        if (i == (int) P::Quality || i == (int) P::MasterVol || i == (int) P::EngineMode || i == (int) P::EnergyMode)
             continue;
 
         if (d.mapping == Mapping::Choice || d.mapping == Mapping::Toggle || d.unit == Unit::Int)

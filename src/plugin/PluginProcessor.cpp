@@ -275,7 +275,7 @@ void PsyBoxProcessor::applyState (const ParamState& state)
     // categories keep an arp (old basses and kicks may have one switched on).
     auto s = state;
     s.set (P::EngineMode, (float) (isKickCategory() ? EngineMode::Kick : EngineMode::Synth));
-    if (! hasArp (familyOf (category)))
+    if (! hasArp (category))
         s.set (P::ArpOn, 0.f);
     const auto& defs = paramDefs();
     for (size_t i = 0; i < (size_t) kNumParams; ++i)
@@ -667,7 +667,7 @@ void PsyBoxProcessor::normaliseFamily()
     const float want = (float) (isKickCategory() ? EngineMode::Kick : EngineMode::Synth);
     if (std::abs (plain (P::EngineMode) - want) > 0.5f)
         params[(size_t) P::EngineMode]->setValueNotifyingHost (def (P::EngineMode).toNorm (want));
-    if (! hasArp (familyOf (category)) && plain (P::ArpOn) > 0.5f)
+    if (! hasArp (category) && plain (P::ArpOn) > 0.5f)
         params[(size_t) P::ArpOn]->setValueNotifyingHost (0.f);
 }
 
