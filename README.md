@@ -108,7 +108,8 @@ body holds flat to about 160 ms and is down 30 dB by about 220 ms.
   it alone.
 - Tick **Arp** next to Generate and every new Main, FX or Background sound
   comes with an arp in the style of its category: tied 303 slides for acid,
-  random blips for bubbles, each with a freshly generated step pattern. The
+  random blips for bubbles, each with a freshly generated step pattern and a
+  line on its note lane, so holding one key already plays a riff. The
   sound itself is the same with or without it; only the arp settings differ.
   Energy sounds, basses and kicks have no arp.
 - The same category and seed always give the same sound. Double-click the seed
@@ -143,9 +144,9 @@ Laid out like Serum. The tabs in the top bar switch views:
 - **FX**: all nine effects at once, numbered in signal order, each switched on
   in its header. Switched-off effects grey out.
 - **Matrix**: the 16 modulation routes as rows: source, amount, target.
-- **Arp** (Main, FX, Background): the step editor (play, accent and slide
-  lanes, a ruler for the loop length), rate, octaves, gate, swing, generate a
-  new pattern, and the templates as cards under the steps.
+- **Arp** (Main, FX, Background): the step editor (play, note, accent and
+  slide lanes, a ruler for the loop length), rate, octaves, gate, swing,
+  generate a new pattern, and the templates as cards under the steps.
 - **Global**: oversampling quality, the full voice settings, output and a
   short guide. Always the last tab.
 
@@ -196,11 +197,17 @@ targets include the effects.
 
 Arpeggiator (Arp view): Up, Down, Up/Down, Random and played order
 over 1 to 4 octaves, with rate, gate, swing and hold, playing a 16-step pattern
-with per-step accent and slide and a loop length of 1 to 16 steps. Generate
-writes a new pattern in the category's style every time (acid lines get
-accents and slides, bubbles loop at odd lengths). In the Arp view: paint steps,
-set the length on the ruler, shift, clear, click a template card (Rolling,
-Gallop, 3-3-2, Acid line...) or generate just a new pattern. The arp locks to the host
+with per-step accent, slide and note (up to two octaves up or down from the key
+the mode picked) and a loop length of 1 to 16 steps. Generate writes a new
+pattern in the category's style every time: a rhythm from the category's
+figures (303 motifs, rolling, offbeat, 3-3-2, Euclidean loops, fills into the
+next bar) and a line in a psy scale (Phrygian, minor, harmonic minor, Phrygian
+dominant, Dorian) that repeats and answers itself. Acid sits on the key and
+jumps an octave on its accents, leads play broken chords through a
+progression, lasers fall down a chord, pads drift between roots. In the Arp
+view: paint steps, drag a note up or down (scroll, double-click to reset), set
+the length on the ruler, shift, clear, click a template card (Rolling, Gallop,
+3-3-2, Acid line...; it keeps your notes) or generate just a new pattern. The arp locks to the host
 transport while it plays. Slides, and gates of 100 % or more, tie: the voice
 glides to the next note without retriggering, so 303 slides and long sweeps
 keep running.

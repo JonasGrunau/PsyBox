@@ -332,11 +332,13 @@ enum class ModDst : int
     X(Mod##n##Dst, "mod" #n "_dst", "Target", "Mod " #n, Choice, 0, 46, 0, 1.f, None, &choices::modDst, false) \
     X(Mod##n##Amt, "mod" #n "_amt", "Amount", "Mod " #n, BiPower, -1.f, 1.f, 0.f, 1.5f, Percent, nullptr, false)
 
-// One step of the arp pattern: plays, accented, slides into the next step.
+// One step of the arp pattern: plays, accented, slides into the next step,
+// and its note in semitones from the key the arp picked.
 #define PSY_ARP_STEP(X, n) \
     X(ArpStep##n,  "arp_step" #n,  "Step " #n,   "Arp", Toggle, 0, 1, 1, 1.f, None, nullptr, false) \
     X(ArpAcc##n,   "arp_acc" #n,   "Accent " #n, "Arp", Toggle, 0, 1, 0, 1.f, None, nullptr, false) \
-    X(ArpSlide##n, "arp_slide" #n, "Slide " #n,  "Arp", Toggle, 0, 1, 0, 1.f, None, nullptr, false)
+    X(ArpSlide##n, "arp_slide" #n, "Slide " #n,  "Arp", Toggle, 0, 1, 0, 1.f, None, nullptr, false) \
+    X(ArpNote##n,  "arp_note" #n,  "Note " #n,   "Arp", Linear, -24, 24, 0, 1.f, Int, nullptr, false)
 
 enum class P : int
 {
@@ -376,10 +378,11 @@ float modDepthNorm (ModDst d) noexcept;
 // for all voices, after the voices are mixed.
 constexpr bool isFxTarget (ModDst d) noexcept { return (int) d >= (int) ModDst::DistDrive && d != ModDst::Count; }
 
-// Arp pattern lanes, per step: plays, accent, slide (see PSY_ARP_STEP).
+// Arp pattern lanes, per step: plays, accent, slide, note (see PSY_ARP_STEP).
 constexpr int kArpSteps = 16;
-enum class ArpLane : int { On, Accent, Slide };
-inline P arpStepParam (int step, ArpLane lane) noexcept { return (P) ((int) P::ArpStep1 + step * 3 + (int) lane); }
+constexpr int kArpNoteRange = 24;   // the note lane spans +-2 octaves
+enum class ArpLane : int { On, Accent, Slide, Note };
+inline P arpStepParam (int step, ArpLane lane) noexcept { return (P) ((int) P::ArpStep1 + step * 4 + (int) lane); }
 
 // A full patch: plain (denormalised) values for every parameter.
 struct ParamState
@@ -400,6 +403,7 @@ struct ArpPattern
 
     int length = kArpSteps;
     std::array<uint8_t, kArpSteps> steps {};
+    std::array<int8_t, kArpSteps> notes {};   // semitones added to the step's key
 
     bool has (int step, Flag f) const noexcept { return (steps[(size_t) step] & f) != 0; }
     void setFlag (int step, Flag f, bool on) noexcept
@@ -411,9 +415,11 @@ struct ArpPattern
     void writeTo (ParamState&) const noexcept;
 
     // '-' rest, 'x' play, 'X' accent, 's' slide, 'S' accent + slide.
-    // Shorter strings repeat to fill 16 steps; the length stays 16.
+    // Shorter strings repeat to fill 16 steps; the length stays 16 and every
+    // note is the key.
     static ArpPattern parse (std::string_view text) noexcept;
     bool operator== (const ArpPattern&) const = default;
+    bool sameRhythm (const ArpPattern& o) const noexcept { return length == o.length && steps == o.steps; }
 };
 
 } // namespace psy

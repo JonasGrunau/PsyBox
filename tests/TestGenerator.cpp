@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <set>
 #include <string_view>
 
 using namespace psy;
@@ -194,7 +195,7 @@ TEST_CASE ("A new arp pattern leaves everything else alone", "[generator][arp]")
     CHECK_FALSE (ArpPattern::from (next) == ArpPattern::from (base));
     for (int i = 0; i < kNumParams; ++i)
     {
-        const bool isPattern = i == (int) P::ArpLength || (i >= (int) P::ArpStep1 && i <= (int) P::ArpSlide16);
+        const bool isPattern = i == (int) P::ArpLength || (i >= (int) P::ArpStep1 && i <= (int) P::ArpNote16);
         if (! isPattern)
             CHECK (next.v[(size_t) i] == base.v[(size_t) i]);
     }
@@ -234,6 +235,43 @@ TEST_CASE ("Generated arp patterns are composed: figures repeat, slides land, ac
         CHECK (accents >= 1);
         CHECK (accents <= 6);
         CHECK (slides <= 4);
+    }
+}
+
+TEST_CASE ("Generated arp lines move off the key and stay in a scale", "[generator][arp]")
+{
+    // the scales the lines are written in: Phrygian, minor, harmonic minor,
+    // Phrygian dominant, Dorian
+    const std::array<std::array<int, 7>, 5> scales { { { 0, 1, 3, 5, 7, 8, 10 }, { 0, 2, 3, 5, 7, 8, 10 }, { 0, 2, 3, 5, 7, 8, 11 },
+                                                       { 0, 1, 4, 5, 7, 8, 10 }, { 0, 2, 3, 5, 7, 9, 10 } } };
+    Generator g;
+    for (Category c : categoryDisplayOrder())
+    {
+        if (! hasArp (c)) continue;
+        int moving = 0, distinctSum = 0;
+        constexpr int kSeeds = 60;
+        for (uint32_t seed = 1; seed <= kSeeds; ++seed)
+        {
+            const auto p = ArpPattern::from (g.generate (c, seed, ParamState(), LockSet(), true));
+            INFO (categoryInfo()[(size_t) c].name << " seed " << seed);
+            std::set<int> played;
+            for (int i = 0; i < p.length; ++i)
+                if (p.has (i, ArpPattern::On)) played.insert (p.notes[(size_t) i]);
+            bool inKey = false;
+            for (const auto& s : scales)
+                inKey = inKey || std::all_of (played.begin(), played.end(), [&] (int n) {
+                    return std::find (s.begin(), s.end(), ((n % 12) + 12) % 12) != s.end();
+                });
+            CHECK (inKey);
+            for (int n : played)
+                CHECK (std::abs (n) <= kArpNoteRange);
+            moving += played.size() > 1 ? 1 : 0;
+            distinctSum += (int) played.size();
+        }
+        INFO (categoryInfo()[(size_t) c].name);
+        CHECK (moving >= kSeeds * 6 / 10);   // a held key plays a line, not one note
+        if (c == Category::Acid || c == Category::Pluck || c == Category::PsyLead || c == Category::Bubble)
+            CHECK (distinctSum >= kSeeds * 3);   // the melodic ones use at least three notes on average
     }
 }
 

@@ -218,17 +218,22 @@ private:
             void mouseDrag (const juce::MouseEvent&) override;
             void mouseMove (const juce::MouseEvent&) override;
             void mouseExit (const juce::MouseEvent&) override { hover = {}; repaint(); }
+            void mouseDoubleClick (const juce::MouseEvent&) override;
+            void mouseWheelMove (const juce::MouseEvent&, const juce::MouseWheelDetails&) override;
 
         private:
             PsyBoxProcessor& proc;
-            enum class Row { None, Ruler, On, Accent, Slide };
+            enum class Row { None, Ruler, On, Note, Accent, Slide };
             struct Hit { Row row = Row::None; int step = -1; };
             Hit hover, drag;
             bool paintValue = true;
+            int dragNote = 0;     // the note lane value when the drag started
+            float wheel = 0.f;    // wheel travel not yet turned into a semitone
             juce::Rectangle<int> rowArea (Row) const;
             juce::Rectangle<int> cellArea (Row, int step) const;
             Hit locate (juce::Point<int>) const;
             void apply (Hit);
+            void setNote (int step, int semitones);
         };
 
         // The classic figures as cards (name and a strip of the steps); a

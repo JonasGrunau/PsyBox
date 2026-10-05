@@ -241,10 +241,58 @@ TEST_CASE ("Arp patterns survive a trip through the parameters", "[arp][params]"
 {
     auto p = ArpPattern::parse ("Xxs--S-x");
     p.length = 11;
+    p.notes = { 0, 12, -5, 3, 0, 24, -24, 7, 0, 0, 1, 0, 0, 0, 0, -1 };
     ParamState st;
     p.writeTo (st);
     CHECK (ArpPattern::from (st) == p);
-    CHECK (ArpPattern::from (ParamState()) == ArpPattern::parse ("x"));   // default: every step plays
+    CHECK (ArpPattern::from (ParamState()) == ArpPattern::parse ("x"));   // default: every step plays the key
+}
+
+TEST_CASE ("The note lane moves each step off the key, one key plays a line", "[arp]")
+{
+    ArpSettings s;
+    s.pattern = ArpPattern::parse ("xxx-");
+    s.pattern.notes = { 0, 7, 12, 5, 3, -2, 0, 0 };
+    s.pattern.length = 8;
+    auto a = make (s);
+    a.keyOn (60, 0.8f);
+    const auto o = ons (run (a, kSixteenth * 8, 256));
+    REQUIRE (o.size() == 6);
+    const int expected[] = { 60, 67, 72, 63, 58, 60 };   // the fourth step rests, its +5 never sounds
+    for (size_t i = 0; i < 6; ++i)
+        CHECK (o[i].note == expected[i]);
+
+    // the lane adds to whatever the mode picked, clamped to MIDI
+    s.pattern = ArpPattern::parse ("x");
+    s.pattern.notes.fill (24);
+    s.mode = (int) ArpMode::Up;
+    auto b = make (s);
+    b.keyOn (104, 0.8f);
+    b.keyOn (110, 0.8f);
+    for (const auto& e : ons (run (b, kSixteenth * 4, 256)))
+        CHECK (e.note == 127);
+}
+
+TEST_CASE ("A slide glides to the next step's note on the lane", "[arp]")
+{
+    ArpSettings s;
+    s.pattern = ArpPattern::parse ("sx--");
+    s.pattern.notes = { 0, 7 };
+    auto a = make (s);
+    a.keyOn (48, 0.8f);
+    std::vector<ArpEvent> ev;
+    a.sync (0.0, 120.0, false);
+    for (int64_t t = 0; t < kSixteenth * 2; ++t)
+    {
+        a.fireDue ([&] (const ArpEvent& e) { ev.push_back (e); });
+        a.advance (1);
+    }
+    REQUIRE (ev.size() >= 2);
+    CHECK (ev[0].on);
+    CHECK (ev[0].note == 48);
+    CHECK (ev[1].on);
+    CHECK (ev[1].note == 55);
+    CHECK (ev[1].slideFrom == 48);   // tied: the voice moves, no retrigger
 }
 
 TEST_CASE ("Swing delays the odd steps", "[arp]")

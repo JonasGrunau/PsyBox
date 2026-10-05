@@ -245,9 +245,12 @@ ArpPattern ArpPattern::from (const ParamState& s) noexcept
     ArpPattern p;
     p.length = std::clamp (s.geti (P::ArpLength), 1, kArpSteps);
     for (int i = 0; i < kArpSteps; ++i)
+    {
         p.steps[(size_t) i] = (uint8_t) ((s.on (arpStepParam (i, ArpLane::On)) ? On : 0)
                                          | (s.on (arpStepParam (i, ArpLane::Accent)) ? Accent : 0)
                                          | (s.on (arpStepParam (i, ArpLane::Slide)) ? Slide : 0));
+        p.notes[(size_t) i] = (int8_t) std::clamp (s.geti (arpStepParam (i, ArpLane::Note)), -kArpNoteRange, kArpNoteRange);
+    }
     return p;
 }
 
@@ -259,6 +262,7 @@ void ArpPattern::writeTo (ParamState& s) const noexcept
         s.set (arpStepParam (i, ArpLane::On), has (i, On) ? 1.f : 0.f);
         s.set (arpStepParam (i, ArpLane::Accent), has (i, Accent) ? 1.f : 0.f);
         s.set (arpStepParam (i, ArpLane::Slide), has (i, Slide) ? 1.f : 0.f);
+        s.set (arpStepParam (i, ArpLane::Note), (float) notes[(size_t) i]);
     }
 }
 

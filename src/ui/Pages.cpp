@@ -563,10 +563,11 @@ ArpPage::Panel::Panel (PsyBoxProcessor& p)
         addAndMakeVisible (c);
     hold.setTooltip ("Keep the arp running after you let go of the keys");
     dice.setTooltip ("New pattern in the style of the category");
-    clear.setTooltip ("Rest on every step");
+    clear.setTooltip ("Rest on every step and put every note back on the key");
     clear.onClick = [this] {
         auto pt = proc.getArpPattern();
         pt.steps = {};
+        pt.notes = {};
         proc.setArpPattern (pt);
     };
     dice.onClick = [this] { proc.generateArpPattern(); };
@@ -582,7 +583,11 @@ void ArpPage::Panel::rotate (int by)
     const auto pt = proc.getArpPattern();
     auto out = pt;
     for (int i = 0; i < pt.length; ++i)
-        out.steps[(size_t) ((i + by + pt.length) % pt.length)] = pt.steps[(size_t) i];
+    {
+        const auto to = (size_t) ((i + by + pt.length) % pt.length);
+        out.steps[to] = pt.steps[(size_t) i];
+        out.notes[to] = pt.notes[(size_t) i];
+    }
     proc.setArpPattern (out);
 }
 
@@ -596,8 +601,9 @@ void ArpPage::Panel::paint (juce::Graphics& g)
 
     g.setColour (col::textFaint);
     g.setFont (label (10.5f));
-    g.drawFittedText ("Click or drag to paint steps. Accent hits full velocity, slide glides into the next step without a "
-                      "retrigger. Click the numbers to set the loop length.",
+    g.drawFittedText ("Click or drag to paint steps. Drag a note up or down (or scroll) to move it off the key, double-click "
+                      "to put it back. Accent hits full velocity, slide glides into the next step without a retrigger. "
+                      "Click the numbers to set the loop length.",
                       hintArea, juce::Justification::centredRight, 3, 1.f);
 }
 
@@ -666,7 +672,7 @@ void ArpPage::Panel::Templates::paint (juce::Graphics& g)
     for (int i = 0; i < (int) list.size(); ++i)
     {
         const auto pt = F::parse (list[(size_t) i].steps);
-        const bool sel = pt == current;
+        const bool sel = pt.sameRhythm (current);
         const auto r = cardArea (i).toFloat();
         g.setColour (i == hover ? col::panel.brighter (0.06f) : col::panel);
         g.fillRoundedRectangle (r, 6.f);
@@ -703,9 +709,14 @@ void ArpPage::Panel::Templates::paint (juce::Graphics& g)
 
 void ArpPage::Panel::Templates::mouseDown (const juce::MouseEvent& e)
 {
+    // a template is a rhythm: the line on the note lane stays
     const auto& list = psy::arpTemplates();
     if (const int i = cardAt (e.getPosition()); i >= 0)
-        proc.setArpPattern (psy::ArpPattern::parse (list[(size_t) i].steps));
+    {
+        auto pt = psy::ArpPattern::parse (list[(size_t) i].steps);
+        pt.notes = proc.getArpPattern().notes;
+        proc.setArpPattern (pt);
+    }
 }
 
 void ArpPage::Panel::Templates::mouseMove (const juce::MouseEvent& e)
@@ -719,7 +730,10 @@ void ArpPage::Panel::Templates::mouseMove (const juce::MouseEvent& e)
 
 namespace
 {
-    constexpr int kLabelCol = 72, kStepGap = 4, kBeatGap = 12, kRulerH = 18, kLaneGap = 6, kSmallLaneH = 24;
+    constexpr int kLabelCol = 72, kStepGap = 4, kBeatGap = 12, kRulerH = 18, kLaneGap = 6, kSmallLaneH = 24, kNoteLaneH = 84;
+    constexpr float kPxPerSemitone = 6.f;   // vertical drag on the note lane
+
+    juce::String noteText (int semitones) { return semitones > 0 ? "+" + juce::String (semitones) : juce::String (semitones); }
 }
 
 juce::Rectangle<int> ArpPage::Panel::Grid::rowArea (Row row) const
@@ -731,10 +745,13 @@ juce::Rectangle<int> ArpPage::Panel::Grid::rowArea (Row row) const
     a.removeFromBottom (kLaneGap);
     const auto acc = a.removeFromBottom (kSmallLaneH);
     a.removeFromBottom (kLaneGap);
+    const auto note = a.removeFromBottom (kNoteLaneH);
+    a.removeFromBottom (kLaneGap);
     switch (row)
     {
         case Row::Ruler:  return ruler;
         case Row::On:     return a;
+        case Row::Note:   return note;
         case Row::Accent: return acc;
         case Row::Slide:  return slide;
         case Row::None:   break;
@@ -754,7 +771,7 @@ juce::Rectangle<int> ArpPage::Panel::Grid::cellArea (Row row, int step) const
 
 ArpPage::Panel::Grid::Hit ArpPage::Panel::Grid::locate (juce::Point<int> pt) const
 {
-    for (auto row : { Row::Ruler, Row::On, Row::Accent, Row::Slide })
+    for (auto row : { Row::Ruler, Row::On, Row::Note, Row::Accent, Row::Slide })
     {
         if (! rowArea (row).expanded (0, kLaneGap / 2).contains (pt)) continue;
         for (int i = 0; i < psy::kArpSteps; ++i)
@@ -782,9 +799,20 @@ void ArpPage::Panel::Grid::apply (Hit h)
             pt.setFlag (h.step, h.row == Row::Accent ? F::Accent : F::Slide, paintValue);
             if (paintValue) pt.setFlag (h.step, F::On, true);   // an accent or slide needs a note
             break;
+        case Row::Note:   // dragged, see mouseDrag
         case Row::None:
             return;
     }
+    proc.setArpPattern (pt);
+    repaint();
+}
+
+void ArpPage::Panel::Grid::setNote (int step, int semitones)
+{
+    auto pt = proc.getArpPattern();
+    const auto v = (int8_t) juce::jlimit (-psy::kArpNoteRange, psy::kArpNoteRange, semitones);
+    if (pt.notes[(size_t) step] == v) return;
+    pt.notes[(size_t) step] = v;
     proc.setArpPattern (pt);
     repaint();
 }
@@ -794,6 +822,11 @@ void ArpPage::Panel::Grid::mouseDown (const juce::MouseEvent& e)
     drag = locate (e.getPosition());
     if (drag.row == Row::None) return;
     const auto pt = proc.getArpPattern();
+    if (drag.row == Row::Note)
+    {
+        dragNote = pt.notes[(size_t) drag.step];
+        return;
+    }
     using F = psy::ArpPattern;
     const F::Flag flag = drag.row == Row::Accent ? F::Accent : (drag.row == Row::Slide ? F::Slide : F::On);
     paintValue = ! (pt.has (drag.step, flag) && drag.step < pt.length);
@@ -805,6 +838,12 @@ void ArpPage::Panel::Grid::mouseDown (const juce::MouseEvent& e)
 void ArpPage::Panel::Grid::mouseDrag (const juce::MouseEvent& e)
 {
     if (drag.row == Row::None) return;
+    if (drag.row == Row::Note)
+    {
+        // up raises the note, a semitone every few pixels
+        setNote (drag.step, dragNote + juce::roundToInt ((float) -e.getDistanceFromDragStartY() / kPxPerSemitone));
+        return;
+    }
     // stay on the lane the drag started in; only the column follows the mouse
     const auto y = rowArea (drag.row).getCentreY();
     auto h = locate ({ e.getPosition().x, y });
@@ -821,9 +860,39 @@ void ArpPage::Panel::Grid::mouseMove (const juce::MouseEvent& e)
     if (h.row != hover.row || h.step != hover.step)
     {
         hover = h;
-        setMouseCursor (h.row == Row::None ? juce::MouseCursor::NormalCursor : juce::MouseCursor::PointingHandCursor);
+        setMouseCursor (h.row == Row::None ? juce::MouseCursor::NormalCursor
+                        : h.row == Row::Note ? juce::MouseCursor::UpDownResizeCursor
+                                             : juce::MouseCursor::PointingHandCursor);
         repaint();
     }
+}
+
+void ArpPage::Panel::Grid::mouseDoubleClick (const juce::MouseEvent& e)
+{
+    if (const auto h = locate (e.getPosition()); h.row == Row::Note)
+        setNote (h.step, 0);
+}
+
+void ArpPage::Panel::Grid::mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& w)
+{
+    const auto h = locate (e.getPosition());
+    if (h.row != Row::Note)
+    {
+        Component::mouseWheelMove (e, w);
+        return;
+    }
+    if (w.isInertial) return;
+    // a wheel moves a semitone per notch, a trackpad one per stretch of travel
+    int by = 0;
+    if (! w.isSmooth) by = w.deltaY > 0.f ? 1 : (w.deltaY < 0.f ? -1 : 0);
+    else
+    {
+        wheel += w.deltaY * 8.f;
+        by = (int) wheel;
+        wheel -= (float) by;
+    }
+    if (by != 0)
+        setNote (h.step, proc.getArpPattern().notes[(size_t) h.step] + by);
 }
 
 void ArpPage::Panel::Grid::paint (juce::Graphics& g)
@@ -836,7 +905,7 @@ void ArpPage::Panel::Grid::paint (juce::Graphics& g)
     // lane names
     g.setFont (label (10.f));
     g.setColour (col::textDim);
-    for (auto [row, name] : { std::pair { Row::Ruler, "STEP" }, std::pair { Row::On, "PLAY" },
+    for (auto [row, name] : { std::pair { Row::Ruler, "STEP" }, std::pair { Row::On, "PLAY" }, std::pair { Row::Note, "NOTE" },
                               std::pair { Row::Accent, "ACCENT" }, std::pair { Row::Slide, "SLIDE" } })
         g.drawText (name, rowArea (row).withX (0).withWidth (kLabelCol - sp::md), juce::Justification::centredLeft, false);
 
@@ -881,6 +950,27 @@ void ArpPage::Panel::Grid::paint (juce::Graphics& g)
             g.setColour (col::lineStrong.withMultipliedAlpha (dim));
             g.drawRoundedRectangle (c.reduced (0.5f), 3.f, 1.f);
         }
+
+        // note lane: a marker at the step's pitch, the key on the middle line,
+        // so the lane draws the line's contour; the number sits in the free
+        // half. A rest's note shows faintly, it plays once the step does.
+        const auto n = cellArea (Row::Note, i).toFloat();
+        const int semis = pt.notes[(size_t) i];
+        const float noteDim = dim * (pt.has (i, F::On) ? 1.f : 0.4f);
+        g.setColour (col::well);
+        g.fillRoundedRectangle (n, 3.f);
+        g.setColour (col::lineStrong.withMultipliedAlpha (dim));
+        g.drawRoundedRectangle (n.reduced (0.5f), 3.f, 1.f);
+        g.setColour (col::line.withMultipliedAlpha (dim));
+        g.fillRect (n.getX() + 3.f, n.getCentreY() - 0.5f, n.getWidth() - 6.f, 1.f);
+        const float travel = n.getHeight() * 0.5f - 6.f;
+        const float y = n.getCentreY() - travel * (float) semis / (float) psy::kArpNoteRange;
+        g.setColour ((on ? accent() : col::textDim).withMultipliedAlpha (noteDim));
+        g.fillRoundedRectangle (n.getX() + 4.f, y - 2.f, n.getWidth() - 8.f, 4.f, 2.f);
+        const auto half = semis > 0 ? n.withTrimmedTop (n.getHeight() * 0.5f) : n.withTrimmedBottom (n.getHeight() * 0.5f);
+        g.setFont (mono (10.5f));
+        g.setColour ((semis == 0 ? col::textFaint : col::text).withMultipliedAlpha (noteDim));
+        g.drawText (noteText (semis), half.toNearestInt(), juce::Justification::centred, false);
 
         // accent lane
         const auto a = cellArea (Row::Accent, i).toFloat();
