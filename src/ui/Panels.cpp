@@ -1132,9 +1132,38 @@ void Sidebar::refresh()
     repaint();
 }
 
+// Section captions only where a family spans several sections (the synths).
+bool Sidebar::hasSections() const
+{
+    const auto& order = rows();
+    const auto& info = psy::categoryInfo();
+    return info[(size_t) order.front()].group != info[(size_t) order.back()].group;
+}
+
+bool Sidebar::startsSection (int row) const
+{
+    if (! hasSections()) return false;
+    const auto& order = rows();
+    const auto& info = psy::categoryInfo();
+    return row == 0 || info[(size_t) order[(size_t) row]].group != info[(size_t) order[(size_t) row - 1]].group;
+}
+
+int Sidebar::rowTop (int row) const
+{
+    int y = row * kItemH;
+    for (int i = 0; i <= row; ++i)
+        if (startsSection (i)) y += kGroupH;
+    return y;
+}
+
+int Sidebar::contentH() const
+{
+    return rowTop ((int) rows().size() - 1) + kItemH;
+}
+
 juce::Rectangle<int> Sidebar::rowBounds (int i) const
 {
-    return { 0, kListTop + i * kItemH - scrollY, getWidth() - 1, kItemH };
+    return { 0, kListTop + rowTop (i) - scrollY, getWidth() - 1, kItemH };
 }
 
 // The visible window of the category list; rows scroll inside it.
@@ -1151,7 +1180,7 @@ juce::Rectangle<int> Sidebar::infoArea() const
 
 int Sidebar::maxScroll() const
 {
-    return juce::jmax (0, (int) rows().size() * kItemH - listH);
+    return juce::jmax (0, contentH() - listH);
 }
 
 void Sidebar::showFamily (psy::Family f)
@@ -1179,8 +1208,9 @@ void Sidebar::scrollToShow (psy::Category c)
     const auto it = std::find (order.begin(), order.end(), c);
     if (it == order.end()) return;   // the other family is on screen
     const int row = (int) (it - order.begin());
-    const int top = row * kItemH;
-    if (top < scrollY) setScroll (top);
+    const int top = rowTop (row);
+    const int from = startsSection (row) ? top - kGroupH : top;   // a section's first row shows with its caption
+    if (from < scrollY) setScroll (from);
     else if (top + kItemH > scrollY + listH) setScroll (top + kItemH - listH);
 }
 
@@ -1215,6 +1245,17 @@ void Sidebar::paint (juce::Graphics& g)
     {
         const int i = (int) order[(size_t) row];
         const auto r = rowBounds (row);
+        if (startsSection (row))
+        {
+            // caption in the style of AMOUNT / SEED, on the dots' left edge
+            const juce::Rectangle<int> cap (kPad, r.getY() - kLabelH - sp::xs, r.getWidth() - 2 * kPad, kLabelH);
+            if (cap.intersects (list))
+            {
+                g.setColour (col::textFaint);
+                g.setFont (label (10.f));
+                g.drawText (juce::String (psy::categoryGroupName (info[(size_t) i].group)).toUpperCase(), cap, juce::Justification::centredLeft, false);
+            }
+        }
         if (! r.intersects (list)) continue;
         const auto c = juce::Colour ((juce::uint32) (0xff000000 | info[(size_t) i].colour));
         const bool isSel = i == sel;
@@ -1253,8 +1294,7 @@ void Sidebar::paint (juce::Graphics& g)
             g.setGradientFill ({ col::panel, 0.f, bottom, col::panel.withAlpha (0.f), 0.f, bottom - kFade, false });
             g.fillRect (list.withTrimmedTop (list.getHeight() - (int) kFade));
         }
-        const int contentH = (int) order.size() * kItemH;
-        const int thumbH = juce::jmax (24, listH * listH / contentH);
+        const int thumbH = juce::jmax (24, listH * listH / contentH());
         const int thumbY = list.getY() + (listH - thumbH) * scrollY / maxScroll();
         g.setColour (col::textFaint.withAlpha (0.5f));
         g.fillRoundedRectangle (juce::Rectangle<int> (getWidth() - 5, thumbY, 2, thumbH).toFloat(), 1.f);

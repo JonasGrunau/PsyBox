@@ -2,6 +2,8 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
+#include <cmath>
 #include <string_view>
 
 using namespace psy;
@@ -252,6 +254,56 @@ TEST_CASE ("Every category has a name, a short name and a blurb", "[generator]")
     CHECK (listed == kNumCategories);
     CHECK (familySize (Family::Bass) == 4);
     CHECK (familySize (Family::Kick) == 5);
+}
+
+TEST_CASE ("The sidebar lists sections in order, alphabetical inside each", "[generator][category]")
+{
+    const auto& info = categoryInfo();
+    for (int c = 0; c < kNumCategories; ++c)
+    {
+        const auto g = info[(size_t) c].group;
+        INFO (info[(size_t) c].name);
+        CHECK ((g == CategoryGroup::Kick) == (familyOf ((Category) c) == Family::Kick));
+        CHECK ((g == CategoryGroup::Bass) == (familyOf ((Category) c) == Family::Bass));
+    }
+
+    const auto& order = categoryDisplayOrder();
+    for (size_t i = 1; i < order.size(); ++i)
+    {
+        const auto& a = info[(size_t) order[i - 1]];
+        const auto& b = info[(size_t) order[i]];
+        INFO (a.name << " before " << b.name);
+        CHECK (a.group <= b.group);
+        if (a.group == b.group) CHECK (std::string_view (a.name) < std::string_view (b.name));
+    }
+
+    int perGroup[(size_t) CategoryGroup::Count] {};
+    for (const auto& ci : info) ++perGroup[(size_t) ci.group];
+    for (int n : perGroup) CHECK (n > 0);
+}
+
+TEST_CASE ("Each sidebar tab runs through the hue wheel once, top to bottom", "[generator][category]")
+{
+    const auto hue = [] (uint32_t rgb) {
+        const float r = (float) ((rgb >> 16) & 0xFF) / 255.f, g = (float) ((rgb >> 8) & 0xFF) / 255.f, b = (float) (rgb & 0xFF) / 255.f;
+        const float mx = std::max ({ r, g, b }), d = mx - std::min ({ r, g, b });
+        const float h = mx == r ? std::fmod ((g - b) / d, 6.f) : mx == g ? (b - r) / d + 2.f : (r - g) / d + 4.f;
+        return std::fmod (h * 60.f + 360.f, 360.f);
+    };
+    for (auto f : { Family::Synth, Family::Bass, Family::Kick })
+    {
+        // like the synth tab: warm (red/orange) first, towards magenta, no wrap past red
+        const auto& rows = categoriesIn (f);
+        CHECK (hue (categoryInfo()[(size_t) rows.front()].colour) < 45.f);
+        float last = -1.f;
+        for (Category c : rows)
+        {
+            const float h = hue (categoryInfo()[(size_t) c].colour);
+            INFO (categoryInfo()[(size_t) c].name << " hue " << h);
+            CHECK (h > last);
+            last = h;
+        }
+    }
 }
 
 TEST_CASE ("The engine mode always follows the category, even when locked", "[generator][kick]")

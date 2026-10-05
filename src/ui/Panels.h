@@ -349,9 +349,14 @@ private:
     void showFamily (psy::Family);
 
     static constexpr int kItemH = 25;
+    static constexpr int kGroupH = 24;   // section caption above a section's first row
     static constexpr int kListTop = theme::kPad + theme::kHeaderH + theme::sp::sm;
     static constexpr int kInfoH = theme::kPad + 24 + theme::sp::xs + 30;   // category name + blurb
     int categoryAt (juce::Point<int>) const;
+    bool hasSections() const;
+    bool startsSection (int row) const;
+    int rowTop (int row) const;   // in list content, captions included
+    int contentH() const;
     juce::Rectangle<int> rowBounds (int i) const;
     juce::Rectangle<int> listArea() const;
     juce::Rectangle<int> infoArea() const;

@@ -15,11 +15,13 @@ Builds as **VST3**, **Audio Unit** and **Standalone** (macOS).
 colour. The tabs at the top of the sidebar switch between **Synth**, **Bass**
 and **Kick**; the list scrolls when it is longer than the space it has.
 
-23 synth sounds:
+23 synth sounds, listed in sections by their role in a track:
 
-Acid · Alien Voice · Atmos · Bubble · Downlifter · Drone · Gate · Glitch ·
-Gurgle · Impact · Laser · Metallic · Noise FX · Pluck · Psy Lead · Reverse ·
-Riser · Screech · Squelch · Stab · Uplifter · Wobble · Zap
+- **Main**: Acid · Psy Lead · Squelch
+- **Shots**: Pluck · Stab · Zap
+- **FX**: Alien Voice · Bubble · Glitch · Gurgle · Laser · Metallic · Screech · Wobble
+- **Energy**: Downlifter · Impact · Noise FX · Reverse · Riser · Uplifter
+- **Background**: Atmos · Drone · Gate
 
 Riser is a synth tone climbing in pitch; Uplifter is a noise sweep that opens
 upward.
