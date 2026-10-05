@@ -189,6 +189,51 @@ TEST_CASE ("The amp attack curve bends the rise into a swell and keeps its time"
     CHECK_THAT (env.process(), Catch::Matchers::WithinAbs (before, 0.01));
 }
 
+TEST_CASE ("Envelope progress follows each stage's time", "[env]")
+{
+    // The editor's moving dots read this: half the stage's time is half way.
+    const float fs = 48000.f;
+    for (float curve : { 0.f, 0.6f })
+    {
+        INFO ("attack curve " << curve);
+        Adsr env;
+        env.setSampleRate (fs);
+        env.setAttackCurve (curve);
+        env.set (100.f, 200.f, 0.4f, 400.f);
+        env.noteOn();
+        for (int i = 0; i < 2400; ++i) env.process();   // half the attack
+        REQUIRE (env.getStage() == Adsr::Stage::Attack);
+        CHECK_THAT (env.stageProgress(), Catch::Matchers::WithinAbs (0.5, 0.03));
+        while (env.getStage() == Adsr::Stage::Attack) env.process();
+        for (int i = 0; i < 4800; ++i) env.process();   // half the decay
+        REQUIRE (env.getStage() == Adsr::Stage::Decay);
+        CHECK_THAT (env.stageProgress(), Catch::Matchers::WithinAbs (0.5, 0.03));
+        for (int i = 0; i < 48000; ++i) env.process();
+        CHECK (env.getStage() == Adsr::Stage::Sustain);
+        CHECK (env.stageProgress() == 0.f);
+        env.noteOff();
+        for (int i = 0; i < 9600; ++i) env.process();   // half the release
+        CHECK_THAT (env.stageProgress(), Catch::Matchers::WithinAbs (0.5, 0.03));
+    }
+
+    PitchEnv pe;
+    pe.setSampleRate (fs);
+    pe.trigger();
+    for (int i = 0; i < 480; ++i) pe.process (20.f, 100.f, 0.5f);   // half the attack
+    CHECK (pe.getStage() == 1);
+    CHECK_THAT (pe.stageProgress(), Catch::Matchers::WithinAbs (0.5, 0.01));
+    for (int i = 0; i < 480 + 2400; ++i) pe.process (20.f, 100.f, 0.5f);   // half the decay
+    CHECK (pe.getStage() == 2);
+    CHECK_THAT (pe.stageProgress(), Catch::Matchers::WithinAbs (0.5, 0.01));
+
+    // an LFO's position over two cycles
+    Lfo lfo;
+    lfo.setSampleRate (fs);
+    lfo.reset (0.25f);
+    for (int i = 0; i < 48000; ++i) lfo.process (0, 1.5f);   // 1.5 cycles in
+    CHECK_THAT (lfo.phase2(), Catch::Matchers::WithinAbs (1.75, 0.01));
+}
+
 namespace
 {
     // Runs the width stage over stereo buffers in blocks, after a silent

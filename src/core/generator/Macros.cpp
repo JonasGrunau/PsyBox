@@ -113,7 +113,7 @@ namespace
             case D::PitchAll:     return { "Pitch", Kind::Pitch };
             case D::PitchA:       return { "Pitch A", Kind::Pitch };
             case D::PitchB:       return { "Pitch B", Kind::Pitch };
-            case D::PitchEnvAmt:  return { "Pitch Env", Kind::Pitch };
+            case D::PitchEnvAmt:  return { "Env 3", Kind::Pitch };
             case D::ShapeA:       return { "Shape", Kind::Tone };
             case D::ShapeB:       return { "Shape B", Kind::Tone };
             case D::PwA:          return { "Pulse Width", Kind::Tone };

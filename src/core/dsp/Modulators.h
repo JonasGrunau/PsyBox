@@ -66,11 +66,32 @@ public:
     }
 
     void noteOn() noexcept { stage = Stage::Attack; aPhase = -1.f; }
-    void noteOff() noexcept { if (stage != Stage::Idle) stage = Stage::Release; }
+    void noteOff() noexcept { if (stage != Stage::Idle) { stage = Stage::Release; relFrom = out; } }
     void kill() noexcept { stage = Stage::Idle; out = 0.f; }
     bool active() const noexcept { return stage != Stage::Idle; }
     Stage getStage() const noexcept { return stage; }
     float value() const noexcept { return out; }
+
+    // How far into the current stage, 0..1, as a share of the stage's time
+    // (sustain: 0). Read from the level, so a retriggered attack starts
+    // part of the way in, like it sounds.
+    float stageProgress() const noexcept
+    {
+        constexpr float kLogRatio = -7.6014f;   // ln (kDecayRatio / (1 + kDecayRatio))
+        switch (stage)
+        {
+            case Stage::Attack: return attackPhase (out, attackBend (std::max (aCurve, 0.f)));
+            case Stage::Decay:
+                if (1.f - sus < 1e-4f) return 1.f;
+                return std::clamp (std::log ((out - sus + kDecayRatio) / (1.f - sus + kDecayRatio)) / kLogRatio, 0.f, 1.f);
+            case Stage::Release:
+                if (relFrom <= 0.f) return 1.f;
+                return std::clamp (std::log ((out + kDecayRatio) / (relFrom + kDecayRatio)) / kLogRatio, 0.f, 1.f);
+            case Stage::Idle:
+            case Stage::Sustain: break;
+        }
+        return 0.f;
+    }
 
     float process() noexcept
     {
@@ -118,6 +139,7 @@ private:
     float aMs = -1.f, dMs = -1.f, rMs = -1.f, sus = -1.f;
     float aCoef = 0.f, aBase = 0.f, dCoef = 0.f, dBase = 0.f, rCoef = 0.f, rBase = 0.f;
     float aCurve = 0.f, aInc = 1.f, aPhase = -1.f;
+    float relFrom = 0.f;   // level when the release began
 
     void calc (float ms, float ratio, float target, float& coef, float& base) const noexcept
     {
@@ -164,6 +186,9 @@ public:
     }
 
     float value() const noexcept { return out; }
+    // 0 done, 1 attack, 2 decay; and how far into the stage, 0..1.
+    int getStage() const noexcept { return stage; }
+    float stageProgress() const noexcept { return stage == 0 ? 1.f : std::min (t, 1.f); }
 
 private:
     float fs = 48000.f;
@@ -179,7 +204,7 @@ class Lfo
 public:
     void setSampleRate (float sr) noexcept { fs = sr; }
     void seed (uint64_t s) noexcept { rng.reseed (s); prevRand = rng.bipolar(); nextRand = rng.bipolar(); held = prevRand; }
-    void reset (float startPhase) noexcept { p = startPhase - std::floor (startPhase); }
+    void reset (float startPhase) noexcept { p = startPhase - std::floor (startPhase); odd = false; }
 
     float process (int shape, float hz) noexcept
     {
@@ -187,6 +212,7 @@ public:
         if (p >= 1.f)
         {
             p -= std::floor (p);
+            odd = ! odd;
             prevRand = nextRand;
             nextRand = rng.bipolar();
             held = nextRand;
@@ -211,9 +237,12 @@ public:
 
     float value() const noexcept { return out; }
     float phase() const noexcept { return p; }
+    // Phase over two cycles, 0..2 (displays draw two).
+    float phase2() const noexcept { return p + (odd ? 1.f : 0.f); }
 
 private:
     float fs = 48000.f, p = 0.f, out = 0.f;
+    bool odd = false;
     Rng rng;
     float prevRand = 0.f, nextRand = 0.f, held = 0.f;
 };

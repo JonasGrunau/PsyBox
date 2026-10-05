@@ -146,6 +146,13 @@ public:
         return { outPeak[(size_t) channel].exchange (0.f, std::memory_order_relaxed),
                  std::sqrt (outMeanSquare[(size_t) channel].load (std::memory_order_relaxed)) };
     }
+    // Where each sounding voice's envelopes and LFOs are, for the moving
+    // dots on their displays. Message thread.
+    void getModView (psy::ModView& out) const
+    {
+        const juce::SpinLock::ScopedLockType sl (modViewLock);
+        out = modView;
+    }
     // Compressor band readings in dB (band 0 only in Normal mode). The input
     // level holds its peaks and falls back at ~45 dB/s.
     struct CompReading { float inDb = -200.f, gainDb = 0.f, totalDb = 0.f; };
@@ -210,6 +217,8 @@ private:
     std::array<std::atomic<float>, 2> outPeak {}, outMeanSquare {};
     std::array<float, 2> meanSquare {};   // audio thread
     std::atomic<int> arpStep { -1 };
+    psy::ModView modView;                 // the audio thread skips a block rather than wait for the GUI
+    mutable juce::SpinLock modViewLock;
     std::array<std::array<std::atomic<float>, 3>, 3> compMeters {};   // per band: in, gain, total
     juce::Random random;
 

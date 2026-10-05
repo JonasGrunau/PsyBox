@@ -63,6 +63,10 @@ public:
     // follows the newest voice).
     const std::array<float, (size_t) ModSrc::Count>& sources() const noexcept { return srcNow; }
     float sweepPhase() const noexcept { return (float) sweepT; }
+    // For the editor's moving dots: amp, env 1 (filter), env 2 (mod).
+    const dsp::Adsr& envelope (int i) const noexcept { return i == 0 ? amp : (i == 1 ? fenv : menv); }
+    const dsp::PitchEnv& pitchEnvelope() const noexcept { return penv; }
+    const dsp::Lfo& lfo (int i) const noexcept { return lfos[(size_t) i]; }
 
 private:
     dsp::AnalogOsc anA, anB, sub;

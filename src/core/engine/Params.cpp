@@ -26,7 +26,7 @@ namespace choices
     const std::vector<std::string> lfoShape { "Sine", "Triangle", "Saw Up", "Saw Down", "Square", "S&H", "Smooth" };
     const std::vector<std::string> syncDiv { "4/1", "2/1", "1/1", "1/2", "1/2D", "1/2T", "1/4", "1/4D", "1/4T",
                                              "1/8", "1/8D", "1/8T", "1/16", "1/16D", "1/16T", "1/32", "1/32T", "1/64" };
-    const std::vector<std::string> modSrc { "None", "Amp Env", "Filter Env", "Mod Env", "Pitch Env", "LFO 1",
+    const std::vector<std::string> modSrc { "None", "Amp Env", "Env 1", "Env 2", "Env 3", "LFO 1",
                                             "LFO 2", "LFO 3", "Velocity", "Note", "Mod Wheel", "Aftertouch",
                                             "Pitch Bend", "Random", "Macro 1", "Macro 2", "Macro 3", "Macro 4",
                                             "Sweep" };
@@ -34,7 +34,7 @@ namespace choices
                                             "PW B", "WT Pos A", "WT Pos B", "FM A", "FM B", "Detune A", "Detune B",
                                             "A>B FM", "Level A", "Level B", "Sub Level", "Noise Level", "Ring Level",
                                             "F1 Cutoff", "F1 Reso", "F1 Drive", "F1 Vowel", "F2 Cutoff", "F2 Reso",
-                                            "Amp", "Pan", "LFO 1 Rate", "LFO 2 Rate", "LFO 3 Rate", "Pitch Env Amt",
+                                            "Amp", "Pan", "LFO 1 Rate", "LFO 2 Rate", "LFO 3 Rate", "Env 3 Amt",
                                             "F1 Env Amt", "F2 Drive", "F2 Env Amt",
                                             "Dist Drive", "Dist Mix", "Crush Mix", "Shift Freq", "Shift Mix", "Phaser Mix",
                                             "Chorus Mix", "Delay Feedback", "Delay Mix", "Reverb Size", "Reverb Mix", "Width" };

@@ -3,6 +3,7 @@
 #include "generator/Generator.h"
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_floating_point.hpp>
 
 #include <algorithm>
 
@@ -479,4 +480,36 @@ TEST_CASE ("Reverse basses swell into the beat and stop at their length, key hel
             CHECK (rmsAt (1.3 * beat, 4.0 * beat) < rmsAt (0.7 * beat, 0.95 * beat) - 30.0);   // then gone
             CHECK (out.peak > 0.1f);   // about level with the other basses
         }
+}
+
+TEST_CASE ("The mod view shows every sounding voice, the newest first", "[engine][notes]")
+{
+    ParamState p;
+    p.set (P::AenvA, 100.f);
+    p.set (P::Lfo1Retrig, 1.f);
+    p.set (P::Lfo1Phase, 0.f);
+    p.set (P::Lfo2Retrig, 0.f);
+    Engine e;
+    e.setParams (p);
+    e.prepare (48000.0, 480);
+    std::vector<float> l (480), r (480);
+    ModView v;
+
+    e.getModView (v);
+    CHECK (v.numVoices == 0);
+
+    const MidiEvent first[] = { on (60) };
+    e.process (l.data(), r.data(), 480, first, 1, 120.0);   // 10 ms
+    const MidiEvent second[] = { on (64) };
+    e.process (l.data(), r.data(), 480, second, 1, 120.0);
+    for (int i = 0; i < 3; ++i) e.process (l.data(), r.data(), 480, nullptr, 0, 120.0);   // 50 ms in all
+    e.getModView (v);
+    REQUIRE (v.numVoices == 2);
+    const auto attack = (uint8_t) dsp::Adsr::Stage::Attack;
+    CHECK (v.voices[0].env[0].stage == attack);
+    CHECK (v.voices[1].env[0].stage == attack);
+    CHECK (v.voices[0].env[0].pos < v.voices[1].env[0].pos);   // the newer note is less far in
+    CHECK_THAT (v.voices[1].env[0].pos, Catch::Matchers::WithinAbs (0.5, 0.05));
+    CHECK (v.voices[0].lfo[0] < v.voices[1].lfo[0]);            // retriggered per note
+    CHECK (v.voices[0].lfo[1] == v.voices[1].lfo[1]);           // free running: one LFO for all
 }

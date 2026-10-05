@@ -141,11 +141,11 @@ private:
 };
 
 // The energy sweep over the length: the level (fade) and the sweep curve,
-// with bar lines in Bars mode.
-class SweepDisplay : public DisplayBase
+// with bar lines in Bars mode, and where each sounding note is on it.
+class SweepDisplay : public LiveDisplay
 {
 public:
-    explicit SweepDisplay (PsyBoxProcessor& p) : DisplayBase (p) {}
+    explicit SweepDisplay (PsyBoxProcessor& p) : LiveDisplay (p) {}
 
 private:
     void paintContent (juce::Graphics&, juce::Rectangle<float>) override;
@@ -175,7 +175,7 @@ private:
 };
 
 // Basses: the knock, the fast pitch drop at the start of every note (the
-// pitch envelope, also on the modulators' Pitch Env page).
+// pitch envelope, also on the modulators' Env 3 page).
 class KnockPanel : public Section
 {
 public:

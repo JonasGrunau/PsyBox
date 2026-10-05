@@ -253,6 +253,8 @@ void PsyBoxProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
             outPeak[c].store (pk, std::memory_order_relaxed);
     }
     arpStep.store (engine.arpStep(), std::memory_order_relaxed);
+    if (const juce::SpinLock::ScopedTryLockType tl (modViewLock); tl.isLocked())
+        engine.getModView (modView);
 
     const auto& cm = engine.compMeter();
     const float fall = 45.f * (float) n / (float) getSampleRate();

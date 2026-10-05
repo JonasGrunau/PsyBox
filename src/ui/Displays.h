@@ -55,32 +55,50 @@ private:
     uint64_t fingerprint() const override;
 };
 
-class EnvDisplay : public DisplayBase
+// A curve with moving dots: where every sounding voice is on it, the newest
+// brightest and with a playhead (like Serum). Polls the voices at 60 Hz
+// while it is on screen and repaints only when a dot has moved.
+class LiveDisplay : public DisplayBase
 {
 public:
-    explicit EnvDisplay (PsyBoxProcessor& p) : DisplayBase (p) {}
+    explicit LiveDisplay (PsyBoxProcessor& p) : DisplayBase (p) { startTimerHz (60); }
+    void paint (juce::Graphics&) override;
+
+protected:
+    psy::ModView view;   // refreshed every tick
+    void timerCallback() override;
+    // Folds a dot's position into a fingerprint, so it repaints as it moves.
+    static uint64_t mixPos (uint64_t h, float pos);
+    void drawDot (juce::Graphics&, juce::Point<float>, bool newest, juce::Rectangle<float> area) const;
+};
+
+class EnvDisplay : public LiveDisplay
+{
+public:
+    explicit EnvDisplay (PsyBoxProcessor& p) : LiveDisplay (p) {}
     void setEnvelope (int index) { env = index; lastPrint = 0; repaint(); }
 
 private:
-    int env = 0;  // 0 amp, 1 filter, 2 mod
+    int env = 0;  // 0 amp, 1 env 1 (filter), 2 env 2 (mod)
     void paintContent (juce::Graphics&, juce::Rectangle<float>) override;
     uint64_t fingerprint() const override;
 };
 
-class PitchEnvDisplay : public DisplayBase
+// Env 3, the pitch envelope.
+class PitchEnvDisplay : public LiveDisplay
 {
 public:
-    explicit PitchEnvDisplay (PsyBoxProcessor& p) : DisplayBase (p) {}
+    explicit PitchEnvDisplay (PsyBoxProcessor& p) : LiveDisplay (p) {}
 
 private:
     void paintContent (juce::Graphics&, juce::Rectangle<float>) override;
     uint64_t fingerprint() const override;
 };
 
-class LfoDisplay : public DisplayBase
+class LfoDisplay : public LiveDisplay
 {
 public:
-    explicit LfoDisplay (PsyBoxProcessor& p) : DisplayBase (p) {}
+    explicit LfoDisplay (PsyBoxProcessor& p) : LiveDisplay (p) {}
     void setLfo (int index) { lfo = index; lastPrint = 0; repaint(); }
 
 private:

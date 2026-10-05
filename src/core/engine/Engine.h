@@ -31,6 +31,22 @@ struct Transport
     bool playing = false;   // ppq is only meaningful while playing
 };
 
+// Where the modulators of every sounding voice are, for the editor's moving
+// dots. Envelope stages follow dsp::Adsr::Stage (the pitch envelope uses
+// Attack and Decay, Idle once it is done); pos is how far into the stage.
+struct ModView
+{
+    struct Env { uint8_t stage = 0; float pos = 0.f; };
+    struct Voice
+    {
+        std::array<Env, 4> env {};            // amp, env 1 (filter), env 2 (mod), env 3 (pitch)
+        std::array<float, kNumLfos> lfo {};   // phase over two cycles, 0..2 (see dsp::Lfo::phase2)
+        float sweep = 0.f;                    // energy sweep, linear 0..1
+    };
+    std::array<Voice, kMaxVoices> voices {};
+    int numVoices = 0;                         // newest first
+};
+
 class Engine
 {
 public:
@@ -55,6 +71,7 @@ public:
     // For the GUI (approximate, read without locking).
     float lastPeak() const noexcept { return peak; }
     const dsp::CompMeter& compMeter() const noexcept { return comp.meter(); }
+    void getModView (ModView&) const noexcept;
 
 private:
     double fs = 48000.0;

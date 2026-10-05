@@ -210,10 +210,12 @@ slide. Voices run at 1x, 2x or 4x and come back through linear-phase half-band
 FIR decimators. Drive happens before decimation and uses antiderivative
 anti-aliasing.
 
-Amp, filter, mod and pitch envelopes (the amp's attack has a Curve: from an
-analog-style charge to a slow-then-fast swell), 3 LFOs (tempo sync, retrigger,
-S&H, smooth random), the energy Sweep, 4 macros and a 16-slot mod matrix whose
-targets include the effects.
+The amp envelope (its attack has a Curve: from an analog-style charge to a
+slow-then-fast swell) and Env 1 to 3 (Env 1 also drives the filters' Env knobs,
+Env 3 is the pitch envelope), 3 LFOs (tempo sync, retrigger, S&H, smooth
+random), the energy Sweep, 4 macros and a 16-slot mod matrix whose targets
+include the effects. The envelope, LFO and Sweep displays run live: a dot per
+sounding voice moves along the curve, the newest with a playhead.
 
 Arpeggiator (Arp view): Up, Down, Up/Down, Random and played order
 over 1 to 4 octaves, with rate, gate, swing and hold, playing a 16-step pattern

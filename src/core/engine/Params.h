@@ -75,6 +75,7 @@ enum class EnergyMode : int { Bars, Time };
 enum class KickClick : int { Noise, Tick, Blip };
 enum class KickDrive : int { Soft, Tube, Hard };
 
+// The editor calls the filter, mod and pitch envelopes Env 1, Env 2 and Env 3.
 enum class ModSrc : int
 {
     None, AmpEnv, FilterEnv, ModEnv, PitchEnv, Lfo1, Lfo2, Lfo3, Velocity, Note, ModWheel,
@@ -152,11 +153,11 @@ enum class ModDst : int
     X(NoiseDirect, "noise_direct", "Noise Direct","Mixer", Toggle, 0, 1, 0, 1.f, None, nullptr, false) \
     X(RingLevel,   "ring_level",   "Ring",        "Mixer", Linear, 0.f, 1.f, 0.f, 1.f, Percent, nullptr, true) \
     \
-    X(PenvAmt,     "penv_amt",     "Amount",      "Pitch Env", BiPower, -60.f, 60.f, 0.f, 2.f, Semi, nullptr, true) \
-    X(PenvAttack,  "penv_attack",  "Attack",      "Pitch Env", Power, 0.f, 4000.f, 0.f, 3.f, Ms, nullptr, false) \
-    X(PenvDecay,   "penv_decay",   "Decay",       "Pitch Env", Power, 1.f, 10000.f, 120.f, 3.f, Ms, nullptr, false) \
-    X(PenvCurve,   "penv_curve",   "Curve",       "Pitch Env", Linear, 0.f, 1.f, 0.7f, 1.f, Percent, nullptr, false) \
-    X(PenvDest,    "penv_dest",    "Target",      "Pitch Env", Choice, 0, 2, 0, 1.f, None, &choices::penvDest, false) \
+    X(PenvAmt,     "penv_amt",     "Amount",      "Env 3", BiPower, -60.f, 60.f, 0.f, 2.f, Semi, nullptr, true) \
+    X(PenvAttack,  "penv_attack",  "Attack",      "Env 3", Power, 0.f, 4000.f, 0.f, 3.f, Ms, nullptr, false) \
+    X(PenvDecay,   "penv_decay",   "Decay",       "Env 3", Power, 1.f, 10000.f, 120.f, 3.f, Ms, nullptr, false) \
+    X(PenvCurve,   "penv_curve",   "Curve",       "Env 3", Linear, 0.f, 1.f, 0.7f, 1.f, Percent, nullptr, false) \
+    X(PenvDest,    "penv_dest",    "Target",      "Env 3", Choice, 0, 2, 0, 1.f, None, &choices::penvDest, false) \
     \
     X(F1Type,      "f1_type",      "Type",        "Filter 1", Choice, 0, 19, 2, 1.f, None, &choices::filterType, false) \
     X(F1Cutoff,    "f1_cutoff",    "Cutoff",      "Filter 1", Exp, 20.f, 20000.f, 8000.f, 1.f, Hz, nullptr, true) \
@@ -179,14 +180,14 @@ enum class ModDst : int
     X(AenvS,       "aenv_s",       "Sustain",     "Amp Env", Linear, 0.f, 1.f, 0.8f, 1.f, Percent, nullptr, false) \
     X(AenvR,       "aenv_r",       "Release",     "Amp Env", Power, 1.f, 15000.f, 120.f, 3.f, Ms, nullptr, false) \
     X(AenvCurve,   "aenv_curve",   "Curve",       "Amp Env", Linear, 0.f, 1.f, 0.f, 1.f, Percent, nullptr, false) \
-    X(FenvA,       "fenv_a",       "Attack",      "Filter Env", Power, 0.f, 10000.f, 0.f, 3.f, Ms, nullptr, false) \
-    X(FenvD,       "fenv_d",       "Decay",       "Filter Env", Power, 1.f, 10000.f, 250.f, 3.f, Ms, nullptr, false) \
-    X(FenvS,       "fenv_s",       "Sustain",     "Filter Env", Linear, 0.f, 1.f, 0.f, 1.f, Percent, nullptr, false) \
-    X(FenvR,       "fenv_r",       "Release",     "Filter Env", Power, 1.f, 15000.f, 200.f, 3.f, Ms, nullptr, false) \
-    X(MenvA,       "menv_a",       "Attack",      "Mod Env", Power, 0.f, 10000.f, 0.f, 3.f, Ms, nullptr, false) \
-    X(MenvD,       "menv_d",       "Decay",       "Mod Env", Power, 1.f, 10000.f, 500.f, 3.f, Ms, nullptr, false) \
-    X(MenvS,       "menv_s",       "Sustain",     "Mod Env", Linear, 0.f, 1.f, 0.f, 1.f, Percent, nullptr, false) \
-    X(MenvR,       "menv_r",       "Release",     "Mod Env", Power, 1.f, 15000.f, 300.f, 3.f, Ms, nullptr, false) \
+    X(FenvA,       "fenv_a",       "Attack",      "Env 1", Power, 0.f, 10000.f, 0.f, 3.f, Ms, nullptr, false) \
+    X(FenvD,       "fenv_d",       "Decay",       "Env 1", Power, 1.f, 10000.f, 250.f, 3.f, Ms, nullptr, false) \
+    X(FenvS,       "fenv_s",       "Sustain",     "Env 1", Linear, 0.f, 1.f, 0.f, 1.f, Percent, nullptr, false) \
+    X(FenvR,       "fenv_r",       "Release",     "Env 1", Power, 1.f, 15000.f, 200.f, 3.f, Ms, nullptr, false) \
+    X(MenvA,       "menv_a",       "Attack",      "Env 2", Power, 0.f, 10000.f, 0.f, 3.f, Ms, nullptr, false) \
+    X(MenvD,       "menv_d",       "Decay",       "Env 2", Power, 1.f, 10000.f, 500.f, 3.f, Ms, nullptr, false) \
+    X(MenvS,       "menv_s",       "Sustain",     "Env 2", Linear, 0.f, 1.f, 0.f, 1.f, Percent, nullptr, false) \
+    X(MenvR,       "menv_r",       "Release",     "Env 2", Power, 1.f, 15000.f, 300.f, 3.f, Ms, nullptr, false) \
     \
     X(Lfo1Shape,   "lfo1_shape",   "Shape",       "LFO 1", Choice, 0, 6, 0, 1.f, None, &choices::lfoShape, false) \
     X(Lfo1Rate,    "lfo1_rate",    "Rate",        "LFO 1", Exp, 0.02f, 40.f, 2.f, 1.f, Hz, nullptr, true) \

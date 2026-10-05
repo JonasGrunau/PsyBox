@@ -1,5 +1,6 @@
 #include "Engine.h"
 
+#include <algorithm>
 #include <cstring>
 
 namespace psy
@@ -100,6 +101,32 @@ void Engine::reset()
     decimL.reset();
     decimR.reset();
     firstBlock = true;
+}
+
+void Engine::getModView (ModView& out) const noexcept
+{
+    std::array<int, kMaxVoices> order {};
+    int n = 0;
+    for (int i = 0; i < kMaxVoices; ++i)
+        if (voices[(size_t) i].isActive())
+            order[(size_t) n++] = i;
+    std::sort (order.begin(), order.begin() + n,
+               [this] (int a, int b) { return voices[(size_t) a].age > voices[(size_t) b].age; });
+
+    out.numVoices = n;
+    for (int k = 0; k < n; ++k)
+    {
+        const auto& v = voices[(size_t) order[(size_t) k]];
+        auto& o = out.voices[(size_t) k];
+        for (int e = 0; e < 3; ++e)
+            o.env[(size_t) e] = { (uint8_t) v.envelope (e).getStage(), v.envelope (e).stageProgress() };
+        const auto& pe = v.pitchEnvelope();
+        o.env[3] = { (uint8_t) pe.getStage(), pe.stageProgress() };
+        // a free-running LFO (Retrig off) is the same for every voice
+        for (int i = 0; i < kNumLfos; ++i)
+            o.lfo[(size_t) i] = cur.on (lfoParam (i, 4)) ? v.lfo (i).phase2() : globalLfos[(size_t) i].phase2();
+        o.sweep = v.sweepPhase();
+    }
 }
 
 int Engine::activeVoices() const noexcept

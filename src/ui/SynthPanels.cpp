@@ -205,14 +205,16 @@ void FilterPanel::resized()
 ModPanel::ModPanel (PsyBoxProcessor& p) : Section ("Modulation"), proc (p), envDisplay (p), pitchDisplay (p), lfoDisplay (p)
 {
     using S = psy::ModSrc;
-    const std::pair<S, const char*> tabList[kNumPages] = { { S::AmpEnv, "Amp Env" }, { S::FilterEnv, "Filter Env" },
-                                                           { S::ModEnv, "Mod Env" }, { S::PitchEnv, "Pitch Env" },
+    const std::pair<S, const char*> tabList[kNumPages] = { { S::AmpEnv, "Amp Env" }, { S::FilterEnv, "Env 1" },
+                                                           { S::ModEnv, "Env 2" }, { S::PitchEnv, "Env 3" },
                                                            { S::Lfo1, "LFO 1" }, { S::Lfo2, "LFO 2" }, { S::Lfo3, "LFO 3" } };
     for (int i = 0; i < kNumPages; ++i)
     {
         auto t = std::make_unique<ModSourceHandle> (p, tabList[i].first, tabList[i].second);
         t->setTab (true);
-        t->setTooltip ("Click to edit " + juce::String (tabList[i].second) + ", drag onto a knob to modulate it");
+        static const char* const also[kNumPages] = { "", " (it also drives the filters' Env knobs)", "",
+                                                     " (it also bends the pitch by its Amount)", "", "", "" };
+        t->setTooltip ("Click to edit " + juce::String (tabList[i].second) + also[i] + ", drag onto a knob to modulate it");
         t->onClick = [this, i] { show (i); };
         addAndMakeVisible (*t);
         tabs.push_back (std::move (t));
@@ -537,8 +539,11 @@ void VoicingPanel::resized()
 // ---------------------------------------------------------------------------
 uint64_t SweepDisplay::fingerprint() const
 {
-    return hashParams ({ P::EnergyMode, P::EnergyBars, P::EnergySec, P::EnergyCurve, P::EnergyFade, P::EnergyCut })
-         ^ (uint64_t) std::lround (proc.getBpm() * 100.0);
+    uint64_t h = hashParams ({ P::EnergyMode, P::EnergyBars, P::EnergySec, P::EnergyCurve, P::EnergyFade, P::EnergyCut })
+               ^ (uint64_t) std::lround (proc.getBpm() * 100.0);
+    for (int k = 0; k < view.numVoices; ++k)
+        h = mixPos (h, view.voices[(size_t) k].sweep);
+    return h;
 }
 
 void SweepDisplay::paintContent (juce::Graphics& g, juce::Rectangle<float> r)
@@ -591,6 +596,13 @@ void SweepDisplay::paintContent (juce::Graphics& g, juce::Rectangle<float> r)
     g.strokePath (level, juce::PathStrokeType (1.4f));
     g.setColour (col::text.withAlpha (0.5f));
     g.strokePath (sweepPath, juce::PathStrokeType (1.f));
+
+    // the notes, on the sweep
+    for (int k = view.numVoices - 1; k >= 0; --k)
+    {
+        const float t = view.voices[(size_t) k].sweep;
+        drawDot (g, { area.getX() + lenW * t, area.getBottom() - area.getHeight() * std::pow (t, ex) }, k == 0, r);
+    }
 
     // readout: the length in both units
     g.setColour (col::textDim);

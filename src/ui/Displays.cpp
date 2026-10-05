@@ -78,6 +78,47 @@ namespace
 } // namespace
 
 // ---------------------------------------------------------------------------
+// LiveDisplay
+// ---------------------------------------------------------------------------
+void LiveDisplay::timerCallback()
+{
+    if (! isShowing()) return;
+    proc.getModView (view);
+    DisplayBase::timerCallback();
+}
+
+void LiveDisplay::paint (juce::Graphics& g)
+{
+    proc.getModView (view);   // the newest positions (also when painted off screen, as in snapshots)
+    DisplayBase::paint (g);
+}
+
+uint64_t LiveDisplay::mixPos (uint64_t h, float pos)
+{
+    return (h ^ (uint64_t) std::lround (pos * 4096.f)) * 1099511628211ULL;
+}
+
+void LiveDisplay::drawDot (juce::Graphics& g, juce::Point<float> pt, bool newest, juce::Rectangle<float> area) const
+{
+    const auto acc = accent();
+    const auto box = [pt] (float d) { return juce::Rectangle<float> (d, d).withCentre (pt); };
+    if (! newest)
+    {
+        g.setColour (acc.withAlpha (0.6f));
+        g.fillEllipse (box (5.f));
+        return;
+    }
+    g.setColour (acc.withAlpha (0.35f));
+    g.fillRect (pt.x - 0.5f, area.getY(), 1.f, area.getHeight());   // playhead
+    g.setColour (acc.withAlpha (0.22f));
+    g.fillEllipse (box (15.f));                                       // glow
+    g.setColour (col::text);
+    g.fillEllipse (box (7.f));
+    g.setColour (acc);
+    g.drawEllipse (box (7.f), 1.5f);
+}
+
+// ---------------------------------------------------------------------------
 // WaveDisplay
 // ---------------------------------------------------------------------------
 WaveDisplay::WaveDisplay (PsyBoxProcessor& p, bool b) : DisplayBase (p), isB (b) {}
@@ -264,8 +305,14 @@ void FilterDisplay::paintContent (juce::Graphics& g, juce::Rectangle<float> r)
 // ---------------------------------------------------------------------------
 uint64_t EnvDisplay::fingerprint() const
 {
-    return hashParams ({ P::AenvA, P::AenvD, P::AenvS, P::AenvR, P::AenvCurve, P::FenvA, P::FenvD, P::FenvS, P::FenvR,
-                         P::MenvA, P::MenvD, P::MenvS, P::MenvR }) + (uint64_t) env;
+    uint64_t h = hashParams ({ P::AenvA, P::AenvD, P::AenvS, P::AenvR, P::AenvCurve, P::FenvA, P::FenvD, P::FenvS, P::FenvR,
+                               P::MenvA, P::MenvD, P::MenvS, P::MenvR }) + (uint64_t) env;
+    for (int k = 0; k < view.numVoices; ++k)
+    {
+        const auto& e = view.voices[(size_t) k].env[(size_t) env];
+        h = mixPos (h, (float) e.stage + e.pos);
+    }
+    return h;
 }
 
 void EnvDisplay::paintContent (juce::Graphics& g, juce::Rectangle<float> r)
@@ -312,12 +359,33 @@ void EnvDisplay::paintContent (juce::Graphics& g, juce::Rectangle<float> r)
     for (auto pt : { juce::Point<float> (X (tw (a)), Y (1.f)), juce::Point<float> (X (tw (a) + tw (d)), Y (s)),
                      juce::Point<float> (X (tw (a) + tw (d) + hold), Y (s)) })
         g.fillEllipse (pt.x - 2.5f, pt.y - 2.5f, 5.f, 5.f);
+
+    // the voices, on the curve: x from how far into its stage each one is
+    using Stage = psy::dsp::Adsr::Stage;
+    for (int k = view.numVoices - 1; k >= 0; --k)
+    {
+        const auto& e = view.voices[(size_t) k].env[(size_t) env];
+        const float u = e.pos;
+        juce::Point<float> pt;
+        switch ((Stage) e.stage)
+        {
+            case Stage::Attack:  pt = { X (tw (a) * u), Y (psy::dsp::attackShape (u, bend)) }; break;
+            case Stage::Decay:   pt = { X (tw (a) + tw (d) * u), Y (s + (1.f - s) * std::exp (-u * 5.f)) }; break;
+            case Stage::Sustain: pt = { X (tw (a) + tw (d)), Y (s) }; break;
+            case Stage::Release: pt = { X (tw (a) + tw (d) + hold + tw (rel) * u), Y (s * std::exp (-u * 5.f) * (1.f - u)) }; break;
+            case Stage::Idle:    continue;
+        }
+        drawDot (g, pt, k == 0, r);
+    }
 }
 
 // ---------------------------------------------------------------------------
 uint64_t PitchEnvDisplay::fingerprint() const
 {
-    return hashParams ({ P::PenvAmt, P::PenvAttack, P::PenvDecay, P::PenvCurve });
+    uint64_t h = hashParams ({ P::PenvAmt, P::PenvAttack, P::PenvDecay, P::PenvCurve });
+    for (int k = 0; k < view.numVoices; ++k)
+        h = mixPos (h, (float) view.voices[(size_t) k].env[3].stage + view.voices[(size_t) k].env[3].pos);
+    return h;
 }
 
 void PitchEnvDisplay::paintContent (juce::Graphics& g, juce::Rectangle<float> r)
@@ -339,12 +407,25 @@ void PitchEnvDisplay::paintContent (juce::Graphics& g, juce::Rectangle<float> r)
     }
     p.lineTo (X (total), Y (0));
     strokeCurve (g, p, area, false);
+
+    // the voices: attack, decay, then resting at the end while the note sounds
+    for (int k = view.numVoices - 1; k >= 0; --k)
+    {
+        const auto& e = view.voices[(size_t) k].env[3];
+        const auto pt = e.stage == 1 ? juce::Point<float> (X (a * e.pos), Y (amt * e.pos))
+                      : e.stage == 2 ? juce::Point<float> (X (a + d * e.pos), Y (amt * std::pow (1.f - e.pos, 1.f + c * 7.f)))
+                                     : juce::Point<float> (X (a + d), Y (0));
+        drawDot (g, pt, k == 0, r);
+    }
 }
 
 // ---------------------------------------------------------------------------
 uint64_t LfoDisplay::fingerprint() const
 {
-    return hashParams ({ psy::lfoParam (lfo, 0), psy::lfoParam (lfo, 5) }) + (uint64_t) lfo * 31u;
+    uint64_t h = hashParams ({ psy::lfoParam (lfo, 0), psy::lfoParam (lfo, 5) }) + (uint64_t) lfo * 31u;
+    for (int k = 0; k < view.numVoices; ++k)
+        h = mixPos (h, view.voices[(size_t) k].lfo[(size_t) lfo]);
+    return h;
 }
 
 void LfoDisplay::paintContent (juce::Graphics& g, juce::Rectangle<float> r)
@@ -358,34 +439,45 @@ void LfoDisplay::paintContent (juce::Graphics& g, juce::Rectangle<float> r)
     float held[4], rands[5];
     for (auto& v : rands) v = rng.bipolar();
     for (int i = 0; i < 4; ++i) held[i] = rands[i + 1];
-    const int n = 200;
-    for (int i = 0; i <= n; ++i)
-    {
-        const float t = 2.f * (float) i / (float) n + phase;
+    // two cycles from the start phase: x 0..1 across the display
+    const auto valueAt = [&] (float x) {
+        const float t = 2.f * x + phase;
         const float ph = t - std::floor (t);
         const int cyc = std::min (3, (int) t);
-        float v;
         switch (shape)
         {
-            case 0: v = std::sin (psy::dsp::kTwoPi * ph); break;
-            case 1: v = ph < 0.25f ? 4.f * ph : (ph < 0.75f ? 2.f - 4.f * ph : 4.f * ph - 4.f); break;
-            case 2: v = 2.f * ph - 1.f; break;
-            case 3: v = 1.f - 2.f * ph; break;
-            case 4: v = ph < 0.5f ? 1.f : -1.f; break;
-            case 5: v = held[cyc]; break;
+            case 0: return std::sin (psy::dsp::kTwoPi * ph);
+            case 1: return ph < 0.25f ? 4.f * ph : (ph < 0.75f ? 2.f - 4.f * ph : 4.f * ph - 4.f);
+            case 2: return 2.f * ph - 1.f;
+            case 3: return 1.f - 2.f * ph;
+            case 4: return ph < 0.5f ? 1.f : -1.f;
+            case 5: return held[cyc];
             default:
             {
                 const float s = 0.5f - 0.5f * std::cos (psy::dsp::kPi * ph);
-                v = rands[cyc] + (rands[cyc + 1] - rands[cyc]) * s;
-                break;
+                return rands[cyc] + (rands[cyc + 1] - rands[cyc]) * s;
             }
         }
-        const float x = area.getX() + area.getWidth() * (float) i / (float) n;
-        const float y = area.getCentreY() - v * area.getHeight() * 0.5f;
-        if (i == 0) p.startNewSubPath (x, y);
-        else p.lineTo (x, y);
+    };
+    const auto pointAt = [&] (float x) {
+        return juce::Point<float> (area.getX() + area.getWidth() * x, area.getCentreY() - valueAt (x) * area.getHeight() * 0.5f);
+    };
+    const int n = 200;
+    for (int i = 0; i <= n; ++i)
+    {
+        const auto pt = pointAt ((float) i / (float) n);
+        if (i == 0) p.startNewSubPath (pt);
+        else p.lineTo (pt);
     }
     strokeCurve (g, p, area, false);
+
+    // the voices; a free-running LFO is one for all of them
+    const bool perVoice = proc.plain (psy::lfoParam (lfo, 4)) > 0.5f;
+    for (int k = perVoice ? view.numVoices - 1 : std::min (view.numVoices, 1) - 1; k >= 0; --k)
+    {
+        const float x = std::fmod (view.voices[(size_t) k].lfo[(size_t) lfo] - phase + 2.f, 2.f) * 0.5f;
+        drawDot (g, pointAt (x), k == 0, r);
+    }
 }
 
 // ---------------------------------------------------------------------------
