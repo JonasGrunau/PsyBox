@@ -159,10 +159,38 @@ Segmented::Segmented (PsyBoxProcessor& p, P prm, juce::StringArray l)
     attachment.sendInitialUpdate();
 }
 
+// Equal segments while every label keeps sp::sm of room on each side;
+// otherwise each segment is its label plus an equal share of the spare
+// width, so a long label ("Rectify", "Normal") doesn't touch the pill.
+std::vector<float> Segmented::segmentWidths (float total) const
+{
+    const auto f = heading (9.5f);
+    const float n = (float) labels.size();
+    std::vector<float> text;
+    float sum = 0.f, widest = 0.f;
+    for (const auto& l : labels)
+    {
+        text.push_back (juce::GlyphArrangement::getStringWidth (f, l.toUpperCase()));
+        sum += text.back();
+        widest = juce::jmax (widest, text.back());
+    }
+    if (total / n - widest >= 2.f * (float) sp::sm)
+        return std::vector<float> ((size_t) labels.size(), total / n);
+    const float share = (total - sum) / n;
+    for (auto& w : text) w += share;
+    return text;
+}
+
 int Segmented::indexAt (juce::Point<int> pt) const
 {
-    const float w = (float) getWidth() / (float) labels.size();
-    return juce::jlimit (0, labels.size() - 1, (int) ((float) pt.x / w));
+    float x = 0.f;
+    const auto w = segmentWidths ((float) getWidth());
+    for (int i = 0; i < labels.size() - 1; ++i)
+    {
+        x += w[(size_t) i];
+        if ((float) pt.x < x) return i;
+    }
+    return labels.size() - 1;
 }
 
 void Segmented::paint (juce::Graphics& g)
@@ -170,11 +198,13 @@ void Segmented::paint (juce::Graphics& g)
     const auto b = getLocalBounds().toFloat().reduced (0.5f);
     g.setColour (col::lineStrong);
     g.drawRoundedRectangle (b, 3.f, 1.f);
-    const float w = b.getWidth() / (float) labels.size();
+    const auto w = segmentWidths (b.getWidth());
     g.setFont (heading (9.5f));
+    float x = b.getX();
     for (int i = 0; i < labels.size(); ++i)
     {
-        const auto seg = juce::Rectangle<float> (b.getX() + w * (float) i, b.getY(), w, b.getHeight());
+        const auto seg = juce::Rectangle<float> (x, b.getY(), w[(size_t) i], b.getHeight());
+        x += w[(size_t) i];
         if (i == selected)
         {
             g.setColour (accent().withAlpha (0.16f));

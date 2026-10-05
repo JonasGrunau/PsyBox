@@ -957,28 +957,28 @@ void FxPanel::timerCallback()
 void FxPanel::layoutComp (const CellGrid& gr)
 {
     pages[Comp].on->setBounds (gr.cell (0, 1));
-    compMode->setBounds (gr.control (1, 1, 2));
+    compMode->setBounds (gr.control (1, 1, 3));   // three cells, like the other pages' mode selectors
 
-    // Normal: Thresh Ratio Knee | Attack Release Mix, Output under Mix.
-    // Multi:  Low Mid High (band gains) | Attack Release Depth, Down Up Output below.
+    // Normal: Thresh Ratio Knee | Attack Release Mix Output.
+    // Multi:  Low Mid High (band gains) | Attack Release Depth Output, Down Up under Release Depth.
     const auto at = [&] (juce::Component* c, int col, int row) { c->setBounds (gr.cell (col, row)); };
     for (int i = 0; i < 3; ++i) at (compNormal[(size_t) i], i, 0);
     at (compNormal[3], 5, 0);
     for (int i = 0; i < 4; ++i) at (compMulti[(size_t) i], i < 3 ? i : 5, 0);
-    at (compMulti[4], 3, 1);
-    at (compMulti[5], 4, 1);
+    at (compMulti[4], 4, 1);
+    at (compMulti[5], 5, 1);
     for (auto* c : pages[Comp].items)
         if (auto* k = dynamic_cast<ParamKnob*> (c))
         {
             if (k->getParam() == P::CompAttack) at (k, 3, 0);
             else if (k->getParam() == P::CompRelease) at (k, 4, 0);
-            else if (k->getParam() == P::CompOut) at (k, 5, 1);
+            else if (k->getParam() == P::CompOut) at (k, 6, 0);
         }
 
     // The display takes the rest of the body, both rows.
-    const auto top = gr.cell (6, 0);
+    const auto top = gr.cell (7, 0);
     compDisplay->setBounds (juce::Rectangle<int>::leftTopRightBottom (top.getX() + kCellInset, top.getY(), body().getRight(),
-                                                                       gr.cell (6, 1).getBottom()));
+                                                                       gr.cell (7, 1).getBottom()));
 }
 
 void FxPanel::resized()

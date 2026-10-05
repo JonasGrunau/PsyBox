@@ -70,6 +70,7 @@ private:
     juce::ParameterAttachment attachment;
 
     int indexAt (juce::Point<int>) const;
+    std::vector<float> segmentWidths (float total) const;
 };
 
 // ---------------------------------------------------------------------------
