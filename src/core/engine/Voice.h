@@ -53,6 +53,9 @@ public:
 
     float currentPitchSemis() const noexcept { return pitchNow; }
     float ampLevel() const noexcept { return amp.value(); }
+    // Mod source values at the end of the last render (effect modulation
+    // follows the newest voice).
+    const std::array<float, (size_t) ModSrc::Count>& sources() const noexcept { return srcNow; }
 
 private:
     dsp::AnalogOsc anA, anB, sub;
@@ -66,6 +69,7 @@ private:
     std::array<dsp::Lfo, kNumLfos> lfos;
     dsp::Rng rng;
 
+    std::array<float, (size_t) ModSrc::Count> srcNow {};
     double syncPhase = 0.0;
     int note = 60;
     float velocity = 1.f, randomVal = 0.f;

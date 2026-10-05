@@ -102,6 +102,13 @@ private:
     dsp::StereoWidth width;
     std::array<dsp::DcBlocker, 2> outDc;
 
+    // Matrix slots that target an effect, and the patch the effects play
+    // (the smoothed patch plus those modulations).
+    std::array<VoiceContext::Slot, kNumModSlots> fxSlots {};
+    int numFxSlots = 0;
+    ParamState fxParams;
+    int leadVoice = -1;   // the newest note; effect modulation follows its envelopes
+
     float peak = 0.f;
 
     void applyQuality();
@@ -123,7 +130,8 @@ private:
     void followEngineMode() noexcept;
     Voice& allocateVoice (bool& stolen) noexcept;
     void renderVoices (int offset, int n) noexcept;
-    void processFx (float* l, float* r, int n, double bpm) noexcept;
+    void processFx (float* l, float* r, int n, double bpm, const ParamState& p) noexcept;
+    void modulateFx (int sampleInBlock) noexcept;   // fills fxParams
 };
 
 } // namespace psy

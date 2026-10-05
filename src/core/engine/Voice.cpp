@@ -211,7 +211,6 @@ void Voice::render (float* outL, float* outR, int chunkOffsetBase, int nBase, co
         src[(size_t) ModSrc::Macro2] = p.get (P::Macro2);
         src[(size_t) ModSrc::Macro3] = p.get (P::Macro3);
         src[(size_t) ModSrc::Macro4] = p.get (P::Macro4);
-
         mod.fill (0.f);
         for (int s = 0; s < ctx.numSlots; ++s)
         {
@@ -272,9 +271,9 @@ void Voice::render (float* outL, float* outR, int chunkOffsetBase, int nBase, co
         }
         if (f2Type != 0)
         {
-            const float oct = p.get (P::F2Env) * 8.f * fEnv * accentEnv + p.get (P::F2Key) * keyOct + M (ModDst::F2Cutoff) * 8.f;
+            const float oct = (p.get (P::F2Env) + M (ModDst::F2EnvAmt)) * 8.f * fEnv * accentEnv + p.get (P::F2Key) * keyOct + M (ModDst::F2Cutoff) * 8.f;
             f2.update (p.get (P::F2Cutoff) * std::exp2 (oct), clamp01 (p.get (P::F2Reso) + M (ModDst::F2Reso)),
-                       p.get (P::F2Drive), clamp01 (p.get (P::F1Vowel) + M (ModDst::F1Vowel)));
+                       clamp01 (p.get (P::F2Drive) + M (ModDst::F2Drive)), clamp01 (p.get (P::F1Vowel) + M (ModDst::F1Vowel)));
         }
 
         const float gain = aEnv * velGain * accentGain * std::clamp (1.f + M (ModDst::Amp), 0.f, 2.f) * 0.5f;
@@ -326,6 +325,7 @@ void Voice::render (float* outL, float* outR, int chunkOffsetBase, int nBase, co
             outL[base + j] += y * gL;
             outR[base + j] += y * gR;
         }
+        if (n == nBase - 1) srcNow = src;
     }
 }
 

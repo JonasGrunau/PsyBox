@@ -82,7 +82,13 @@ enum class ModDst : int
     None, PitchAll, PitchA, PitchB, ShapeA, ShapeB, PwA, PwB, WtPosA, WtPosB, FmA, FmB,
     DetuneA, DetuneB, XMod, LevelA, LevelB, SubLevel, NoiseLevel, RingLevel,
     F1Cutoff, F1Reso, F1Drive, F1Vowel, F2Cutoff, F2Reso, Amp, Pan,
-    Lfo1Rate, Lfo2Rate, Lfo3Rate, PitchEnvAmt, FilterEnvAmt, Count
+    Lfo1Rate, Lfo2Rate, Lfo3Rate, PitchEnvAmt, FilterEnvAmt,
+    F2Drive, F2EnvAmt,
+    // Effects: one instance for all voices. Global sources (macros, wheel,
+    // free LFOs) drive them directly; per-voice sources follow the newest note.
+    DistDrive, DistMix, CrushMix, ShiftHz, ShiftMix, PhaserMix, ChorusMix,
+    DelayFb, DelayMix, ReverbSize, ReverbMix, WidthAmount,
+    Count
 };
 
 // ---- the table -----------------------------------------------------------
@@ -193,30 +199,10 @@ enum class ModDst : int
     X(Lfo3Retrig,  "lfo3_retrig",  "Retrig",      "LFO 3", Toggle, 0, 1, 1, 1.f, None, nullptr, false) \
     X(Lfo3Phase,   "lfo3_phase",   "Phase",       "LFO 3", Linear, 0.f, 1.f, 0.f, 1.f, Percent, nullptr, false) \
     \
-    X(Mod1Src, "mod1_src", "Source", "Mod 1", Choice, 0, 17, 0, 1.f, None, &choices::modSrc, false) \
-    X(Mod1Dst, "mod1_dst", "Target", "Mod 1", Choice, 0, 32, 0, 1.f, None, &choices::modDst, false) \
-    X(Mod1Amt, "mod1_amt", "Amount", "Mod 1", BiPower, -1.f, 1.f, 0.f, 1.5f, Percent, nullptr, false) \
-    X(Mod2Src, "mod2_src", "Source", "Mod 2", Choice, 0, 17, 0, 1.f, None, &choices::modSrc, false) \
-    X(Mod2Dst, "mod2_dst", "Target", "Mod 2", Choice, 0, 32, 0, 1.f, None, &choices::modDst, false) \
-    X(Mod2Amt, "mod2_amt", "Amount", "Mod 2", BiPower, -1.f, 1.f, 0.f, 1.5f, Percent, nullptr, false) \
-    X(Mod3Src, "mod3_src", "Source", "Mod 3", Choice, 0, 17, 0, 1.f, None, &choices::modSrc, false) \
-    X(Mod3Dst, "mod3_dst", "Target", "Mod 3", Choice, 0, 32, 0, 1.f, None, &choices::modDst, false) \
-    X(Mod3Amt, "mod3_amt", "Amount", "Mod 3", BiPower, -1.f, 1.f, 0.f, 1.5f, Percent, nullptr, false) \
-    X(Mod4Src, "mod4_src", "Source", "Mod 4", Choice, 0, 17, 0, 1.f, None, &choices::modSrc, false) \
-    X(Mod4Dst, "mod4_dst", "Target", "Mod 4", Choice, 0, 32, 0, 1.f, None, &choices::modDst, false) \
-    X(Mod4Amt, "mod4_amt", "Amount", "Mod 4", BiPower, -1.f, 1.f, 0.f, 1.5f, Percent, nullptr, false) \
-    X(Mod5Src, "mod5_src", "Source", "Mod 5", Choice, 0, 17, 0, 1.f, None, &choices::modSrc, false) \
-    X(Mod5Dst, "mod5_dst", "Target", "Mod 5", Choice, 0, 32, 0, 1.f, None, &choices::modDst, false) \
-    X(Mod5Amt, "mod5_amt", "Amount", "Mod 5", BiPower, -1.f, 1.f, 0.f, 1.5f, Percent, nullptr, false) \
-    X(Mod6Src, "mod6_src", "Source", "Mod 6", Choice, 0, 17, 0, 1.f, None, &choices::modSrc, false) \
-    X(Mod6Dst, "mod6_dst", "Target", "Mod 6", Choice, 0, 32, 0, 1.f, None, &choices::modDst, false) \
-    X(Mod6Amt, "mod6_amt", "Amount", "Mod 6", BiPower, -1.f, 1.f, 0.f, 1.5f, Percent, nullptr, false) \
-    X(Mod7Src, "mod7_src", "Source", "Mod 7", Choice, 0, 17, 0, 1.f, None, &choices::modSrc, false) \
-    X(Mod7Dst, "mod7_dst", "Target", "Mod 7", Choice, 0, 32, 0, 1.f, None, &choices::modDst, false) \
-    X(Mod7Amt, "mod7_amt", "Amount", "Mod 7", BiPower, -1.f, 1.f, 0.f, 1.5f, Percent, nullptr, false) \
-    X(Mod8Src, "mod8_src", "Source", "Mod 8", Choice, 0, 17, 0, 1.f, None, &choices::modSrc, false) \
-    X(Mod8Dst, "mod8_dst", "Target", "Mod 8", Choice, 0, 32, 0, 1.f, None, &choices::modDst, false) \
-    X(Mod8Amt, "mod8_amt", "Amount", "Mod 8", BiPower, -1.f, 1.f, 0.f, 1.5f, Percent, nullptr, false) \
+    PSY_MOD_SLOT (X, 1)  PSY_MOD_SLOT (X, 2)  PSY_MOD_SLOT (X, 3)  PSY_MOD_SLOT (X, 4) \
+    PSY_MOD_SLOT (X, 5)  PSY_MOD_SLOT (X, 6)  PSY_MOD_SLOT (X, 7)  PSY_MOD_SLOT (X, 8) \
+    PSY_MOD_SLOT (X, 9)  PSY_MOD_SLOT (X, 10) PSY_MOD_SLOT (X, 11) PSY_MOD_SLOT (X, 12) \
+    PSY_MOD_SLOT (X, 13) PSY_MOD_SLOT (X, 14) PSY_MOD_SLOT (X, 15) PSY_MOD_SLOT (X, 16) \
     X(Macro1,  "macro1",   "Macro 1", "Macros", Linear, 0.f, 1.f, 0.f, 1.f, Percent, nullptr, false) \
     X(Macro2,  "macro2",   "Macro 2", "Macros", Linear, 0.f, 1.f, 0.f, 1.f, Percent, nullptr, false) \
     X(Macro3,  "macro3",   "Macro 3", "Macros", Linear, 0.f, 1.f, 0.f, 1.f, Percent, nullptr, false) \
@@ -327,6 +313,12 @@ enum class ModDst : int
     X(KickDrive,   "kick_drive",   "Drive",       "Kick Drive", Linear, -30.f, 30.f, -27.f, 1.f, Db, nullptr, false) \
     X(KickTone,    "kick_tone",    "Tone",        "Kick Drive", Exp, 200.f, 20000.f, 20000.f, 1.f, Hz, nullptr, false)
 
+// One modulation slot: source, target, bipolar amount.
+#define PSY_MOD_SLOT(X, n) \
+    X(Mod##n##Src, "mod" #n "_src", "Source", "Mod " #n, Choice, 0, 17, 0, 1.f, None, &choices::modSrc, false) \
+    X(Mod##n##Dst, "mod" #n "_dst", "Target", "Mod " #n, Choice, 0, 46, 0, 1.f, None, &choices::modDst, false) \
+    X(Mod##n##Amt, "mod" #n "_amt", "Amount", "Mod " #n, BiPower, -1.f, 1.f, 0.f, 1.5f, Percent, nullptr, false)
+
 // One step of the arp pattern: plays, accented, slides into the next step.
 #define PSY_ARP_STEP(X, n) \
     X(ArpStep##n,  "arp_step" #n,  "Step " #n,   "Arp", Toggle, 0, 1, 1, 1.f, None, nullptr, false) \
@@ -342,7 +334,7 @@ enum class P : int
 };
 
 constexpr int kNumParams = (int) P::Count;
-constexpr int kNumModSlots = 8;
+constexpr int kNumModSlots = 16;
 constexpr int kNumLfos = 3;
 constexpr int kMaxVoices = 16;
 
@@ -359,6 +351,17 @@ inline P lfoParam (int lfo, int offset) noexcept { return (P) ((int) P::Lfo1Shap
 inline P mbDownParam (int band) noexcept { return (P) ((int) P::MbLowDown + band); }
 inline P mbUpParam (int band) noexcept { return (P) ((int) P::MbLowUp + band); }
 inline P mbGainParam (int band) noexcept { return (P) ((int) P::MbLowGain + band); }
+
+// Modulation targets and the knobs they sit on. Drag-and-drop and the
+// rings around modulated knobs go through these.
+P modTargetParam (ModDst d) noexcept;   // P::Count when the target has no knob (Pitch, Amp, Pan)
+ModDst modTargetFor (P p) noexcept;     // ModDst::None when the knob can't be modulated
+// How far an amount of 1.0 moves the target, as a share of its knob's
+// travel (exact for effects, approximate for the voice targets).
+float modDepthNorm (ModDst d) noexcept;
+// Effect targets are modulated in their parameter's normalised range, once
+// for all voices, after the voices are mixed.
+constexpr bool isFxTarget (ModDst d) noexcept { return (int) d >= (int) ModDst::DistDrive && d != ModDst::Count; }
 
 // Arp pattern lanes, per step: plays, accent, slide (see PSY_ARP_STEP).
 constexpr int kArpSteps = 16;

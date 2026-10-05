@@ -383,3 +383,24 @@ TEST_CASE ("Basses and kicks never get an arp", "[generator][arp]")
                         CHECK (p.v[(size_t) i] == ParamState().v[(size_t) i]);
             }
 }
+
+TEST_CASE ("The mod matrix lists match their enums, and targets map to knobs both ways", "[params]")
+{
+    CHECK ((int) choices::modSrc.size() == (int) ModSrc::Count);
+    CHECK ((int) choices::modDst.size() == (int) ModDst::Count);
+    for (int s = 0; s < kNumModSlots; ++s)
+    {
+        CHECK ((int) def (modSrcParam (s)).max == (int) ModSrc::Count - 1);
+        CHECK ((int) def (modDstParam (s)).max == (int) ModDst::Count - 1);
+        CHECK (std::string_view (def (modAmtParam (s)).name) == "Amount");
+    }
+    for (int d = 1; d < (int) ModDst::Count; ++d)
+    {
+        const P knob = modTargetParam ((ModDst) d);
+        if (knob == P::Count) continue;   // Pitch, Amp, Pan: matrix only
+        INFO (choices::modDst[(size_t) d]);
+        CHECK (modTargetFor (knob) == (ModDst) d);
+        CHECK (modDepthNorm ((ModDst) d) > 0.f);
+    }
+    CHECK (modTargetFor (P::AenvA) == ModDst::None);
+}

@@ -68,6 +68,40 @@ namespace
     }
 } // namespace
 
+namespace
+{
+    // One note held for `seconds`, at 145 BPM.
+    Render hold (const ParamState& state, double seconds, double noteSeconds = -1.0, int note = 48, double bpm = 145.0)
+    {
+        Engine e;
+        e.setParams (state);
+        e.prepare (48000.0, 256);
+        Render out;
+        const int total = (int) (seconds * 48000.0);
+        const int off = noteSeconds < 0.0 ? total + 1 : (int) (noteSeconds * 48000.0);
+        out.l.assign ((size_t) total, 0.f);
+        out.r.assign ((size_t) total, 0.f);
+        for (int pos = 0; pos < total; pos += 256)
+        {
+            const int n = std::min (256, total - pos);
+            std::vector<MidiEvent> ev;
+            if (pos == 0) ev.push_back ({ 0, MidiEvent::NoteOn, note, 0.8f });
+            if (off >= pos && off < pos + n) ev.push_back ({ off - pos, MidiEvent::NoteOff, note, 0.f });
+            e.process (out.l.data() + pos, out.r.data() + pos, n, ev.data(), (int) ev.size(), bpm);
+        }
+        double s = 0.0;
+        for (size_t i = 0; i < out.l.size(); ++i)
+        {
+            REQUIRE (std::isfinite (out.l[i]));
+            REQUIRE (std::isfinite (out.r[i]));
+            out.peak = std::max ({ out.peak, std::abs (out.l[i]), std::abs (out.r[i]) });
+            s += (double) out.l[i] * out.l[i];
+        }
+        out.rmsDb = 10.0 * std::log10 (s / (double) out.l.size() + 1e-20);
+        return out;
+    }
+} // namespace
+
 TEST_CASE ("Init patch makes sound on a note and goes silent after release", "[engine]")
 {
     ParamState p;
@@ -288,4 +322,24 @@ TEST_CASE ("Noise Direct adds the noise after the filters", "[engine]")
     };
     CHECK (highShare (false) < 1e-4);
     CHECK (highShare (true) > 0.3);
+}
+
+TEST_CASE ("Effects follow their matrix modulation", "[engine][fx]")
+{
+    ParamState p;
+    p.set (P::AenvR, 5.f);
+    p.set (P::ReverbOn, 1.f);
+    p.set (P::ReverbMix, 0.f);
+    p.set (P::Mod1Src, (float) ModSrc::Macro1);
+    p.set (P::Mod1Dst, (float) ModDst::ReverbMix);
+    p.set (P::Mod1Amt, 1.f);
+    const auto tail = [] (const Render& r) {
+        double s = 0.0;
+        for (size_t i = 48000; i < r.l.size(); ++i) s += (double) r.l[i] * r.l[i];
+        return s;
+    };
+    const double dry = tail (hold (p, 2.0, 0.3));
+    p.set (P::Macro1, 1.f);
+    const double wet = tail (hold (p, 2.0, 0.3));
+    CHECK (wet > 1000.0 * dry + 1e-6);
 }

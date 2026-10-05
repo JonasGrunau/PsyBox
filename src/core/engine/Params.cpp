@@ -34,7 +34,9 @@ namespace choices
                                             "A>B FM", "Level A", "Level B", "Sub Level", "Noise Level", "Ring Level",
                                             "F1 Cutoff", "F1 Reso", "F1 Drive", "F1 Vowel", "F2 Cutoff", "F2 Reso",
                                             "Amp", "Pan", "LFO 1 Rate", "LFO 2 Rate", "LFO 3 Rate", "Pitch Env Amt",
-                                            "Filter Env Amt" };
+                                            "F1 Env Amt", "F2 Drive", "F2 Env Amt",
+                                            "Dist Drive", "Dist Mix", "Crush Mix", "Shift Freq", "Shift Mix", "Phaser Mix",
+                                            "Chorus Mix", "Delay Feedback", "Delay Mix", "Reverb Size", "Reverb Mix", "Width" };
     const std::vector<std::string> distType { "Soft", "Hard", "Fold", "Tube", "Rectify" };
     const std::vector<std::string> chorusMode { "Chorus", "Flanger" };
     const std::vector<std::string> compMode { "Normal", "Multi" };
@@ -49,6 +51,81 @@ float syncDivBeats (int index) noexcept
     static constexpr float beats[] = { 16.f, 8.f, 4.f, 2.f, 3.f, 4.f / 3.f, 1.f, 1.5f, 2.f / 3.f,
                                        0.5f, 0.75f, 1.f / 3.f, 0.25f, 0.375f, 1.f / 6.f, 0.125f, 1.f / 12.f, 0.0625f };
     return beats[std::clamp (index, 0, (int) std::size (beats) - 1)];
+}
+
+namespace
+{
+    struct ModTarget { ModDst dst; P param; float depth; };
+
+    // depth: share of the knob's travel that an amount of 1.0 covers. Voice
+    // targets keep their own units (cutoff 8 octaves, pitch 24 semitones,
+    // LFO rate 4 octaves...), effect targets work in the knob's own range.
+    constexpr ModTarget kTargets[] = {
+        { ModDst::PitchA,       P::OscACoarse,  24.f / 72.f },
+        { ModDst::PitchB,       P::OscBCoarse,  24.f / 72.f },
+        { ModDst::ShapeA,       P::OscAShape,   1.f },
+        { ModDst::ShapeB,       P::OscBShape,   1.f },
+        { ModDst::PwA,          P::OscAPw,      0.48f / 0.96f },
+        { ModDst::PwB,          P::OscBPw,      0.48f / 0.96f },
+        { ModDst::WtPosA,       P::OscAWtPos,   1.f },
+        { ModDst::WtPosB,       P::OscBWtPos,   1.f },
+        { ModDst::FmA,          P::OscAFm,      1.f },
+        { ModDst::FmB,          P::OscBFm,      1.f },
+        { ModDst::DetuneA,      P::OscADetune,  1.f },
+        { ModDst::DetuneB,      P::OscBDetune,  1.f },
+        { ModDst::XMod,         P::OscBXMod,    1.f },
+        { ModDst::LevelA,       P::OscALevel,   1.f },
+        { ModDst::LevelB,       P::OscBLevel,   1.f },
+        { ModDst::SubLevel,     P::SubLevel,    1.f },
+        { ModDst::NoiseLevel,   P::NoiseLevel,  1.f },
+        { ModDst::RingLevel,    P::RingLevel,   1.f },
+        { ModDst::F1Cutoff,     P::F1Cutoff,    0.8f },    // 8 of the knob's 10 octaves
+        { ModDst::F1Reso,       P::F1Reso,      1.f },
+        { ModDst::F1Drive,      P::F1Drive,     1.f },
+        { ModDst::F1Vowel,      P::F1Vowel,     1.f },
+        { ModDst::F2Cutoff,     P::F2Cutoff,    0.8f },
+        { ModDst::F2Reso,       P::F2Reso,      1.f },
+        { ModDst::Lfo1Rate,     P::Lfo1Rate,    4.f / 11.f },
+        { ModDst::Lfo2Rate,     P::Lfo2Rate,    4.f / 11.f },
+        { ModDst::Lfo3Rate,     P::Lfo3Rate,    4.f / 11.f },
+        { ModDst::PitchEnvAmt,  P::PenvAmt,     0.5f },
+        { ModDst::FilterEnvAmt, P::F1Env,       0.5f },
+        { ModDst::F2Drive,      P::F2Drive,     1.f },
+        { ModDst::F2EnvAmt,     P::F2Env,       0.5f },
+        { ModDst::DistDrive,    P::DistDrive,   1.f },
+        { ModDst::DistMix,      P::DistMix,     1.f },
+        { ModDst::CrushMix,     P::CrushMix,    1.f },
+        { ModDst::ShiftHz,      P::FshiftHz,    1.f },
+        { ModDst::ShiftMix,     P::FshiftMix,   1.f },
+        { ModDst::PhaserMix,    P::PhaserMix,   1.f },
+        { ModDst::ChorusMix,    P::ChorusMix,   1.f },
+        { ModDst::DelayFb,      P::DelayFb,     1.f },
+        { ModDst::DelayMix,     P::DelayMix,    1.f },
+        { ModDst::ReverbSize,   P::ReverbSize,  1.f },
+        { ModDst::ReverbMix,    P::ReverbMix,   1.f },
+        { ModDst::WidthAmount,  P::WidthAmount, 1.f },
+    };
+} // namespace
+
+P modTargetParam (ModDst d) noexcept
+{
+    for (const auto& t : kTargets)
+        if (t.dst == d) return t.param;
+    return P::Count;
+}
+
+ModDst modTargetFor (P p) noexcept
+{
+    for (const auto& t : kTargets)
+        if (t.param == p) return t.dst;
+    return ModDst::None;
+}
+
+float modDepthNorm (ModDst d) noexcept
+{
+    for (const auto& t : kTargets)
+        if (t.dst == d) return t.depth;
+    return 1.f;
 }
 
 float ParamDef::toPlain (float n) const noexcept

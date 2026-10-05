@@ -78,6 +78,7 @@ void Engine::applyQuality()
 
 void Engine::reset()
 {
+    leadVoice = -1;
     for (auto& v : voices) v.kill();
     for (auto& k : kicks) k.kill();
     engineMode = -1;
@@ -150,12 +151,17 @@ void Engine::prepareContext (double bpm) noexcept
                                      : cur.get (lfoParam (i, 1));
     }
     ctx.numSlots = 0;
+    numFxSlots = 0;
     for (int s = 0; s < kNumModSlots; ++s)
     {
         const int src = cur.geti (modSrcParam (s));
         const int dst = cur.geti (modDstParam (s));
         const float amt = cur.get (modAmtParam (s));
-        if (src > 0 && dst > 0 && amt != 0.f)
+        if (src <= 0 || dst <= 0 || amt == 0.f || src >= (int) ModSrc::Count || dst >= (int) ModDst::Count)
+            continue;
+        if (isFxTarget ((ModDst) dst))
+            fxSlots[(size_t) numFxSlots++] = { src, dst, amt };
+        else
             ctx.slots[(size_t) ctx.numSlots++] = { src, dst, amt };
     }
 }
@@ -322,6 +328,7 @@ void Engine::voiceNoteOn (int note, float velocity) noexcept
         const float glideFrom = hasGlide && glideAlways && lastPitch >= 0.f ? lastPitch : -1.f;
         v.start (note, velocity, accent, true, stolen || v.isActive(), glideFrom, ctx, seed);
         v.age = ++ageCounter;
+        leadVoice = (int) (&v - voices.data());
     }
     else
     {
@@ -341,6 +348,7 @@ void Engine::voiceNoteOn (int note, float velocity) noexcept
             v.start (note, velocity, accent, true, v.isActive(), from, ctx, seed);
         }
         v.age = ++ageCounter;
+        leadVoice = 0;
     }
     lastNote = note;
     lastPitch = (float) note;
@@ -540,15 +548,32 @@ void Engine::process (float* left, float* right, int numSamples, const MidiEvent
             pos += n;
         }
 
-        if (cur.on (P::DistOn))
-            dist.process (osL.data(), osR.data(), blockN * osFactor, cur.geti (P::DistType), cur.get (P::DistDrive),
-                          cur.get (P::DistTone), cur.get (P::DistMix));
+        // Effects see the patch plus their matrix modulation, refreshed every
+        // kFxChunk samples (the free LFOs are read where each chunk starts).
+        const bool fxMod = numFxSlots > 0 && ! kickMode();
+        if (fxMod) modulateFx (0);
+        const ParamState& fp = fxMod ? fxParams : cur;
+        if (fp.on (P::DistOn))
+            dist.process (osL.data(), osR.data(), blockN * osFactor, fp.geti (P::DistType), fp.get (P::DistDrive),
+                          fp.get (P::DistTone), fp.get (P::DistMix));
 
         float* l = left + done;
         float* r = right + done;
         decimL.process (osL.data(), l, blockN, osFactor);
         decimR.process (osR.data(), r, blockN, osFactor);
-        processFx (l, r, blockN, bpm);
+        if (fxMod)
+        {
+            constexpr int kFxChunk = 32;
+            for (int i = 0; i < blockN; i += kFxChunk)
+            {
+                modulateFx (i);
+                processFx (l + i, r + i, std::min (kFxChunk, blockN - i), bpm, fxParams);
+            }
+        }
+        else
+        {
+            processFx (l, r, blockN, bpm, cur);
+        }
         done += blockN;
     }
     while (ev < numEvents)
@@ -583,9 +608,40 @@ namespace
     }
 } // namespace
 
-void Engine::processFx (float* l, float* r, int n, double bpm) noexcept
+void Engine::modulateFx (int sampleInBlock) noexcept
 {
-    const auto& p = cur;
+    // Per-voice sources come from the newest note while it sounds; macros,
+    // controllers and free-running LFOs are the same for every voice.
+    std::array<float, (size_t) ModSrc::Count> src {};
+    if (leadVoice >= 0 && voices[(size_t) leadVoice].isActive())
+        src = voices[(size_t) leadVoice].sources();
+    for (int i = 0; i < kNumLfos; ++i)
+        if (! cur.on (lfoParam (i, 4)))
+            src[(size_t) ModSrc::Lfo1 + (size_t) i] = globalLfoBuf[(size_t) i][(size_t) sampleInBlock];
+    src[(size_t) ModSrc::ModWheel] = ctx.modWheel;
+    src[(size_t) ModSrc::Aftertouch] = ctx.aftertouch;
+    src[(size_t) ModSrc::PitchBend] = ctx.pitchBend;
+    for (int m = 0; m < 4; ++m)
+        src[(size_t) ModSrc::Macro1 + (size_t) m] = cur.get ((P) ((int) P::Macro1 + m));
+
+    constexpr int kFirst = (int) ModDst::DistDrive, kNum = (int) ModDst::Count - kFirst;
+    std::array<float, kNum> sum {};
+    for (int s = 0; s < numFxSlots; ++s)
+        sum[(size_t) (fxSlots[(size_t) s].dst - kFirst)] += fxSlots[(size_t) s].amt * src[(size_t) fxSlots[(size_t) s].src];
+
+    fxParams = cur;
+    for (int i = 0; i < kNum; ++i)
+    {
+        if (sum[(size_t) i] == 0.f) continue;
+        const P prm = modTargetParam ((ModDst) (kFirst + i));
+        const auto& d = def (prm);
+        const float n = std::clamp (d.toNorm (cur.get (prm)) + sum[(size_t) i], 0.f, 1.f);
+        fxParams.v[(size_t) prm] = d.toPlain (n);
+    }
+}
+
+void Engine::processFx (float* l, float* r, int n, double bpm, const ParamState& p) noexcept
+{
     if (p.on (P::CrushOn))
         crush.process (l, r, n, p.get (P::CrushBits), p.get (P::CrushRate), p.get (P::CrushMix));
     if (p.on (P::FshiftOn))
