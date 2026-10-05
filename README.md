@@ -11,20 +11,33 @@ Builds as **VST3**, **Audio Unit** and **Standalone** (macOS).
 
 ## Categories
 
-32 kinds of sound in three families, each with its own recipe and accent
-colour. The tabs at the top of the sidebar switch between **Synth**, **Bass**
-and **Kick**; the list scrolls when it is longer than the space it has.
+32 kinds of sound, each with its own recipe, in six groups in the sidebar.
+Each group is a header; click one to open it and its sounds fold out under
+it, while closed groups show a dot per sound. The accents run as one rainbow
+down the whole list: red at the first sound of the first group, through
+every group, to magenta at the last kick.
 
-23 synth sounds, listed in sections by their role in a track:
-
-- **Main**: Acid · Psy Lead · Squelch
-- **Shots**: Pluck · Stab · Zap
-- **FX**: Alien Voice · Bubble · Glitch · Gurgle · Laser · Metallic · Screech · Wobble
+- **Main**: Acid · Pluck · Psy Lead · Stab
+- **FX**: Alien Voice · Bubble · Glitch · Gurgle · Laser · Metallic · Screech · Squelch · Wobble · Zap
 - **Energy**: Downlifter · Impact · Noise FX · Reverse · Riser · Uplifter
 - **Background**: Atmos · Drone · Gate
+- **Bass** and **Kick**: below
 
-Riser is a synth tone climbing in pitch; Uplifter is a noise sweep that opens
-upward.
+### Energy
+
+Risers, downlifters, impacts and the rest are one gesture over a **Length**:
+in bars by default (it follows the tempo), or in seconds. Switch between
+**Bars** and **Time** and the length keeps sounding the same. Energy sounds
+have no arp; their Length panel sits under the voicing.
+
+The length drives the **Sweep**, a mod source that climbs from 0 to 100 % from
+the note start. The recipes hang pitch, filter and level on it, so changing the
+length stretches the whole riser. **Curve** bends the sweep (slow start and a
+fast finish, or the other way round), **Fade** makes the level follow it (in
+for risers, out for downlifters and impacts), and **Cut** stops the note at the
+end however long it is held (Reverse). Drag the Sweep onto any knob to move
+that knob with the gesture too. Riser is a synth tone climbing in pitch;
+Uplifter is a noise sweep that opens upward.
 
 ### Basses
 
@@ -33,7 +46,8 @@ Four bass styles, under the **Bass** tab:
 Bass Shot · Offbeat Bass · Prog Bass · Psy Bass
 
 Basses play on the synth engine, mono and dry, and have no arp: you play their
-rhythm. Each recipe was fitted to reference samples (harmonics over time, pitch
+rhythm. Their **Knock** panel (under Voicing) holds the pitch drop at the start
+of every note. Each recipe was fitted to reference samples (harmonics over time, pitch
 knock, envelope, loudness, stereo):
 
 - **Psy Bass**: the rolling 16th-note psy bass. A saw through two low-passes in
@@ -56,9 +70,9 @@ Five kick styles, under the **Kick** tab:
 
 Dark Forest Kick · Full-On Kick · Goa Kick · Hi-Tech Kick · Progressive Kick
 
-A kick category switches the synth to a dedicated kick engine, and the upper
-sections of the window turn into the kick's Pitch, Amp, Click, Drive and wave
-views. The effects and macros stay where they are. Kicks have no arp.
+A kick category switches the synth to a dedicated kick engine, and the OSC
+view becomes the KICK view: the kick's Pitch, Amp, Click, Drive and wave
+sections. The FX and Global views stay. Kicks have no arp, macros or matrix.
 
 - **Tuned to your key.** With **Key** on (the default), the kick's body lands on
   the key you play. Any octave of the key gives the same kick, placed within
@@ -92,11 +106,11 @@ body holds flat to about 160 ms and is down 30 dB by about 220 ms.
   The amount slider sets how far.
 - **Lock** a knob (right-click it, or alt-click) and Generate and Mutate leave
   it alone.
-- Tick **Arp** next to Generate and every new synth sound comes with an arp in
-  the style of its category: tied 303 slides for acid, random blips for
-  bubbles, stepped sweeps for risers, each with a freshly generated step
-  pattern. The sound itself is the same with or without it; only the arp
-  settings differ. Basses and kicks have no arp.
+- Tick **Arp** next to Generate and every new Main, FX or Background sound
+  comes with an arp in the style of its category: tied 303 slides for acid,
+  random blips for bubbles, each with a freshly generated step pattern. The
+  sound itself is the same with or without it; only the arp settings differ.
+  Energy sounds, basses and kicks have no arp.
 - The same category and seed always give the same sound. Double-click the seed
   in the sidebar to type one in.
 - Each category remembers its patch. Switch from Acid to Zap and back and your
@@ -104,7 +118,11 @@ body holds flat to about 160 ms and is down 30 dB by about 220 ms.
   a fresh sound.
 - **Undo** and **Redo** in the top bar step through your Generate and Mutate
   history.
-- Macros can be renamed: double-click the label or use the right-click menu.
+- **Macros**: every Generate gives all four macros a job (cutoff, resonance,
+  reverb, drive...) and names them after it: "Cutoff", "Env Amount", "Filter +
+  Space". The names follow the matrix, so dragging a macro onto another knob
+  renames it too. Double-click a name to type your own; clear it to go back to
+  the automatic one.
 - The **output window** in the top bar shows the scope and a stereo level
   meter: RMS bars over peak bars, a held peak tick and its value in dB, red
   when the output clips. Drag it out to drop the current sound into your DAW
@@ -114,6 +132,32 @@ body holds flat to about 160 ms and is down 30 dB by about 220 ms.
 The standalone app has a keyboard strip at the bottom. Click the keys or play
 from the computer keyboard (`A W S E D F T G Y H U J K` = C4 up, `Z`/`X` shift
 the octave). A MIDI controller works too: *Options → Audio/MIDI Settings*.
+
+## The editor
+
+Laid out like Serum. The tabs in the top bar switch views:
+
+- **OSC**: sub and noise, the two oscillators (waveform on top, knobs below),
+  the two filters; underneath the macros, the modulators and the voicing, with
+  the Length (Energy) or the Knock (Bass) under it.
+- **FX**: all nine effects at once, numbered in signal order, each switched on
+  in its header. Switched-off effects grey out.
+- **Matrix**: the 16 modulation routes as rows: source, amount, target.
+- **Arp** (Main, FX, Background): the step editor (play, accent and slide
+  lanes, a ruler for the loop length), rate, octaves, gate, swing, generate a
+  new pattern, and the templates as cards under the steps.
+- **Global**: oversampling quality, the full voice settings, output and a
+  short guide. Always the last tab.
+
+**Drag and drop modulation.** Every mod source has a four-way arrow: the
+envelope and LFO tabs, the macros, the Sweep and the strip of other sources
+(velocity, note, mod wheel, aftertouch, bend, random). Drag it onto any knob
+that can be modulated (they show a dashed ring while you drag) and a route is
+added. The route shows as a ring between the knob body and its track; drag the
+ring up or down to set the amount, right-click the knob to invert or remove
+it. Sources can modulate each other: drop LFO 2 on LFO 1's rate. Effect knobs
+take modulation too; per-voice sources (envelopes, velocity) follow the newest
+note there.
 
 ## Sound engine
 
@@ -147,15 +191,16 @@ FIR decimators. Drive happens before decimation and uses antiderivative
 anti-aliasing.
 
 Amp, filter, mod and pitch envelopes, 3 LFOs (tempo sync, retrigger, S&H,
-smooth random) and an 8-slot mod matrix.
+smooth random), the energy Sweep, 4 macros and a 16-slot mod matrix whose
+targets include the effects.
 
-Arpeggiator (Voice panel, Arp tab): Up, Down, Up/Down, Random and played order
+Arpeggiator (Arp view): Up, Down, Up/Down, Random and played order
 over 1 to 4 octaves, with rate, gate, swing and hold, playing a 16-step pattern
 with per-step accent and slide and a loop length of 1 to 16 steps. Generate
 writes a new pattern in the category's style every time (acid lines get
-accents and slides, bubbles loop at odd lengths). Click the pattern grid to open the step editor: paint steps, set the
-length on the ruler, shift, clear, start from a template (Rolling, Gallop,
-3-3-2, Acid line...) or generate just a new pattern. The arp locks to the host
+accents and slides, bubbles loop at odd lengths). In the Arp view: paint steps,
+set the length on the ruler, shift, clear, click a template card (Rolling,
+Gallop, 3-3-2, Acid line...) or generate just a new pattern. The arp locks to the host
 transport while it plays. Slides, and gates of 100 % or more, tie: the voice
 glides to the next note without retriggering, so 303 slides and long sweeps
 keep running.
@@ -181,7 +226,7 @@ channel only). **Width** scales the stereo above it, and **Stereoize** makes
 stereo out of mono voices (a short Haas side from the mid). Left + right
 never changes, so the mix stays mono-compatible.
 
-The mixer's **Noise direct** switch adds the noise after the filters, for
+The Noise section's **Direct** switch adds the noise after the filters, for
 bright grit over a dark sound.
 
 ## Building
@@ -217,7 +262,7 @@ src/core/dsp        oscillators, filters, shapers, oversampling, effects
 src/core/engine     parameters, voices, engine
 src/core/generator  categories, recipes, generate / mutate
 src/plugin          JUCE processor and editor
-src/ui              theme, widgets, panels, displays
+src/ui              theme, widgets, panels, pages (views), displays
 tests/              Catch2 tests for the core
 tools/              WAV renderer, offscreen UI snapshot tool
 ```
