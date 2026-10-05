@@ -123,6 +123,7 @@ private:
     void fireArp() noexcept;
     void voiceNoteOn (int note, float velocity) noexcept;
     void voiceNoteOff (int note) noexcept;
+    void dropHeld (int note) noexcept;   // takes the note out of the mono stack
     void voiceSlide (int from, int to, float velocity) noexcept;
     void allNotesOff() noexcept;
     bool kickMode() const noexcept { return cur.geti (P::EngineMode) == (int) EngineMode::Kick; }

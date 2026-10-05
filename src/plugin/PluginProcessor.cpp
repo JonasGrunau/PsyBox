@@ -120,6 +120,13 @@ void PsyBoxProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
 
     keyboardState.processNextMidiBuffer (midi, 0, n, true);
 
+    // First block after a reset: the keys that were already down come back
+    // (taken before this block's MIDI: a key pressed now brings its own
+    // note-on, and replaying it too would start it twice).
+    const bool restart = swap == Swap::Restart && fadePos == 0;
+    std::array<float, 128> replay {};
+    if (restart) replay = heldVelocity;
+
     midiEvents.clear();
     for (const auto meta : midi)
     {
@@ -159,21 +166,21 @@ void PsyBoxProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
     const double bpm = transport.bpm;
     lastBpm.store (bpm, std::memory_order_relaxed);
 
-    // First block after a reset: the new patch starts clean, held notes come back.
-    // A kick is a one-shot: only keys pressed during the fade are played again
-    // (unless the arp owns the keys), and it starts without a fade-in so the
+    // The new patch starts clean and the held keys come back. A kick is a
+    // one-shot: only keys pressed during the fade are played again (unless
+    // the arp owns the keys), and it starts without a fade-in so the
     // transient stays sharp.
     const bool oneShot = audioParams.geti (P::EngineMode) == (int) EngineMode::Kick && ! audioParams.on (P::ArpOn);
-    if (swap == Swap::Restart && fadePos == 0)
+    if (restart)
     {
         for (int note = 0; note < 128; ++note)
-            if (heldVelocity[(size_t) note] > 0.f && (! oneShot || pressedInFade[(size_t) note])
+            if (replay[(size_t) note] > 0.f && (! oneShot || pressedInFade[(size_t) note])
                 && midiEvents.size() < midiEvents.capacity())
             {
                 MidiEvent e;
                 e.type = MidiEvent::NoteOn;
                 e.number = note;
-                e.value = heldVelocity[(size_t) note];
+                e.value = replay[(size_t) note];
                 midiEvents.insert (midiEvents.begin(), e);
             }
         pressedInFade.fill (false);

@@ -313,7 +313,10 @@ void Engine::voiceNoteOn (int note, float velocity) noexcept
     const bool hasGlide = cur.get (P::Glide) > 0.5f;
     const uint64_t seed = ++noteSeed * 2654435761u;
 
-    // remember for mono stack
+    // remember for mono stack; a note that is already down (a doubled
+    // note-on) moves to the top instead of going on twice, or its one
+    // note-off would leave the copy holding the voice
+    dropHeld (note);
     if (numHeld < (int) held.size())
     {
         held[(size_t) numHeld] = note;
@@ -363,32 +366,35 @@ void Engine::voiceNoteOn (int note, float velocity) noexcept
     lastPitch = (float) note;
 }
 
-void Engine::voiceNoteOff (int note) noexcept
+void Engine::dropHeld (int note) noexcept
 {
-    // drop from stack
     int idx = -1;
     for (int i = numHeld - 1; i >= 0; --i)
         if (held[(size_t) i] == note) { idx = i; break; }
-    if (idx >= 0)
+    if (idx < 0)
+        return;
+    for (int i = idx; i < numHeld - 1; ++i)
     {
-        for (int i = idx; i < numHeld - 1; ++i)
-        {
-            held[(size_t) i] = held[(size_t) i + 1];
-            heldAccent[(size_t) i] = heldAccent[(size_t) i + 1];
-        }
-        --numHeld;
+        held[(size_t) i] = held[(size_t) i + 1];
+        heldAccent[(size_t) i] = heldAccent[(size_t) i + 1];
     }
+    --numHeld;
+}
+
+void Engine::voiceNoteOff (int note) noexcept
+{
+    dropHeld (note);
     if (kickMode())
         return;   // kicks are one-shots
 
+    // Poly releases every voice on the note. Mono and legato play on voice 0,
+    // but a note held through a switch from poly can sit on any other voice.
     const auto mode = (VoiceMode) cur.geti (P::VoiceMode);
+    for (size_t i = mode == VoiceMode::Poly ? 0 : 1; i < voices.size(); ++i)
+        if (voices[i].isGateOn() && voices[i].getNote() == note)
+            voices[i].release();
     if (mode == VoiceMode::Poly)
-    {
-        for (auto& v : voices)
-            if (v.isGateOn() && v.getNote() == note)
-                v.release();
         return;
-    }
 
     Voice& v = voices[0];
     if (v.getNote() != note || ! v.isGateOn())

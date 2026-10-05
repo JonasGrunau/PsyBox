@@ -399,3 +399,61 @@ TEST_CASE ("Effects follow their matrix modulation", "[engine][fx]")
     const double wet = tail (hold (p, 2.0, 0.3));
     CHECK (wet > 1000.0 * dry + 1e-6);
 }
+
+namespace
+{
+    // Plays 256-sample blocks; `events[b]` arrive at the start of block b and
+    // `change[b]`, when set, is the patch from block b on. Returns the peak of
+    // the last half second.
+    float tailPeak (ParamState p, const std::vector<std::vector<MidiEvent>>& events,
+                    const std::vector<std::pair<int, ParamState>>& change = {}, int blocks = 400)
+    {
+        Engine e;
+        e.setParams (p);
+        e.prepare (48000.0, 256);
+        std::vector<float> l (256), r (256);
+        float peak = 0.f;
+        for (int b = 0; b < blocks; ++b)
+        {
+            for (const auto& [at, state] : change)
+                if (at == b) e.setParams (state);
+            const std::vector<MidiEvent> none;
+            const auto& ev = b < (int) events.size() ? events[(size_t) b] : none;
+            e.process (l.data(), r.data(), 256, ev.data(), (int) ev.size(), 145.0);
+            if (b >= blocks - 94)
+                for (int i = 0; i < 256; ++i)
+                    peak = std::max ({ peak, std::abs (l[(size_t) i]), std::abs (r[(size_t) i]) });
+        }
+        return peak;
+    }
+
+    MidiEvent on (int note) { return { 0, MidiEvent::NoteOn, note, 0.8f }; }
+    MidiEvent off (int note) { return { 0, MidiEvent::NoteOff, note, 0.f }; }
+} // namespace
+
+TEST_CASE ("A doubled note-on ends with its one note-off", "[engine][notes]")
+{
+    // e.g. a key pressed in the block where a new patch replays the held keys
+    for (auto mode : { VoiceMode::Poly, VoiceMode::Mono, VoiceMode::Legato })
+    {
+        INFO ("voice mode " << (int) mode);
+        ParamState p;
+        p.set (P::VoiceMode, (float) mode);
+        CHECK (tailPeak (p, { { on (60), on (60) }, {}, {}, {}, { off (60) } }) < 1e-4f);
+        CHECK (tailPeak (p, { { on (60) }, { on (64) }, { on (60) }, {}, { off (60) }, { off (64) } }) < 1e-4f);
+    }
+}
+
+TEST_CASE ("Notes held through a voice-mode change still end", "[engine][notes]")
+{
+    for (auto from : { VoiceMode::Poly, VoiceMode::Mono, VoiceMode::Legato })
+        for (auto to : { VoiceMode::Poly, VoiceMode::Mono, VoiceMode::Legato })
+        {
+            INFO ("from " << (int) from << " to " << (int) to);
+            ParamState a, b;
+            a.set (P::VoiceMode, (float) from);
+            b.set (P::VoiceMode, (float) to);
+            CHECK (tailPeak (a, { { on (60) }, { on (64) }, {}, {}, {}, {}, { off (60) }, { off (64) } }, { { 3, b } }) < 1e-4f);
+            CHECK (tailPeak (a, { { on (60) }, { on (64) }, {}, {}, {}, {}, { off (64) }, { off (60) } }, { { 3, b } }) < 1e-4f);
+        }
+}
