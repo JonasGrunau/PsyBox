@@ -406,6 +406,50 @@ TEST_CASE ("The mod matrix lists match their enums, and targets map to knobs bot
     CHECK (modTargetFor (P::AenvA) == ModDst::None);
 }
 
+TEST_CASE ("Macro labels say what a macro drives", "[generator][macro]")
+{
+    const auto with = [] (std::initializer_list<std::pair<ModSrc, ModDst>> routes) {
+        ParamState p;
+        int slot = 0;
+        for (const auto& [src, dst] : routes)
+        {
+            p.set (modSrcParam (slot), (float) src);
+            p.set (modDstParam (slot), (float) dst);
+            p.set (modAmtParam (slot), 0.3f);
+            ++slot;
+        }
+        return p;
+    };
+    using S = ModSrc;
+    using D = ModDst;
+    CHECK (macroLabel (ParamState(), 0).empty());
+    CHECK (macroLabel (with ({ { S::Macro1, D::F1Cutoff } }), 0) == "Cutoff");
+    CHECK (macroLabel (with ({ { S::Macro1, D::F1Cutoff } }), 1).empty());
+    CHECK (macroLabel (with ({ { S::Macro2, D::F1Cutoff }, { S::Macro2, D::F2Cutoff } }), 1) == "Cutoff");
+    CHECK (macroLabel (with ({ { S::Macro1, D::F1Cutoff }, { S::Macro1, D::F1Reso } }), 0) == "Filter");
+    CHECK (macroLabel (with ({ { S::Macro3, D::ReverbMix } }), 2) == "Reverb");
+    CHECK (macroLabel (with ({ { S::Macro4, D::F1Cutoff }, { S::Macro4, D::DelayMix } }), 3) == "Cutoff + Delay");
+    CHECK (macroLabel (with ({ { S::Macro1, D::F1Cutoff }, { S::Macro1, D::ReverbMix } }), 0) == "Filter + Space");
+    CHECK (macroLabel (with ({ { S::Lfo1, D::F1Cutoff } }), 0).empty());   // only macro sources count
+}
+
+TEST_CASE ("Generated synth and bass patches drive all four macros, kicks none", "[generator][macro]")
+{
+    Generator g;
+    for (int c = 0; c < kNumCategories; ++c)
+        for (uint32_t seed = 1; seed <= 25; ++seed)
+        {
+            const auto cat = (Category) c;
+            const auto p = g.generate (cat, seed, ParamState(), LockSet());
+            for (int m = 0; m < 4; ++m)
+            {
+                INFO (categoryInfo()[(size_t) c].name << " seed " << seed << " macro " << m + 1);
+                if (familyOf (cat) == Family::Kick) CHECK (macroLabel (p, m).empty());
+                else CHECK_FALSE (macroLabel (p, m).empty());
+            }
+        }
+}
+
 TEST_CASE ("Energy sounds hang their motion on the sweep and keep the user's length unit", "[generator][energy]")
 {
     Generator g;

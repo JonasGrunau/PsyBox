@@ -6,6 +6,7 @@
 
 #include <array>
 #include <bitset>
+#include <string>
 #include <initializer_list>
 #include <vector>
 
@@ -53,6 +54,10 @@ public:
 
     // Adds a modulation route in the next free slot (returns slot or -1).
     int route (ModSrc src, ModDst dst, float amtLo, float amtHi);
+    // Gives every macro without a route one, from the targets listed (in
+    // order of preference). Targets whose module is off or that a macro
+    // already drives are skipped. Run it last: it draws one number per macro.
+    void macros (std::initializer_list<ModDst> targets);
 
     // Tempo-synced LFO setup helpers.
     void lfo (int index, LfoShape shape, float hzLo, float hzHi, bool retrig);
@@ -75,6 +80,10 @@ Recipe recipeFor (Category c) noexcept;
 Recipe arpRecipeFor (Category c) noexcept;          // arp settings (ArpRecipes.cpp)
 Recipe arpPatternRecipeFor (Category c) noexcept;   // the arp's 16 steps
 Recipe kickRecipeFor (Category c) noexcept;         // kick categories (KickRecipes.cpp)
+
+// What a macro does, in a word or two, from the targets it drives ("Cutoff",
+// "Filter", "Reverb", "Cutoff + Drive"). Empty when it drives nothing.
+std::string macroLabel (const ParamState& p, int macro);
 
 // Named starting points for the pattern editor (ArpPattern::parse notation).
 struct ArpTemplate { const char* name; const char* steps; };

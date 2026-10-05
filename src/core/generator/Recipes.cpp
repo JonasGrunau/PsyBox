@@ -321,6 +321,7 @@ namespace
         fxDelay (b, 0.5f, { D1_8D, D1_4, D1_8 }, 0.2f, 0.45f, 0.1f, 0.25f);
         fxReverb (b, 0.25f, 0.8f, 2.f, 0.06f, 0.14f);
         fxPhaser (b, 0.15f);
+        b.macros ({ D::DistDrive, D::F1Drive, D::DelayMix, D::ReverbMix });
     }
 
     void squelch (B& b)
@@ -369,6 +370,7 @@ namespace
         fxPhaser (b, 0.3f);
         fxDelay (b, 0.4f, { D1_16D, D1_8D, D1_16 }, 0.2f, 0.45f, 0.1f, 0.25f);
         fxChorus (b, 0.2f);
+        b.macros ({ D::F1Reso, D::FilterEnvAmt, D::F1Vowel, D::DistDrive, D::PhaserMix, D::DelayMix });
     }
 
     void zap (B& b)
@@ -401,6 +403,7 @@ namespace
         fxDelay (b, 0.7f, { D1_8, D1_16D, D1_8D }, 0.3f, 0.6f, 0.15f, 0.35f);
         fxReverb (b, 0.4f, 1.f, 3.f, 0.1f, 0.25f);
         fxShift (b, 0.2f, 20.f, 300.f, 0.f, 0.5f);
+        b.macros ({ D::FmA, D::F1Cutoff, D::DelayMix, D::ReverbMix, D::ShiftHz, D::NoiseLevel });
     }
 
     void laser (B& b)
@@ -434,6 +437,7 @@ namespace
         fxDelay (b, 0.8f, { D1_8D, D1_4, D1_8, D1_16D }, 0.3f, 0.6f, 0.2f, 0.35f);
         fxReverb (b, 0.5f, 1.5f, 4.f, 0.1f, 0.25f);
         fxChorus (b, 0.2f);
+        b.macros ({ D::F1Cutoff, D::F1Reso, D::FmA, D::DelayFb, D::DelayMix, D::ReverbMix });
     }
 
     // Psy bass for 16th rolls, modelled on sustained reference notes (C1-B2): one
@@ -468,6 +472,7 @@ namespace
         b.route (S::Macro1, D::F2Cutoff, 0.2f, 0.35f);
         b.route (S::Macro2, D::FilterEnvAmt, 0.2f, 0.3f);
         fxCompBass (b);
+        b.macros ({ D::F1Reso, D::PitchEnvAmt, D::F1Drive });
     }
 
     void psyLead (B& b)
@@ -507,6 +512,7 @@ namespace
         fxReverb (b, 0.7f, 2.f, 5.f, 0.15f, 0.3f);
         fxChorus (b, 0.3f, false);
         fxDist (b, 0.2f, { 0, 3 }, 4.f, 12.f, 0.3f, 0.6f);
+        b.macros ({ D::F1Reso, D::WtPosA, D::DetuneA, D::FilterEnvAmt, D::DelayMix, D::ReverbMix, D::ChorusMix, D::DistDrive });
     }
 
     void pluck (B& b)
@@ -526,6 +532,7 @@ namespace
 
         fxDelay (b, 0.8f, { D1_8D, D1_8, D1_16D }, 0.3f, 0.5f, 0.15f, 0.3f);
         fxReverb (b, 0.6f, 1.2f, 3.5f, 0.1f, 0.25f);
+        b.macros ({ D::F1Cutoff, D::F1Reso, D::WtPosA, D::FmA, D::DelayMix, D::ReverbMix });
     }
 
     void stab (B& b)
@@ -546,6 +553,7 @@ namespace
         fxDelay (b, 0.5f, { D1_8D, D1_4 }, 0.25f, 0.45f, 0.1f, 0.25f);
         fxChorus (b, 0.4f, false);
         fxDist (b, 0.3f, { 0, 3 }, 4.f, 10.f, 0.3f, 0.5f);
+        b.macros ({ D::F1Reso, D::FilterEnvAmt, D::DetuneA, D::ReverbMix, D::DelayMix, D::ChorusMix, D::DistDrive });
     }
 
     void screech (B& b)
@@ -572,6 +580,7 @@ namespace
         fxPhaser (b, 0.3f);
         fxDelay (b, 0.6f, { D1_8D, D1_4, D1_16D }, 0.3f, 0.55f, 0.15f, 0.3f);
         fxReverb (b, 0.3f, 1.f, 3.f, 0.08f, 0.18f);
+        b.macros ({ D::F1Cutoff, D::F1Drive, D::DistDrive, D::Lfo1Rate, D::PhaserMix, D::DelayMix, D::ReverbMix });
     }
 
     void alienVoice (B& b)
@@ -606,6 +615,7 @@ namespace
         fxChorus (b, 0.3f);
         fxShift (b, 0.3f, 5.f, 60.f, 0.f, 0.3f);
         fxReverb (b, 0.4f, 1.5f, 4.f, 0.1f, 0.25f);
+        b.macros ({ D::F1Reso, D::Lfo1Rate, D::ShiftHz, D::ChorusMix, D::DelayMix, D::ReverbMix });
     }
 
     void bubble (B& b)
@@ -633,6 +643,7 @@ namespace
         fxDelay (b, 0.8f, { D1_16, D1_8T, D1_16D, D1_8 }, 0.3f, 0.6f, 0.15f, 0.35f);
         fxReverb (b, 0.4f, 1.f, 3.f, 0.1f, 0.2f);
         fxShift (b, 0.2f, 10.f, 150.f, 0.f, 0.4f);
+        b.macros ({ D::F1Reso, D::FilterEnvAmt, D::PitchEnvAmt, D::DelayMix, D::DelayFb, D::ReverbMix, D::ShiftHz });
     }
 
     void gurgle (B& b)
@@ -671,6 +682,7 @@ namespace
         fxChorus (b, 0.4f);
         fxDelay (b, 0.5f, { D1_16D, D1_8D }, 0.3f, 0.5f, 0.1f, 0.25f);
         fxReverb (b, 0.4f, 1.5f, 4.f, 0.1f, 0.25f);
+        b.macros ({ D::F1Cutoff, D::F1Reso, D::F1Vowel, D::PhaserMix, D::ChorusMix, D::DelayMix, D::ReverbMix });
     }
 
     void wobble (B& b)
@@ -693,6 +705,7 @@ namespace
         fxDist (b, 0.5f, { 0, 1, 3 }, 6.f, 18.f, 0.3f, 0.7f);
         fxDelay (b, 0.4f, { D1_8D, D1_4 }, 0.2f, 0.45f, 0.1f, 0.2f);
         fxPhaser (b, 0.2f);
+        b.macros ({ D::WtPosA, D::F1Cutoff, D::F1Reso, D::DistDrive, D::DelayMix, D::PhaserMix });
     }
 
     void metallic (B& b)
@@ -733,6 +746,7 @@ namespace
         fxReverb (b, 0.8f, 2.f, 6.f, 0.15f, 0.35f);
         fxDelay (b, 0.6f, { D1_8D, D1_4, D1_4D }, 0.3f, 0.5f, 0.1f, 0.25f);
         fxChorus (b, 0.3f, false);
+        b.macros ({ D::F1Cutoff, D::RingLevel, D::WtPosB, D::ReverbMix, D::ReverbSize, D::DelayMix, D::ChorusMix });
     }
 
     // Tonal: the pitch climbs one to two octaves over the length while the
@@ -774,6 +788,7 @@ namespace
         fxPhaser (b, 0.3f);
         fxDist (b, 0.3f, { 0, 3 }, 3.f, 12.f, 0.2f, 0.5f);
         fxShift (b, 0.2f, 5.f, 200.f, 0.2f, 0.6f);
+        b.macros ({ D::F1Cutoff, D::DetuneA, D::ReverbMix, D::DelayMix, D::DistDrive, D::PhaserMix, D::ShiftMix });
     }
 
     // Noise sweep: the filter opens upward over the length and the pitch
@@ -812,6 +827,7 @@ namespace
         fxShift (b, 0.4f, 5.f, 200.f, 0.2f, 0.6f);
         fxReverb (b, 0.9f, 4.f, 10.f, 0.3f, 0.5f);
         fxDelay (b, 0.5f, { D1_8D, D1_4 }, 0.3f, 0.55f, 0.15f, 0.3f);
+        b.macros ({ D::F1Cutoff, D::F2Cutoff, D::ReverbMix, D::PhaserMix, D::ShiftMix, D::DelayMix });
     }
 
     // The reverse of a riser: pitch and filter fall over the length, fast
@@ -844,6 +860,7 @@ namespace
             b.uni (P::FshiftFb, 0.2f, 0.6f);
             b.uni (P::FshiftMix, 0.3f, 0.6f);
         }
+        b.macros ({ D::F1Cutoff, D::NoiseLevel, D::ReverbMix, D::DelayMix, D::ShiftMix });
     }
 
     // A filtered-noise whoosh: swells in over the length while an LFO moves
@@ -889,6 +906,7 @@ namespace
             b.uni (P::CrushRate, 1.f, 12.f);
             b.uni (P::CrushMix, 0.3f, 0.7f);
         }
+        b.macros ({ D::F1Reso, D::Lfo1Rate, D::F1Vowel, D::PhaserMix, D::ShiftHz, D::CrushMix, D::ReverbMix, D::DelayMix });
     }
 
     void atmos (B& b)
@@ -919,6 +937,7 @@ namespace
         fxChorus (b, 0.6f, false);
         fxDelay (b, 0.6f, { D1_4D, D1_2 }, 0.3f, 0.55f, 0.15f, 0.3f);
         fxPhaser (b, 0.2f);
+        b.macros ({ D::F1Reso, D::WtPosA, D::DetuneA, D::Lfo2Rate, D::ReverbMix, D::ChorusMix, D::DelayMix });
     }
 
     void drone (B& b)
@@ -950,6 +969,7 @@ namespace
         fxPhaser (b, 0.4f);
         fxShift (b, 0.3f, 0.1f, 3.f, 0.f, 0.3f);
         fxChorus (b, 0.3f, false);
+        b.macros ({ D::F1Reso, D::Lfo1Rate, D::NoiseLevel, D::F2Cutoff, D::ReverbMix, D::PhaserMix, D::ShiftHz });
     }
 
     // A boom that falls into the sub: bright noise transient, then a tail
@@ -982,6 +1002,7 @@ namespace
         fxDist (b, 0.5f, { 0, 3 }, 3.f, 9.f, 0.2f, 0.5f);
         fxReverb (b, 0.9f, 4.f, 12.f, 0.25f, 0.45f);
         fxDelay (b, 0.2f, { D1_4, D1_4D }, 0.2f, 0.4f, 0.1f, 0.2f);
+        b.macros ({ D::F1Cutoff, D::NoiseLevel, D::DistDrive, D::ReverbMix, D::ReverbSize, D::DelayMix });
     }
 
     // A held pad chopped on the grid. Amp mod is 1 + m, so a full-depth
@@ -1017,6 +1038,7 @@ namespace
         fxReverb (b, 0.7f, 2.f, 6.f, 0.15f, 0.35f);
         fxChorus (b, 0.4f, false);
         fxPhaser (b, 0.2f);
+        b.macros ({ D::F1Reso, D::WtPosA, D::DetuneA, D::DelayMix, D::ReverbMix, D::ChorusMix, D::PhaserMix });
     }
 
     // Stepped random pitch and a stuttering gain on the grid, through a crusher.
@@ -1050,6 +1072,7 @@ namespace
         fxDelay (b, 0.5f, { D1_16, D1_32, D1_16T }, 0.2f, 0.5f, 0.1f, 0.3f);
         fxDist (b, 0.3f, { 1, 2 }, 4.f, 14.f, 0.3f, 0.6f);
         fxReverb (b, 0.3f, 0.5f, 1.5f, 0.1f, 0.2f);
+        b.macros ({ D::CrushMix, D::F1Cutoff, D::F1Reso, D::FmA, D::ShiftHz, D::DelayMix, D::DistDrive });
     }
 
     // Swells over the length and cuts at the peak like a reversed hit,
@@ -1081,6 +1104,7 @@ namespace
         fxReverb (b, 0.5f, 1.f, 3.f, 0.08f, 0.2f);
         fxDelay (b, 0.3f, { D1_8D, D1_4 }, 0.2f, 0.4f, 0.1f, 0.2f);
         fxChorus (b, 0.3f, false);
+        b.macros ({ D::F1Reso, D::DetuneA, D::FmA, D::ReverbMix, D::DelayMix, D::ChorusMix });
     }
     // Progressive-trance bass shot: one big, sustained, heavily compressed hit
     // per beat. Modelled on reference one-shots: a low-passed saw over a sine
@@ -1175,6 +1199,7 @@ namespace
             b.uni (P::NoiseLevel, 0.02f, 0.07f);
         }
         fxWidth (b, 0.85f, 0.35f, 0.6f);
+        b.macros ({ D::F1Drive, D::DistDrive, D::NoiseLevel, D::F1Reso, D::WidthAmount });
     }
 
     // Offbeat bass: one note between the kicks. Modelled on reference notes
@@ -1203,6 +1228,7 @@ namespace
         b.route (S::Macro1, D::F1Cutoff, 0.2f, 0.35f);
         b.route (S::Macro2, D::FilterEnvAmt, 0.2f, 0.3f);
         fxCompBass (b);
+        b.macros ({ D::F1Reso, D::PitchEnvAmt, D::F1Drive });
     }
 
     // Progressive bass: rounder and darker than the rolling psy bass. Modelled
@@ -1231,6 +1257,7 @@ namespace
         b.route (S::Macro1, D::F1Cutoff, 0.2f, 0.35f);
         b.route (S::Macro2, D::FilterEnvAmt, 0.2f, 0.3f);
         fxCompBass (b);
+        b.macros ({ D::F1Reso, D::PitchEnvAmt, D::F1Drive });
     }
 } // namespace
 

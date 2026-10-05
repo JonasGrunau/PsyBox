@@ -25,6 +25,7 @@ add_library(psybox_core STATIC
     src/core/dsp/Wavetable.cpp
     src/core/generator/Generator.cpp
     src/core/generator/Recipes.cpp
+    src/core/generator/Macros.cpp
     src/core/generator/ArpRecipes.cpp
     src/core/generator/KickRecipes.cpp
 )
