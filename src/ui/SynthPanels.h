@@ -199,7 +199,7 @@ private:
     Segmented unit;   // bars or seconds
     KnobSet ks;
     ParamKnob *bars, *seconds, *curve, *fade, *delay;
-    ToggleDot cut;
+    ToggleDot cut, oneShot;
     SweepDisplay display;
     bool lastTime = false;
     void timerCallback() override;

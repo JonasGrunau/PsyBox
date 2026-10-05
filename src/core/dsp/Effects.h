@@ -52,15 +52,80 @@ private:
 class Distortion
 {
 public:
-    void prepare (float sr) { fs = sr; for (auto& d : dc) d.prepare (sr); reset(); }
-    void reset() noexcept { for (auto& s : sh) s.reset(); for (auto& t : tone) t.reset(); for (auto& d : dc) d.reset(); }
+    void prepare (float sr)
+    {
+        fs = sr;
+        // the ADAA shaper averages each pair of samples, which dulls the top
+        // at a base rate (-2 dB at 10 kHz, -6 dB at 15 kHz at 44.1 kHz);
+        // oversampled, it doesn't matter
+        compensate = sr < 60000.f;
+        for (auto& d : dc) d.prepare (sr);
+        reset();
+    }
+    void reset() noexcept
+    {
+        for (auto& s : sh) s.reset();
+        for (auto& t : tone) t.reset();
+        for (auto& d : dc) d.reset();
+        for (auto& f : low1) f.reset();
+        for (auto& f : low2) f.reset();
+        level = meanSquare = 0.f;
+        hist = {};
+    }
 
-    void process (float* l, float* r, int n, int type, float driveDb, float toneHz, float mix) noexcept
+    // lowCutHz: a 24 dB high-pass on the distorted signal, which takes out
+    // the lows a clipper makes from a high-passed sound (the difference
+    // tones bring the fundamental back). At 20 Hz or below it is skipped,
+    // so the distortion sounds exactly as without it.
+    //
+    // autoLevel: the drive counts from the sound's own level instead of
+    // from full scale. A linked RMS follower (the mean square over about
+    // 15 ms, then 5 ms up and 150 ms down) scales the signal to kAutoRef
+    // before the shaper and the level is given back after it, so the shaper
+    // bites the same on a quiet patch as on a loud one, and a sound that
+    // decays keeps its decay instead of being held up at the clip level.
+    // Small signals pass at unity gain.
+    void process (float* l, float* r, int n, int type, float driveDb, float toneHz, float mix, float lowCutHz = 20.f,
+                  bool autoLevel = false) noexcept
     {
         const float g = dbToGain (driveDb);
         const float comp = 1.f / std::sqrt (g);
         for (auto& t : tone) t.setG (prewarp (toneHz, fs), 1.41421356f);
+        const bool cut = lowCutHz > 20.5f;
+        if (cut)
+        {
+            // two sections of a 4th-order Butterworth
+            const float gc = prewarp (std::min (lowCutHz, 0.45f * fs), fs);
+            for (auto& f : low1) f.setG (gc, 0.76536686f);
+            for (auto& f : low2) f.setG (gc, 1.84775907f);
+        }
         float* ch[2] = { l, r };
+        if (autoLevel)
+        {
+            const float avg = 1.f - std::exp (-1.f / (0.015f * fs));
+            const float up = 1.f - std::exp (-1.f / (0.005f * fs)), down = 1.f - std::exp (-1.f / (0.15f * fs));
+            for (int i = 0; i < n; ++i)
+            {
+                meanSquare += (0.5f * (l[i] * l[i] + r[i] * r[i]) - meanSquare) * avg;
+                meanSquare = flushDenormal (meanSquare);
+                level += (meanSquare - level) * (meanSquare > level ? up : down);
+                level = flushDenormal (level);
+                // at most +40 dB, so silence and tails are not blown up
+                const float pre = std::min (kAutoRef / std::sqrt (level + 1.0e-12f), 100.f);
+                for (int c = 0; c < 2; ++c)
+                {
+                    const float x = ch[c][i];
+                    float y = sh[c].process (x * pre * g, type);
+                    y = dc[c].process (y);
+                    y = tone[c].process (y).lp;
+                    if (cut) y = low2[c].process (low1[c].process (y).hp).hp;
+                    float dry = x, wet = y / (pre * g);
+                    if (compensate) restoreTop (c, dry, wet);
+                    ch[c][i] = dry + (wet - dry) * mix;
+                }
+            }
+            return;
+        }
         for (int c = 0; c < 2; ++c)
             for (int i = 0; i < n; ++i)
             {
@@ -68,15 +133,39 @@ public:
                 float y = sh[c].process (x * g, type);
                 y = dc[c].process (y);
                 y = tone[c].process (y).lp;
-                const float wet = type == AdaaShaper::Fold || type == AdaaShaper::Hard ? y * 0.8f : y * std::max (comp, 0.35f) * 1.2f;
-                ch[c][i] = x + (wet - x) * mix;
+                if (cut) y = low2[c].process (low1[c].process (y).hp).hp;
+                float dry = x, wet = type == AdaaShaper::Fold || type == AdaaShaper::Hard ? y * 0.8f : y * std::max (comp, 0.35f) * 1.2f;
+                if (compensate) restoreTop (c, dry, wet);
+                ch[c][i] = dry + (wet - dry) * mix;
             }
     }
 
 private:
+    static constexpr float kAutoRef = 0.125f;   // -18 dBFS RMS: a sound's peaks sit about at full scale
+    static constexpr float kTop = 0.2f;         // the compensation's strength (flattest at 44.1 and 48 kHz)
+
+    // Undoes the ADAA's pair average, (1 + z^-1) / 2, on the wet signal with
+    // the symmetric FIR [-k, 1 + 2k, -k] (flat within 0.4 dB to 12 kHz at a
+    // 44.1 kHz base rate, from -3.7 dB). It looks one sample ahead, so both
+    // the wet and the dry signal come out one sample late.
+    struct History { float wet1 = 0.f, wet2 = 0.f, dry1 = 0.f; };
+    std::array<History, 2> hist {};
+    bool compensate = false;
+
+    void restoreTop (int c, float& dry, float& wet) noexcept
+    {
+        auto& h = hist[(size_t) c];
+        const float w = (1.f + 2.f * kTop) * h.wet1 - kTop * (wet + h.wet2);
+        h.wet2 = h.wet1;
+        h.wet1 = wet;
+        wet = w;
+        std::swap (dry, h.dry1);
+    }
+
     float fs = 48000.f;
+    float meanSquare = 0.f, level = 0.f;   // auto level: the mean square, then the followed level
     std::array<AdaaShaper, 2> sh;
-    std::array<Svf, 2> tone;
+    std::array<Svf, 2> tone, low1, low2;
     std::array<DcBlocker, 2> dc;
 };
 

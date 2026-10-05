@@ -208,7 +208,8 @@ void Engine::prepareContext (double bpm) noexcept
     ctx.sweepExp = std::exp2 (2.5f * cur.get (P::EnergyCurve));
     ctx.sweepFade = cur.get (P::EnergyFade);
     ctx.sweepDelay = cur.get (P::EnergyDelay);
-    ctx.sweepCut = cur.on (P::EnergyCut);
+    // a one-shot always ends at its length: letting go of the key doesn't
+    ctx.sweepCut = cur.on (P::EnergyCut) || cur.on (P::EnergyOneShot);
 }
 
 // ---------------------------------------------------------------------------
@@ -422,6 +423,8 @@ void Engine::voiceNoteOff (int note) noexcept
     dropHeld (note);
     if (kickMode())
         return;   // kicks are one-shots
+    if (cur.on (P::EnergyOneShot))
+        return;   // so is a One Shot sound: it plays its whole length and stops there
 
     // Poly releases every voice on the note. Mono and legato play on voice 0,
     // but a note held through a switch from poly can sit on any other voice.
@@ -606,7 +609,7 @@ void Engine::process (float* left, float* right, int numSamples, const MidiEvent
         const ParamState& fp = fxMod ? fxParams : cur;
         if (fp.on (P::DistOn) && distFirst (fp))
             dist.process (osL.data(), osR.data(), blockN * osFactor, fp.geti (P::DistType), fp.get (P::DistDrive),
-                          fp.get (P::DistTone), fp.get (P::DistMix));
+                          fp.get (P::DistTone), fp.get (P::DistMix), fp.get (P::DistLowCut), fp.on (P::DistAuto));
 
         float* l = left + done;
         float* r = right + done;
@@ -699,7 +702,8 @@ void Engine::processFx (float* l, float* r, int n, double bpm, const ParamState&
         {
             case Fx::Distortion:
                 if (p.on (P::DistOn) && chain[0] != (int) Fx::Distortion)
-                    distLate.process (l, r, n, p.geti (P::DistType), p.get (P::DistDrive), p.get (P::DistTone), p.get (P::DistMix));
+                    distLate.process (l, r, n, p.geti (P::DistType), p.get (P::DistDrive), p.get (P::DistTone), p.get (P::DistMix),
+                                      p.get (P::DistLowCut), p.on (P::DistAuto));
                 break;
             case Fx::Crush:
                 if (p.on (P::CrushOn))

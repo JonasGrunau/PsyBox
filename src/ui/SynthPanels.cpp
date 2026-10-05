@@ -767,14 +767,17 @@ void SweepDisplay::paintContent (juce::Graphics& g, juce::Rectangle<float> r)
 
 LengthPanel::LengthPanel (PsyBoxProcessor& p)
     : Section ("Length"), proc (p), sweep (p, psy::ModSrc::Sweep, "Sweep"), unit (p, P::EnergyMode),
-      cut (p, P::EnergyCut, "Cut"), display (p)
+      cut (p, P::EnergyCut, "Cut"), oneShot (p, P::EnergyOneShot, "One Shot"), display (p)
 {
     sweep.setTooltip ("The sweep runs 0 to 100 % over the length. Drag it onto any knob to move that knob with the sound");
     unit.setTooltip ("Length in bars (follows the tempo) or in seconds");
     unit.onPick = [this] (int i) { proc.setEnergyMode ((psy::EnergyMode) i); };
     cut.setStacked (true);
     cut.setTooltip ("Stop the note at the end of the length, however long it is held");
-    for (juce::Component* c : { (juce::Component*) &sweep, (juce::Component*) &unit, (juce::Component*) &cut, (juce::Component*) &display })
+    oneShot.setStacked (true);
+    oneShot.setTooltip ("Play the whole length from a tap, like a one-shot sample: letting go of the key doesn't stop it");
+    for (juce::Component* c : { (juce::Component*) &sweep, (juce::Component*) &unit, (juce::Component*) &cut, (juce::Component*) &oneShot,
+                                (juce::Component*) &display })
         addAndMakeVisible (c);
     bars = ks.add (*this, p, P::EnergyBars);
     seconds = ks.add (*this, p, P::EnergySec);
@@ -808,15 +811,16 @@ void LengthPanel::resized()
     sweep.setBounds (h.removeFromLeft (sweep.idealWidth()));
     unit.setBounds (h.removeFromRight (cellsW (2)).withSizeKeepingCentre (cellsW (2), kCtrlH));
     const auto gr = grid();
-    // the length and how the sweep runs over it on top; Cut and the
-    // picture of it below
+    // the length and how the sweep runs over it on top; Cut, One Shot and
+    // the picture of it below
     bars->setBounds (gr.cell (0, 0));
     seconds->setBounds (gr.cell (0, 0));
     delay->setBounds (gr.cell (1, 0));
     curve->setBounds (gr.cell (2, 0));
     fade->setBounds (gr.cell (3, 0));
     cut.setBounds (gr.cell (0, 1));
-    const auto row = gr.cell (1, 1, 3);
+    oneShot.setBounds (gr.cell (1, 1));
+    const auto row = gr.cell (2, 1, 2);
     display.setBounds (row.withX (row.getX() + kCellInset).withRight (body().getRight()));
 }
 

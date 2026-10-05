@@ -250,6 +250,8 @@ enum class ModDst : int
     X(DistDrive,   "dist_drive",   "Drive",       "Distortion", Linear, 0.f, 36.f, 12.f, 1.f, Db, nullptr, false) \
     X(DistTone,    "dist_tone",    "Tone",        "Distortion", Exp, 800.f, 20000.f, 12000.f, 1.f, Hz, nullptr, false) \
     X(DistMix,     "dist_mix",     "Mix",         "Distortion", Linear, 0.f, 1.f, 1.f, 1.f, Percent, nullptr, false) \
+    X(DistLowCut,  "dist_lowcut",  "Low Cut",     "Distortion", Exp, 20.f, 2000.f, 20.f, 1.f, Hz, nullptr, false) \
+    X(DistAuto,    "dist_auto",    "Auto Level",  "Distortion", Toggle, 0, 1, 0, 1.f, None, nullptr, false) \
     X(CrushOn,     "crush_on",     "On",          "Crusher", Toggle, 0, 1, 0, 1.f, None, nullptr, false) \
     X(CrushBits,   "crush_bits",   "Bits",        "Crusher", Linear, 2.f, 16.f, 12.f, 1.f, None, nullptr, false) \
     X(CrushRate,   "crush_rate",   "Downsample",  "Crusher", Power, 1.f, 64.f, 1.f, 2.f, Ratio, nullptr, false) \
@@ -324,6 +326,7 @@ enum class ModDst : int
     X(EnergyDelay, "energy_delay", "Delay",       "Energy", Linear, 0.f, 0.9f, 0.f, 1.f, Percent, nullptr, false) \
     X(EnergyFade,  "energy_fade",  "Fade",        "Energy", BiPower, -1.f, 1.f, 0.f, 1.f, Percent, nullptr, false) \
     X(EnergyCut,   "energy_cut",   "Cut at End",  "Energy", Toggle, 0, 1, 0, 1.f, None, nullptr, false) \
+    X(EnergyOneShot, "energy_oneshot", "One Shot", "Energy", Toggle, 0, 1, 0, 1.f, None, nullptr, false) \
     \
     X(ArpOn,       "arp_on",       "On",          "Arp", Toggle, 0, 1, 0, 1.f, None, nullptr, false) \
     X(ArpMode,     "arp_mode",     "Mode",        "Arp", Choice, 0, 4, 0, 1.f, None, &choices::arpMode, false) \

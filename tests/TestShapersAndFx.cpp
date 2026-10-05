@@ -323,3 +323,112 @@ TEST_CASE ("Width at 0 % folds everything to mono", "[fx][width]")
     for (size_t i = 4800; i < l.size(); ++i)
         REQUIRE (std::abs (l[i] - r[i]) < 1e-5f);
 }
+
+namespace
+{
+    // Level of one frequency in x[from, from + n), in dB (Goertzel, Hann).
+    double toneDb (const std::vector<float>& x, size_t from, size_t n, double hz, double fs)
+    {
+        const double w = 2.0 * M_PI * hz / fs, c = 2.0 * std::cos (w);
+        double s1 = 0.0, s2 = 0.0;
+        for (size_t i = 0; i < n; ++i)
+        {
+            const double win = 0.5 - 0.5 * std::cos (2.0 * M_PI * (double) i / (double) n);
+            const double s = (double) x[from + i] * win + c * s1 - s2;
+            s2 = s1;
+            s1 = s;
+        }
+        return 10.0 * std::log10 (s1 * s1 + s2 * s2 - c * s1 * s2 + 1e-30);
+    }
+
+    double rmsDb (const std::vector<float>& x, size_t from, size_t to)
+    {
+        double s = 0.0;
+        for (size_t i = from; i < to; ++i) s += (double) x[i] * x[i];
+        return 10.0 * std::log10 (s / (double) (to - from) + 1e-30);
+    }
+
+    double crestDb (const std::vector<float>& x, size_t from, size_t to)
+    {
+        float pk = 0.f;
+        for (size_t i = from; i < to; ++i) pk = std::max (pk, std::abs (x[i]));
+        return 20.0 * std::log10 ((double) pk + 1e-30) - rmsDb (x, from, to);
+    }
+
+    // A high-passed saw on 55 Hz (harmonics 4 to 60), as spiky as a Jilax
+    // shot before its clipper.
+    std::vector<float> sawTone (int n, float fs, float gain, float decayDbPerSec = 0.f)
+    {
+        std::vector<float> x ((size_t) n);
+        for (int i = 0; i < n; ++i)
+        {
+            double v = 0.0;
+            for (int k = 4; k <= 60; ++k) v += std::sin (2.0 * M_PI * 55.0 * k * i / fs) / k;
+            x[(size_t) i] = (float) (v * 0.5) * gain * std::pow (10.f, -decayDbPerSec * (float) i / fs / 20.f);
+        }
+        return x;
+    }
+} // namespace
+
+TEST_CASE ("The distortion's low cut is off at 20 Hz and takes out the lows above it", "[fx]")
+{
+    const float fs = 48000.f;
+    const int n = 1 << 15;
+    std::vector<float> in ((size_t) n);
+    for (int i = 0; i < n; ++i)
+        in[(size_t) i] = 0.2f * (float) (std::sin (2.0 * M_PI * 40.0 * i / fs) + std::sin (2.0 * M_PI * 1000.0 * i / fs));
+
+    // at its 20 Hz default the distortion is sample for sample what it was
+    Distortion a, b;
+    a.prepare (fs);
+    b.prepare (fs);
+    auto la = in, ra = in, lb = in, rb = in;
+    a.process (la.data(), ra.data(), n, 0, 12.f, 12000.f, 1.f);
+    b.process (lb.data(), rb.data(), n, 0, 12.f, 12000.f, 1.f, 20.f);
+    CHECK (la == lb);
+
+    // at 200 Hz the 40 Hz tone goes, the 1 kHz tone stays
+    Distortion c;
+    c.prepare (fs);
+    auto lc = in, rc = in;
+    c.process (lc.data(), rc.data(), n, 0, 0.f, 20000.f, 1.f, 200.f);
+    const size_t from = (size_t) (n / 2), len = (size_t) (n / 2);
+    CHECK (toneDb (lc, from, len, 40.0, fs) - toneDb (in, from, len, 40.0, fs) < -45.0);
+    CHECK (std::abs (toneDb (lc, from, len, 1000.0, fs) - toneDb (in, from, len, 1000.0, fs)) < 3.0);
+}
+
+TEST_CASE ("Auto Level clips the same at any input level and keeps a decay", "[fx]")
+{
+    const float fs = 48000.f;
+    const int n = (int) fs;
+    const size_t from = (size_t) (0.3f * fs), to = (size_t) n;
+
+    // the same tone 20 dB apart: with Auto Level the output is the same
+    // sound 20 dB apart; without it the quiet one is barely touched
+    const auto run = [&] (float gain, bool autoLevel) {
+        auto l = sawTone (n, fs, gain), r = l;
+        Distortion d;
+        d.prepare (fs);
+        d.process (l.data(), r.data(), n, 1, 12.f, 20000.f, 1.f, 20.f, autoLevel);
+        return l;
+    };
+    const auto loud = run (1.f, true), quiet = run (0.1f, true);
+    CHECK (std::abs (rmsDb (loud, from, to) - rmsDb (quiet, from, to) - 20.0) < 0.5);
+    CHECK (std::abs (crestDb (loud, from, to) - crestDb (quiet, from, to)) < 0.5);
+    const auto dry = sawTone (n, fs, 1.f);
+    CHECK (crestDb (loud, from, to) < crestDb (dry, from, to) - 3.0);   // it really clips
+    const auto fixedQuiet = run (0.1f, false), fixedLoud = run (1.f, false);
+    CHECK (std::abs (crestDb (fixedLoud, from, to) - crestDb (fixedQuiet, from, to)) > 2.0);
+
+    // a tone falling 30 dB a second still falls about 30 dB a second (18 dB
+    // between the windows); a clipper at a fixed drive squashes the fall
+    const auto fall = [&] (bool autoLevel) {
+        auto l = sawTone (n, fs, 1.f, 30.f), r = l;
+        Distortion d;
+        d.prepare (fs);
+        d.process (l.data(), r.data(), n, 1, 24.f, 20000.f, 1.f, 20.f, autoLevel);
+        return rmsDb (l, (size_t) (0.2f * fs), (size_t) (0.3f * fs)) - rmsDb (l, (size_t) (0.8f * fs), (size_t) (0.9f * fs));
+    };
+    CHECK (std::abs (fall (true) - 18.0) < 3.0);
+    CHECK (fall (false) < 13.0);
+}

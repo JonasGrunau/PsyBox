@@ -943,7 +943,9 @@ FxPage::FxPage (PsyBoxProcessor& p)
     auto* dist = add ("Distortion", Glyph::Distortion, P::DistOn);
     dist->knob (P::DistDrive, 0);
     dist->knob (P::DistTone, 1);
-    dist->segmented (P::DistType, 2, 5, "Type");
+    dist->knob (P::DistType, 2, 0, "Type");   // a stepped knob, like the delay's division: the strip has no room for five buttons
+    dist->knob (P::DistLowCut, 3);
+    dist->toggle (P::DistAuto, 4, "Auto");
     dist->mix (P::DistMix);
     dist->display (picture (K::Distortion), kDisplayW);
 

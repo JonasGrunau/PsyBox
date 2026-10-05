@@ -137,9 +137,13 @@ TEST_CASE ("Every category generates playable, finite, non-silent patches", "[en
         {
             const ParamState p = g.generate ((Category) c, seed, current, locks);
             const auto cat = (Category) c;
-            // energy sounds are one gesture per note: hold one through the render
+            // energy sounds are one gesture per note: hold one through its
+            // length and a second of tail (a one-beat shot would drown in six)
             const bool sustained = cat == Category::Atmos || cat == Category::Drone;
-            const Render out = hasLength (cat) ? hold (p, 6.0) : play (p, sustained ? 6.0 : 3.0, 48000.0, 256, sustained ? 40.0 : 0.6);
+            const double length = p.geti (P::EnergyMode) == (int) EnergyMode::Time ? (double) p.get (P::EnergySec)
+                                                                                   : energyBarsValue (p.geti (P::EnergyBars)) * 4.0 * 60.0 / 145.0;
+            const Render out = hasLength (cat) ? hold (p, std::min (6.0, length + 1.0))
+                                               : play (p, sustained ? 6.0 : 3.0, 48000.0, 256, sustained ? 40.0 : 0.6);
             INFO (categoryInfo()[(size_t) c].name << " seed " << seed << ": peak " << out.peak << " rms " << out.rmsDb << " dB");
             CHECK (out.peak <= 1.0f);
             CHECK (out.rmsDb > -60.0);
@@ -870,4 +874,90 @@ TEST_CASE ("Reverse Sub matches its reference shots: a swell from silence, a hel
     }
     CHECK (falls > 0);
     CHECK (rises > 0);
+}
+
+TEST_CASE ("Jilax shots end at their length with the key held, wide and without a sub", "[engine][jilax]")
+{
+    Generator g;
+    const double fs = 48000.0, bpm = 142.0, beat = 60.0 / bpm;
+    const int n = 16;
+    int wide = 0;
+    for (uint32_t seed = 1; seed <= (uint32_t) n; ++seed)
+    {
+        INFO ("seed " << seed);
+        const auto p = g.generate (Category::Jilax, seed, ParamState(), LockSet());
+        const double len = energyBarsValue (p.geti (P::EnergyBars)) * 4.0 * beat;
+        const auto out = hold (p, len + 2.5, -1.0, 52, bpm);   // E3, held down the whole time
+        const auto power = [&] (const std::vector<float>& x, double t0, double t1) {
+            double s = 0.0;
+            const auto a = (size_t) (t0 * fs), b = (size_t) (t1 * fs);
+            for (size_t i = a; i < b; ++i) s += (double) x[i] * x[i];
+            return s / (double) (b - a) + 1e-30;
+        };
+        const double body = 10.0 * std::log10 (power (out.l, 0.02, 0.8 * len));
+        CHECK (body > -70.0);   // sounding (unlevelled, so well under the plugin's level)
+        CHECK (10.0 * std::log10 (power (out.l, len + 1.5, len + 2.5)) < body - 30.0);   // over, tails and all
+
+        std::vector<float> mid (out.l.size()), side (out.l.size());
+        for (size_t i = 0; i < mid.size(); ++i)
+        {
+            mid[i] = 0.5f * (out.l[i] + out.r[i]);
+            side[i] = 0.5f * (out.l[i] - out.r[i]);
+        }
+        wide += power (side, 0.02, 0.8 * len) > 0.1 * power (mid, 0.02, 0.8 * len) ? 1 : 0;
+
+        // a high-passed shot in the bass register keeps under 60 Hz far below the rest
+        const int f2 = p.geti (P::F2Type);
+        if (p.geti (P::Octave) != -2 || (f2 != (int) FilterType::HP12 && f2 != (int) FilterType::HP18 && f2 != (int) FilterType::HP24))
+            continue;
+        std::vector<std::complex<double>> a (1 << 14);
+        const auto from = (size_t) (0.02 * fs);
+        for (size_t i = 0; i < a.size(); ++i)
+            a[i] = (from + i < mid.size() ? mid[from + i] : 0.f) * (0.5 - 0.5 * std::cos (2.0 * M_PI * (double) i / (double) a.size()));
+        testutil::fft (a);
+        double low = 0.0, all = 0.0;
+        for (size_t i = 1; i < a.size() / 2; ++i)
+        {
+            const double f = (double) i * fs / (double) a.size(), pw = std::norm (a[i]);
+            all += pw;
+            if (f < 60.0) low += pw;
+        }
+        CHECK (10.0 * std::log10 (low / all) < -20.0);
+    }
+    CHECK (wide >= n * 3 / 4);   // the side within 10 dB of the mid
+}
+
+TEST_CASE ("A One Shot sound plays its whole length from a tap", "[engine][energy]")
+{
+    Generator g;
+    for (uint32_t seed = 1; seed <= 6; ++seed)
+    {
+        INFO ("seed " << seed);
+        auto p = g.generate (Category::Jilax, seed, ParamState(), LockSet());
+        REQUIRE (p.on (P::EnergyOneShot));
+        const double len = energyBarsValue (p.geti (P::EnergyBars)) * 4.0 * 60.0 / 145.0;
+        // a 20 ms tap and a key held past the end sound exactly the same
+        const auto tap = hold (p, len + 1.0, 0.02);
+        const auto held = hold (p, len + 1.0, len + 0.5);
+        CHECK (tap.l == held.l);
+        CHECK (tap.r == held.r);
+
+    }
+
+    // on the init patch (a held saw), a tap ends the note early without One
+    // Shot and plays the whole beat with it; either way it stops at the end
+    ParamState p;
+    p.set (P::EnergyBars, 0.f);   // one beat
+    p.set (P::EnergyCut, 1.f);
+    const double beat = 60.0 / 145.0;
+    const auto power = [&] (const std::vector<float>& x, double t0, double t1) {
+        double s = 0.0;
+        for (auto i = (size_t) (t0 * 48000.0); i < (size_t) (t1 * 48000.0); ++i) s += (double) x[i] * x[i];
+        return 10.0 * std::log10 (s / ((t1 - t0) * 48000.0) + 1e-30);
+    };
+    const auto cut = hold (p, 2.0, 0.02);
+    p.set (P::EnergyOneShot, 1.f);
+    const auto shot = hold (p, 2.0, 0.02);
+    CHECK (power (cut.l, 0.5 * beat, 0.9 * beat) < power (shot.l, 0.5 * beat, 0.9 * beat) - 40.0);
+    CHECK (power (shot.l, beat + 0.5, 2.0) < power (shot.l, 0.5 * beat, 0.9 * beat) - 60.0);
 }

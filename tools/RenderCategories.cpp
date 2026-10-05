@@ -93,6 +93,12 @@ namespace
                 for (int b = 0; b < 16; b += 2) p.push_back ({ b + 1.0, 1.0, bars[b / 4], 0.9f });
                 break;
             }
+            case Category::Jilax:   // a tap every two beats, E3 E3 G3 D3 (an E1 root): One Shot plays each in full
+            {
+                static const int bars[4] = { 52, 52, 55, 50 };
+                for (int b = 0; b < 16; b += 2) p.push_back ({ (double) b, 0.1, bars[b / 4], 0.8f });
+                break;
+            }
             case Category::KickFullOn: case Category::KickGoa: case Category::KickDarkForest:
             case Category::KickHiTech: case Category::KickProgressive:
                 // four on the floor; the key changes every bar (F, F, G, D#) to hear the tracking

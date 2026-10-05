@@ -360,8 +360,8 @@ TEST_CASE ("The sidebar tabs hold the sounds they are named for", "[generator][c
         const auto& l = categoriesIn (g);
         return std::find (l.begin(), l.end(), c) != l.end();
     };
-    for (auto c : { Acid, PsyLead, Stab, Pluck }) CHECK (in (CategoryGroup::Main, c));
-    CHECK (categoriesIn (CategoryGroup::Main).size() == 4);
+    for (auto c : { Acid, Jilax, PsyLead, Stab, Pluck }) CHECK (in (CategoryGroup::Main, c));
+    CHECK (categoriesIn (CategoryGroup::Main).size() == 5);
     for (auto c : { Squelch, Zap, Laser, Screech, AlienVoice, Bubble, Gurgle, Wobble, Metallic, Glitch }) CHECK (in (CategoryGroup::Fx, c));
     for (auto c : { Riser, Downlifter, NoiseFx, Uplifter, Impact, Reverse }) CHECK (in (CategoryGroup::Energy, c));
     for (auto c : { Atmos, Drone, Gate }) CHECK (in (CategoryGroup::Background, c));
@@ -677,4 +677,35 @@ TEST_CASE ("Leads and pads get unison now and then, basses never", "[generator][
     }
     CHECK (leads >= 10);
     CHECK (pads >= 15);
+}
+
+TEST_CASE ("Jilax shots last a beat or two, cut at the end, high-passed in the bass register and clipped last", "[generator][jilax]")
+{
+    Generator g;
+    const int n = 200;
+    int oneBeat = 0, bassRoot = 0, highPassed = 0, clippedLast = 0;
+    for (uint32_t seed = 1; seed <= (uint32_t) n; ++seed)
+    {
+        INFO ("seed " << seed);
+        const auto p = g.generate (Category::Jilax, seed, ParamState(), LockSet(), true);
+        CHECK_FALSE (p.on (P::ArpOn));   // asked for, never given: a shot is one hit
+        CHECK (p.geti (P::EngineMode) == (int) EngineMode::Synth);
+        CHECK (p.on (P::EnergyCut));
+        CHECK (p.on (P::EnergyOneShot));   // a tap plays the whole shot
+        CHECK (energyBarsValue (p.geti (P::EnergyBars)) <= 1.f);
+        CHECK (p.geti (P::Octave) <= 0);
+        oneBeat += p.geti (P::EnergyBars) == 0 ? 1 : 0;
+        bassRoot += p.geti (P::Octave) == -2 ? 1 : 0;
+        const int f2 = p.geti (P::F2Type);
+        highPassed += (f2 == (int) FilterType::HP12 || f2 == (int) FilterType::HP18 || f2 == (int) FilterType::HP24) ? 1 : 0;
+        if (p.on (P::DistOn) && p.on (P::DistAuto) && fxChain (p.geti (P::FxOrder)).back() == (int) Fx::Distortion)
+            ++clippedLast;
+    }
+    CHECK (hasLength (Category::Jilax));
+    CHECK_FALSE (hasArp (Category::Jilax));
+    CHECK (familyOf (Category::Jilax) == Family::Synth);
+    CHECK (oneBeat > n / 2);              // most shots are one beat
+    CHECK (bassRoot > n * 6 / 10);        // most roots two octaves under the key
+    CHECK (highPassed > n * 3 / 4);       // and the fundamental taken out
+    CHECK (clippedLast > n * 3 / 4);      // a clipper at the end of the chain
 }

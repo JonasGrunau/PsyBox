@@ -3,7 +3,7 @@
 **Generated:** 2026-09-27 · **Updated:** 2026-10-05
 
 ## Purpose
-PsyBox is a psytrance sound-design synthesizer (VST3 / AU / Standalone, JUCE 8). You pick one of 34 categories in six sidebar groups (Main, FX, Energy, Background, Bass, Kick), press **Generate**, and a seeded recipe fills every parameter and names the four macros after what they drive. Each parameter stays editable afterwards in a Serum-style editor (OSC / FX / MATRIX / ARP / GLOBAL views, mod sources dragged onto knobs). Energy sounds run over a length in bars or seconds instead of an arp. The code is split in two. `src/core` is JUCE-free C++20 (DSP, engine, generator) that builds and tests in seconds. `src/plugin` + `src/ui` wrap it in a JUCE processor and editor.
+PsyBox is a psytrance sound-design synthesizer (VST3 / AU / Standalone, JUCE 8). You pick one of 35 categories in six sidebar groups (Main, FX, Energy, Background, Bass, Kick), press **Generate**, and a seeded recipe fills every parameter and names the four macros after what they drive. Each parameter stays editable afterwards in a Serum-style editor (OSC / FX / MATRIX / ARP / GLOBAL views, mod sources dragged onto knobs). Energy sounds run over a length in bars or seconds instead of an arp. The code is split in two. `src/core` is JUCE-free C++20 (DSP, engine, generator) that builds and tests in seconds. `src/plugin` + `src/ui` wrap it in a JUCE processor and editor.
 
 ## Key Files
 | File | Description |

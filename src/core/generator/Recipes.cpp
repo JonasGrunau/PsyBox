@@ -1549,6 +1549,7 @@ Recipe recipeFor (Category c) noexcept
         case Category::ProgBass:    return progBass;
         case Category::ReverseBass: return reverseBass;
         case Category::ReverseSub:  return reverseSub;
+        case Category::Jilax:       return jilaxRecipe;
         case Category::KickFullOn:
         case Category::KickGoa:
         case Category::KickDarkForest:
