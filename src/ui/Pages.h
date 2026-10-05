@@ -59,52 +59,6 @@ private:
 };
 
 // ---------------------------------------------------------------------------
-// FX: every effect at once, in signal-chain order (left to right, top to
-// bottom). Each module switches on in its header.
-// ---------------------------------------------------------------------------
-class FxModule : public Section, private juce::Timer
-{
-public:
-    FxModule (PsyBoxProcessor&, int chainIndex, const juce::String& title, psy::P onParam);
-    void paint (juce::Graphics&) override;
-    void resized() override;
-
-    ParamKnob* knob (psy::P, int col, int row, const juce::String& label = {});
-    void segmented (psy::P, int col, int row, int span, const juce::String& caption, juce::StringArray labels = {});
-    void toggle (psy::P, int col, int row, const juce::String& text);
-    void headerControl (std::unique_ptr<juce::Component>, int width);
-    void showWhen (juce::Component*, std::function<bool()> visible);   // re-checked on a timer
-    void setSideDisplay (std::unique_ptr<juce::Component>);            // fills the body right of the cells
-
-protected:
-    PsyBoxProcessor& proc;
-    int index;
-    psy::P onParam;
-    int shownActive = -1;   // on state the controls were last greyed for
-    ToggleDot on;
-    KnobSet ks;
-    struct Item { juce::Component* c; int col, row, span; bool captioned, control; juce::String caption; };
-    std::vector<Item> items;
-    std::vector<std::unique_ptr<juce::Component>> owned;
-    std::vector<std::pair<juce::Component*, std::function<bool()>>> conditional;
-    juce::Component* headerExtra = nullptr;
-    int headerExtraW = 0;
-    juce::Component* side = nullptr;
-    int columns() const;
-    void timerCallback() override;
-};
-
-class FxPage : public Page
-{
-public:
-    explicit FxPage (PsyBoxProcessor&);
-    void resized() override;
-
-private:
-    std::vector<std::unique_ptr<FxModule>> modules;
-};
-
-// ---------------------------------------------------------------------------
 // MATRIX: all sixteen routes as rows: source, amount, target.
 // ---------------------------------------------------------------------------
 class MatrixPage : public Page

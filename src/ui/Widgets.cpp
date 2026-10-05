@@ -534,6 +534,8 @@ std::vector<float> Segmented::segmentWidths (float total) const
 
 int Segmented::indexAt (juce::Point<int> pt) const
 {
+    if (vertical)
+        return juce::jlimit (0, labels.size() - 1, pt.y * labels.size() / juce::jmax (1, getHeight()));
     float x = 0.f;
     const auto w = segmentWidths ((float) getWidth());
     for (int i = 0; i < labels.size() - 1; ++i)
@@ -550,11 +552,13 @@ void Segmented::paint (juce::Graphics& g)
     g.setColour (col::lineStrong);
     g.drawRoundedRectangle (b, 3.f, 1.f);
     const auto w = segmentWidths (b.getWidth());
+    const float rowH = b.getHeight() / (float) juce::jmax (1, labels.size());
     g.setFont (heading (9.5f));
     float x = b.getX();
     for (int i = 0; i < labels.size(); ++i)
     {
-        const auto seg = juce::Rectangle<float> (x, b.getY(), w[(size_t) i], b.getHeight());
+        const auto seg = vertical ? juce::Rectangle<float> (b.getX(), b.getY() + rowH * (float) i, b.getWidth(), rowH)
+                                  : juce::Rectangle<float> (x, b.getY(), w[(size_t) i], b.getHeight());
         x += w[(size_t) i];
         if (i == selected)
         {
@@ -564,7 +568,8 @@ void Segmented::paint (juce::Graphics& g)
         if (i > 0)
         {
             g.setColour (col::line);
-            g.fillRect (seg.getX(), seg.getY() + 5.f, 1.f, seg.getHeight() - 10.f);
+            if (vertical) g.fillRect (seg.getX() + 6.f, seg.getY(), seg.getWidth() - 12.f, 1.f);
+            else g.fillRect (seg.getX(), seg.getY() + 5.f, 1.f, seg.getHeight() - 10.f);
         }
         g.setColour (i == selected ? accent() : (i == hover ? col::text : col::textDim));
         g.drawText (labels[i].toUpperCase(), seg.toNearestInt(), juce::Justification::centred, false);

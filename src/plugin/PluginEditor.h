@@ -1,7 +1,7 @@
 #pragma once
 
 #include "PluginProcessor.h"
-#include "ui/Pages.h"
+#include "ui/FxPage.h"
 #include "ui/PsyLookAndFeel.h"
 
 // The whole UI is laid out at a fixed logical size and scaled as one piece,

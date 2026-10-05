@@ -145,6 +145,9 @@ public:
     void mouseExit (const juce::MouseEvent&) override { hover = -1; repaint(); }
 
     int getSelected() const noexcept { return selected; }
+    int getNumChoices() const noexcept { return labels.size(); }
+    // Stacked: one row per choice instead of side by side.
+    void setVertical (bool v) { vertical = v; repaint(); }
     std::function<void (int)> onChange;
     // When set, a click calls this instead of writing the parameter (for
     // switches that convert other values first, like bars <-> seconds).
@@ -155,6 +158,7 @@ private:
     psy::P param;
     juce::StringArray labels;
     int selected = 0, hover = -1;
+    bool vertical = false;
     juce::ParameterAttachment attachment;
 
     int indexAt (juce::Point<int>) const;

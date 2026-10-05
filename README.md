@@ -157,8 +157,11 @@ Laid out like Serum. The tabs in the top bar switch views:
 - **OSC**: sub and noise, the two oscillators (waveform on top, knobs below),
   the two filters; underneath the macros, the modulators and the voicing, with
   the Length (Energy) or the Knock (Bass) under it.
-- **FX**: all nine effects at once, numbered in signal order, each switched on
-  in its header. Switched-off effects grey out.
+- **FX**: a rack like Serum 2's. The chain on the left lists the nine effects
+  in signal order (click a row to switch one on or off). On the right, each
+  effect is a strip: badge, knobs, a display of what it does (curve, steps,
+  echoes, reverb tail, stereo fan...), Mix and a power switch. Switched-off
+  strips grey out.
 - **Matrix**: the 16 modulation routes as rows: source, amount, target.
 - **Arp** (Main, FX, Background): the step editor (play, note, accent and
   slide lanes, a ruler for the loop length), rate, octaves, gate, swing,
