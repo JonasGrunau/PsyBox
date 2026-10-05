@@ -283,28 +283,43 @@ TEST_CASE ("The sidebar lists sections in order, alphabetical inside each", "[ge
     for (int n : perGroup) CHECK (n > 0);
 }
 
-TEST_CASE ("Each sidebar tab runs through the hue wheel once, top to bottom", "[generator][category]")
+TEST_CASE ("One rainbow runs down the whole sidebar, tab after tab", "[generator][category]")
 {
-    const auto hue = [] (uint32_t rgb) {
+    const auto hue = [] (Category c) {
+        const uint32_t rgb = categoryInfo()[(size_t) c].colour;
         const float r = (float) ((rgb >> 16) & 0xFF) / 255.f, g = (float) ((rgb >> 8) & 0xFF) / 255.f, b = (float) (rgb & 0xFF) / 255.f;
         const float mx = std::max ({ r, g, b }), d = mx - std::min ({ r, g, b });
         const float h = mx == r ? std::fmod ((g - b) / d, 6.f) : mx == g ? (b - r) / d + 2.f : (r - g) / d + 4.f;
         return std::fmod (h * 60.f + 360.f, 360.f);
     };
-    for (auto f : { Family::Synth, Family::Bass, Family::Kick })
+    // red first, towards magenta, no wrap past red
+    const auto& order = categoryDisplayOrder();
+    CHECK (hue (order.front()) < 15.f);
+    CHECK (hue (order.back()) > 290.f);
+    float last = -1.f;
+    for (Category c : order)
     {
-        // like the synth tab: warm (red/orange) first, towards magenta, no wrap past red
-        const auto& rows = categoriesIn (f);
-        CHECK (hue (categoryInfo()[(size_t) rows.front()].colour) < 45.f);
-        float last = -1.f;
-        for (Category c : rows)
-        {
-            const float h = hue (categoryInfo()[(size_t) c].colour);
-            INFO (categoryInfo()[(size_t) c].name << " hue " << h);
-            CHECK (h > last);
-            last = h;
-        }
+        INFO (categoryInfo()[(size_t) c].name << " hue " << hue (c));
+        CHECK (hue (c) > last);
+        last = hue (c);
     }
+}
+
+TEST_CASE ("The sidebar tabs hold the sounds they are named for", "[generator][category]")
+{
+    using enum Category;
+    const auto in = [] (CategoryGroup g, Category c) {
+        const auto& l = categoriesIn (g);
+        return std::find (l.begin(), l.end(), c) != l.end();
+    };
+    for (auto c : { Acid, PsyLead, Stab, Pluck }) CHECK (in (CategoryGroup::Main, c));
+    CHECK (categoriesIn (CategoryGroup::Main).size() == 4);
+    for (auto c : { Squelch, Zap, Laser, Screech, AlienVoice, Bubble, Gurgle, Wobble, Metallic, Glitch }) CHECK (in (CategoryGroup::Fx, c));
+    for (auto c : { Riser, Downlifter, NoiseFx, Uplifter, Impact, Reverse }) CHECK (in (CategoryGroup::Energy, c));
+    for (auto c : { Atmos, Drone, Gate }) CHECK (in (CategoryGroup::Background, c));
+    int listed = 0;
+    for (int g = 0; g < kNumCategoryGroups; ++g) listed += (int) categoriesIn ((CategoryGroup) g).size();
+    CHECK (listed == kNumCategories);
 }
 
 TEST_CASE ("The engine mode always follows the category, even when locked", "[generator][kick]")

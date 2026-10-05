@@ -20,14 +20,16 @@ enum class Category : int
 
 constexpr int kNumCategories = (int) Category::Count;
 
-// Sidebar sections, in the order they are listed. Synth sounds are split by
-// their role in a track, most important first; basses and kicks are one
-// section each (their tab shows no captions).
-enum class CategoryGroup : int { Main, Shots, Fx, Energy, Background, Bass, Kick, Count };
+// Sidebar tabs, in the order they are shown. Synth sounds are split by their
+// role in a track (leads first, then effects, build-up tools and beds);
+// basses and kicks have a tab each.
+enum class CategoryGroup : int { Main, Fx, Energy, Background, Bass, Kick, Count };
+
+constexpr int kNumCategoryGroups = (int) CategoryGroup::Count;
 
 inline const char* categoryGroupName (CategoryGroup g) noexcept
 {
-    static constexpr const char* names[] = { "Main", "Shots", "FX", "Energy", "Background", "Bass", "Kick" };
+    static constexpr const char* names[] = { "Main", "FX", "Energy", "Background", "Bass", "Kick" };
     return names[(size_t) g];
 }
 
@@ -35,62 +37,60 @@ struct CategoryInfo
 {
     const char* name;
     const char* shortName;   // for compact chips
-    CategoryGroup group;     // sidebar section
+    CategoryGroup group;     // sidebar tab
     uint32_t colour;         // 0xRRGGBB accent
     const char* blurb;
 };
 
 inline const std::array<CategoryInfo, kNumCategories>& categoryInfo() noexcept
 {
-    // Synth accents run as a rainbow down the sidebar list (red -> magenta,
-    // through the sections in order and A-Z inside each), generated in OKLCH
-    // with hue in even steps and lightness lifted around yellow and lowered
+    // The accents run as one rainbow down the whole sidebar: red at the first
+    // sound of the first tab, through every tab in order (A-Z inside each),
+    // to magenta at the last kick. Generated in OKLCH with hue in even steps
+    // (25 -> 335 degrees) and lightness lifted around yellow and lowered
     // around blue, so no accent shouts louder than another.
-    // Basses and kicks sit on the half steps between the synth hues, and
-    // each of those tabs is a rainbow of its own.
     using enum CategoryGroup;
     static const std::array<CategoryInfo, kNumCategories> info { {
         { "Acid",         "Acid",    Main,       0xFE5654, "303 lines: diode ladder, accent, slide" },
-        { "Squelch",      "Squelch", Main,       0xFE882B, "Wet, vocal mid-bass with fast filter motion" },
-        { "Zap",          "Zap",     Shots,      0xF3CD02, "Short pitch dives for percussive hits" },
-        { "Laser",        "Laser",   Fx,         0x0ED19B, "Sync sweeps and long pitch falls" },
-        { "Psy Bass",     "Psy",     Bass,       0xE96DE8, "Rolling 16th bass with a knock on every note" },
-        { "Psy Lead",     "Lead",    Main,       0xFE6D3A, "Wide saw and wavetable leads" },
-        { "Pluck",        "Pluck",   Shots,      0xFEA227, "Percussive tonal plucks" },
-        { "Stab",         "Stab",    Shots,      0xFDBA20, "Chord stabs with room around them" },
-        { "Screech",      "Screech", Fx,         0x10C5C4, "Resonant, distorted screams" },
-        { "Alien Voice",  "Alien",   Fx,         0xDAD904, "Talking formant textures" },
-        { "Bubble",       "Bubble",  Fx,         0xB1DF1D, "Resonant blips and bloops" },
-        { "Gurgle",       "Gurgle",  Fx,         0x33D977, "Liquid, random filter chatter" },
-        { "Wobble",       "Wobble",  Fx,         0x0EC1D5, "Tempo-synced morphing tones" },
-        { "Metallic",     "Metal",   Fx,         0x11CBB2, "FM bells, combs and clangs" },
-        { "Riser",        "Riser",   Energy,     0x858BFE, "Synth tones climbing in pitch for build-ups" },
-        { "Downlifter",   "Down",    Energy,     0x0FBCE6, "Falling sweeps for drops" },
-        { "Noise FX",     "Noise",   Energy,     0x49A5FD, "Filtered noise whooshes and textures" },
-        { "Atmos",        "Atmos",   Background, 0xBF77FD, "Evolving pads and air" },
-        { "Drone",        "Drone",   Background, 0xDD6FF2, "Slow, dark, endless tones" },
-        { "Uplifter",     "Uplift",  Energy,     0xA181FE, "Noise sweeps that open upward" },
-        { "Impact",       "Impact",  Energy,     0x23B2F5, "Sub booms and hits for drops" },
-        { "Gate",         "Gate",    Background, 0xF56CDC, "Tempo-gated pads and chopped textures" },
-        { "Glitch",       "Glitch",  Fx,         0x77DF4A, "Stuttered, bit-crushed digital chatter" },
-        { "Reverse",      "Rev",     Energy,     0x6A97FE, "Swells that cut off at the peak" },
-        // Kicks: their own five hues on the same lightness/chroma curve.
-        { "Full-On Kick",     "Full-On", Kick, 0xFEAF27, "Punchy and bright, tight for 16th rolls" },
-        { "Goa Kick",         "Goa",     Kick, 0x56DD61, "Round and boomy with a soft top" },
-        { "Dark Forest Kick", "Forest",  Kick, 0xFE6247, "Hard, distorted and short" },
-        { "Hi-Tech Kick",     "Hi-Tech", Kick, 0x0EB7EF, "Very short, clicky and high" },
-        { "Progressive Kick", "Prog",    Kick, 0xB07CFF, "Clean sine body with a deep knock" },
+        { "Squelch",      "Squelch", Fx,         0x84DF42, "Wet, vocal mid-bass with fast filter motion" },
+        { "Zap",          "Zap",     Fx,         0x25D780, "Short pitch dives for percussive hits" },
+        { "Laser",        "Laser",   Fx,         0xE2D509, "Sync sweeps and long pitch falls" },
+        { "Psy Bass",     "Psy",     Bass,       0x9287FF, "Rolling 16th bass with a knock on every note" },
+        { "Psy Lead",     "Lead",    Main,       0xFF7932, "Wide saw and wavetable leads" },
+        { "Pluck",        "Pluck",   Main,       0xFE6741, "Percussive tonal plucks" },
+        { "Stab",         "Stab",    Main,       0xFE8C29, "Chord stabs with room around them" },
+        { "Screech",      "Screech", Fx,         0xACDF23, "Resonant, distorted screams" },
+        { "Alien Voice",  "Alien",   Fx,         0xFE9E26, "Talking formant textures" },
+        { "Bubble",       "Bubble",  Fx,         0xFEB026, "Resonant blips and bloops" },
+        { "Gurgle",       "Gurgle",  Fx,         0xF3CC02, "Liquid, random filter chatter" },
+        { "Wobble",       "Wobble",  Fx,         0x55DD62, "Tempo-synced morphing tones" },
+        { "Metallic",     "Metal",   Fx,         0xCBDB04, "FM bells, combs and clangs" },
+        { "Riser",        "Riser",   Energy,     0x08C2D1, "Synth tones climbing in pitch for build-ups" },
+        { "Downlifter",   "Down",    Energy,     0x0BD299, "Falling sweeps for drops" },
+        { "Noise FX",     "Noise",   Energy,     0x06C9B9, "Filtered noise whooshes and textures" },
+        { "Atmos",        "Atmos",   Background, 0x0BBAEA, "Evolving pads and air" },
+        { "Drone",        "Drone",   Background, 0x20B3F4, "Slow, dark, endless tones" },
+        { "Uplifter",     "Uplift",  Energy,     0x04BFDE, "Noise sweeps that open upward" },
+        { "Impact",       "Impact",  Energy,     0x02CDAB, "Sub booms and hits for drops" },
+        { "Gate",         "Gate",    Background, 0x3CAAFB, "Tempo-gated pads and chopped textures" },
+        { "Glitch",       "Glitch",  Fx,         0xFBBF17, "Stuttered, bit-crushed digital chatter" },
+        { "Reverse",      "Rev",     Energy,     0x0EC5C5, "Swells that cut off at the peak" },
+        { "Full-On Kick",     "Full-On", Kick, 0xBB78FE, "Punchy and bright, tight for 16th rolls" },
+        { "Goa Kick",         "Goa",     Kick, 0xD072F8, "Round and boomy with a soft top" },
+        { "Dark Forest Kick", "Forest",  Kick, 0xA680FF, "Hard, distorted and short" },
+        { "Hi-Tech Kick",     "Hi-Tech", Kick, 0xE46EEC, "Very short, clicky and high" },
+        { "Progressive Kick", "Prog",    Kick, 0xF56CDC, "Clean sine body with a deep knock" },
         // Categories added after the kicks (the enum only ever grows).
-        { "Bass Shot",    "Shot",    Bass,       0xFF9527, "Progressive one-shot bass hits, OTT-compressed" },
-        { "Offbeat Bass", "Offbeat", Bass,       0x0FD58A, "One plucked note between the kicks" },
-        { "Prog Bass",    "Prog",    Bass,       0x5A9EFF, "Round, dark progressive bass with a soft knock" },
+        { "Bass Shot",    "Shot",    Bass,       0x54A0FE, "Progressive one-shot bass hits, OTT-compressed" },
+        { "Offbeat Bass", "Offbeat", Bass,       0x6A97FE, "One plucked note between the kicks" },
+        { "Prog Bass",    "Prog",    Bass,       0x7E8EFF, "Round, dark progressive bass with a soft knock" },
     } };
     return info;
 }
 
 inline CategoryGroup groupOf (Category c) noexcept { return categoryInfo()[(size_t) c].group; }
 
-// Sidebar order: by section, then alphabetical. The enum order stays fixed
+// Sidebar order: by tab, then alphabetical. The enum order stays fixed
 // because saved sessions store the category index.
 inline const std::array<Category, kNumCategories>& categoryDisplayOrder() noexcept
 {
@@ -108,7 +108,7 @@ inline const std::array<Category, kNumCategories>& categoryDisplayOrder() noexce
     return order;
 }
 
-// One sidebar section's categories, alphabetical.
+// One sidebar tab's categories, alphabetical.
 inline const std::vector<Category>& categoriesIn (CategoryGroup g) noexcept
 {
     static const auto lists = [] {
@@ -120,8 +120,9 @@ inline const std::vector<Category>& categoriesIn (CategoryGroup g) noexcept
     return lists[(size_t) g];
 }
 
-// Synth sounds, basses and kicks are separate families: the sidebar lists one
-// family at a time, and a kick category plays the kick engine (EngineMode::Kick).
+// Synth sounds, basses and kicks are separate engine families: a kick
+// category plays the kick engine (EngineMode::Kick), basses and synth sounds
+// the synth engine.
 enum class Family : int { Synth, Bass, Kick, Count };
 
 constexpr Family familyOf (Category c) noexcept
@@ -141,7 +142,7 @@ inline bool isEnergy (Category c) noexcept { return groupOf (c) == CategoryGroup
 // and energy sounds are one long gesture.
 inline bool hasArp (Category c) noexcept { return familyOf (c) == Family::Synth && ! isEnergy (c); }
 
-// One family's categories in sidebar order (by section, then alphabetical).
+// One family's categories in sidebar order.
 inline const std::vector<Category>& categoriesIn (Family f) noexcept
 {
     static const auto lists = [] {
