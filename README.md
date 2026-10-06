@@ -354,6 +354,22 @@ standalone app at `build/PsyBox_artefacts/Release/Standalone/PsyBox.app`.
 JUCE 8 is downloaded automatically. To use a local checkout instead, pass
 `-DFETCHCONTENT_SOURCE_DIR_JUCE=/path/to/JUCE`.
 
+### Releases
+
+Push a version tag and GitHub Actions builds the installers and attaches them
+to a new release:
+
+```sh
+git tag v1.2.0 && git push origin v1.2.0
+```
+
+You get a macOS `.pkg` (universal, VST3 + AU + standalone), a Windows setup
+`.exe` (VST3 + standalone) and a zip of the bare plug-ins for each. A suffix
+such as `v1.2.0-beta.1` makes it a pre-release. The builds are not signed with
+a Developer ID, so macOS blocks the `.pkg` the first time: allow it under
+System Settings > Privacy & Security > Open Anyway. Windows SmartScreen asks
+the same (More info > Run anyway). The installer scripts are in `packaging/`.
+
 ### Core only
 
 The DSP, engine and generator don't depend on JUCE. They build and test in

@@ -8,7 +8,7 @@ PsyBox is a psytrance sound-design synthesizer (VST3 / AU / Standalone, JUCE 8).
 ## Key Files
 | File | Description |
 |------|-------------|
-| `CMakeLists.txt` | Targets: `psybox_core` (static lib), `PsyBox` plugin, `psybox_snapshot`, `psybox_tests`, `psybox_render`. Options `PSYBOX_BUILD_PLUGIN`, `PSYBOX_BUILD_TESTS` |
+| `CMakeLists.txt` | Targets: `psybox_core` (static lib), `PsyBox` plugin, `psybox_snapshot`, `psybox_tests`, `psybox_render`. Options `PSYBOX_BUILD_PLUGIN`, `PSYBOX_BUILD_TESTS`, `PSYBOX_COPY_PLUGIN` (off in CI), cache var `PSYBOX_VERSION` (release tag sets it). Static MSVC runtime |
 | `README.md` | User-facing feature list, DSP summary, build commands |
 | `.gitignore` | Ignores `build*/`, `.DS_Store`, `.omc/`, `.cache/` |
 | `CLAUDE.md` | `@AGENTS.md` import so stock Claude Code loads this file |
@@ -20,6 +20,8 @@ PsyBox is a psytrance sound-design synthesizer (VST3 / AU / Standalone, JUCE 8).
 | `tests/` | Catch2 unit tests for the core (see `tests/AGENTS.md`) |
 | `tools/` | Offline WAV renderer and editor PNG snapshot tool (see `tools/AGENTS.md`) |
 | `resources/` | Bundled fonts compiled into the plugin (see `resources/AGENTS.md`) |
+| `packaging/` | Installers: `macos/build-pkg.sh` (pkgbuild + productbuild, one choice per format) and `windows/PsyBox.iss` (Inno Setup) |
+| `.github/workflows/` | `release.yml`: a `v*` tag builds the universal macOS pkg + VST3/AU zip and the Windows setup + VST3 zip, then creates the GitHub release |
 
 Not source: `build/` (plugin build), `build-core/` (core-only build), `.cache/clangd/` (clangd index, ignored), `.omc/`.
 

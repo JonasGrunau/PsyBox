@@ -1,14 +1,19 @@
 cmake_minimum_required(VERSION 3.24)
 
-project(PsyBox VERSION 0.1.0 LANGUAGES C CXX)
+# Release builds pass the tag's version, e.g. -DPSYBOX_VERSION=1.2.0.
+set(PSYBOX_VERSION "0.1.0" CACHE STRING "Plugin version, MAJOR.MINOR.PATCH")
+project(PsyBox VERSION ${PSYBOX_VERSION} LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "")
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+# Static MSVC runtime, so the Windows plugin doesn't need the VC++ redistributable.
+set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
 option(PSYBOX_BUILD_PLUGIN "Build the VST3/AU/Standalone plugin (needs JUCE)" ON)
 option(PSYBOX_BUILD_TESTS "Build the DSP unit tests" ON)
+option(PSYBOX_COPY_PLUGIN "Copy the built plugins into the system plug-in folders" ON)
 
 include(FetchContent)
 
@@ -69,7 +74,7 @@ if(PSYBOX_BUILD_PLUGIN)
         EDITOR_WANTS_KEYBOARD_FOCUS FALSE
         VST3_CATEGORIES Instrument Synth
         AU_MAIN_TYPE kAudioUnitType_MusicDevice
-        COPY_PLUGIN_AFTER_BUILD TRUE)
+        COPY_PLUGIN_AFTER_BUILD ${PSYBOX_COPY_PLUGIN})
 
     target_sources(PsyBox PRIVATE
         src/plugin/PluginProcessor.cpp

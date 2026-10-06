@@ -1,0 +1,119 @@
+# Builds the macOS and Windows installers and publishes them as a GitHub release.
+#
+#   git tag v1.2.0 && git push origin v1.2.0
+#
+# A tag with a suffix (v1.2.0-beta.1) becomes a pre-release. Running the workflow
+# by hand (Actions > Release > Run workflow) builds everything and keeps the files
+# as workflow artifacts, without creating a release.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      numeric: ${{ steps.v.outputs.numeric }}
+    steps:
+      - id: v
+        run: |
+          if [[ "$GITHUB_REF_TYPE" == tag ]]; then v=${GITHUB_REF_NAME#v}; else v=0.0.0-dev.${GITHUB_SHA::7}; fi
+          numeric=${v%%-*}
+          if [[ ! "$numeric" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Tag $GITHUB_REF_NAME is not vMAJOR.MINOR.PATCH[-suffix]"; exit 1
+          fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "numeric=$numeric" >> "$GITHUB_OUTPUT"
+
+  macos:
+    needs: version
+    runs-on: macos-latest
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      OUT: build/PsyBox_artefacts/Release
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Configure
+        run: >
+          cmake -B build -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
+          -DPSYBOX_VERSION=${{ needs.version.outputs.numeric }}
+          -DPSYBOX_BUILD_TESTS=OFF -DPSYBOX_COPY_PLUGIN=OFF
+
+      - name: Build
+        run: cmake --build build --parallel --target PsyBox_VST3 PsyBox_AU PsyBox_Standalone
+
+      - name: Package
+        run: |
+          packaging/macos/build-pkg.sh "$OUT" "$VERSION" "dist/PsyBox-$VERSION-macOS.pkg"
+          mkdir plugins
+          ditto "$OUT/VST3/PsyBox.vst3" plugins/PsyBox.vst3
+          ditto "$OUT/AU/PsyBox.component" plugins/PsyBox.component
+          ditto -c -k plugins "dist/PsyBox-$VERSION-macOS-VST3-AU.zip"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: macos
+          path: dist/*
+          if-no-files-found: error
+
+  windows:
+    needs: version
+    runs-on: windows-latest
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Configure
+        run: >
+          cmake -B build -A x64
+          -DPSYBOX_VERSION=${{ needs.version.outputs.numeric }}
+          -DPSYBOX_BUILD_TESTS=OFF -DPSYBOX_COPY_PLUGIN=OFF
+
+      - name: Build
+        run: cmake --build build --config Release --parallel --target PsyBox_VST3 PsyBox_Standalone
+
+      - name: Install Inno Setup
+        run: choco install innosetup -y --no-progress
+
+      - name: Package
+        run: |
+          $out = "$PWD\build\PsyBox_artefacts\Release"
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "/DAppVersion=$env:VERSION" "/DArtefacts=$out" "/O$PWD\dist" packaging\windows\PsyBox.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Compress-Archive -Path "$out\VST3\PsyBox.vst3" -DestinationPath "dist\PsyBox-$env:VERSION-Windows-VST3.zip"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: windows
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    if: github.ref_type == 'tag'
+    needs: [version, macos, windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          flags=()
+          [[ "$VERSION" == *-* ]] && flags+=(--prerelease)
+          gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" \
+            --verify-tag --title "PsyBox $VERSION" --generate-notes "${flags[@]}"
