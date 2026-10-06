@@ -20,8 +20,8 @@ PsyBox is a psytrance sound-design synthesizer (VST3 / AU / Standalone, JUCE 8).
 | `tests/` | Catch2 unit tests for the core (see `tests/AGENTS.md`) |
 | `tools/` | Offline WAV renderer and editor PNG snapshot tool (see `tools/AGENTS.md`) |
 | `resources/` | Bundled fonts compiled into the plugin (see `resources/AGENTS.md`) |
-| `packaging/` | Installers: `macos/build-pkg.sh` (pkgbuild + productbuild, one choice per format) and `windows/PsyBox.iss` (Inno Setup) |
-| `.github/workflows/` | `release.yml`: a `v*` tag builds the universal macOS pkg + VST3/AU zip and the Windows setup + VST3 zip, then creates the GitHub release |
+| `packaging/` | Installers: `macos/build-pkg.sh` (pkgbuild + productbuild, one choice per format, signed when `INSTALLER_IDENTITY` is set) and `windows/PsyBox.iss` (Inno Setup) |
+| `.github/workflows/` | `release.yml`: a `v*` tag builds the universal macOS pkg + VST3/AU zip and the Windows setup + VST3 zip, signs + notarizes on macOS when the `MACOS_CERTIFICATES_P12` secret is set (see README > Releases), then creates the GitHub release |
 
 Not source: `build/` (plugin build), `build-core/` (core-only build), `.cache/clangd/` (clangd index, ignored), `.omc/`.
 

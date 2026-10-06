@@ -38,6 +38,9 @@ jobs:
     env:
       VERSION: ${{ needs.version.outputs.version }}
       OUT: build/PsyBox_artefacts/Release
+      BUNDLES: VST3/PsyBox.vst3 AU/PsyBox.component Standalone/PsyBox.app
+      # Signing and notarization run when the certificate secret is set (README > Releases).
+      SIGN: ${{ secrets.MACOS_CERTIFICATES_P12 != '' }}
     steps:
       - uses: actions/checkout@v7
 
@@ -51,9 +54,65 @@ jobs:
       - name: Build
         run: cmake --build build --parallel --target PsyBox_VST3 PsyBox_AU PsyBox_Standalone
 
+      - name: Import Developer ID certificates
+        if: env.SIGN == 'true'
+        env:
+          P12: ${{ secrets.MACOS_CERTIFICATES_P12 }}
+          P12_PASSWORD: ${{ secrets.MACOS_CERTIFICATES_PASSWORD }}
+        run: |
+          kc="$RUNNER_TEMP/signing.keychain-db"
+          kcpass=$(uuidgen)
+          base64 --decode <<<"$P12" > "$RUNNER_TEMP/certs.p12"
+          security create-keychain -p "$kcpass" "$kc"
+          security set-keychain-settings -lut 21600 "$kc"
+          security unlock-keychain -p "$kcpass" "$kc"
+          security import "$RUNNER_TEMP/certs.p12" -k "$kc" -P "$P12_PASSWORD" -T /usr/bin/codesign -T /usr/bin/productbuild
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$kcpass" "$kc" > /dev/null
+          security list-keychains -d user | xargs security list-keychains -d user -s "$kc"
+          rm "$RUNNER_TEMP/certs.p12"
+
+          app=$(security find-identity -v -p codesigning "$kc" | sed -n 's/.*"\(Developer ID Application: .*\)"/\1/p' | head -1)
+          installer=$(security find-identity -v "$kc" | sed -n 's/.*"\(Developer ID Installer: .*\)"/\1/p' | head -1)
+          if [[ -z "$app" || -z "$installer" ]]; then
+            echo "::error::The .p12 needs both the Developer ID Application and the Developer ID Installer identity"; exit 1
+          fi
+          team=${app##*(}
+          { echo "APP_IDENTITY=$app"; echo "INSTALLER_IDENTITY=$installer"; echo "TEAM_ID=${team%)}"; } >> "$GITHUB_ENV"
+
+      - name: Sign plug-ins
+        if: env.SIGN == 'true'
+        run: |
+          for b in $BUNDLES; do
+            codesign --force --timestamp --options runtime --sign "$APP_IDENTITY" "$OUT/$b"
+            codesign --verify --strict --verbose=2 "$OUT/$b"
+          done
+
       - name: Package
         run: |
+          [[ "$SIGN" == true ]] || echo "::warning::MACOS_CERTIFICATES_P12 is not set, so the macOS build is not signed"
           packaging/macos/build-pkg.sh "$OUT" "$VERSION" "dist/PsyBox-$VERSION-macOS.pkg"
+
+      - name: Notarize
+        if: env.SIGN == 'true'
+        env:
+          NOTARY_APPLE_ID: ${{ secrets.NOTARY_APPLE_ID }}
+          NOTARY_PASSWORD: ${{ secrets.NOTARY_PASSWORD }}
+        run: |
+          pkg="dist/PsyBox-$VERSION-macOS.pkg"
+          auth=(--apple-id "$NOTARY_APPLE_ID" --password "$NOTARY_PASSWORD" --team-id "$TEAM_ID")
+          result=$(xcrun notarytool submit "$pkg" "${auth[@]}" --wait --timeout 1h --output-format json)
+          echo "$result"
+          if [[ $(jq -r .status <<<"$result") != Accepted ]]; then
+            xcrun notarytool log "$(jq -r .id <<<"$result")" "${auth[@]}"; exit 1
+          fi
+          xcrun stapler staple "$pkg"
+          # The pkg's ticket covers the bundles inside it, so the zipped copies can carry it too.
+          for b in $BUNDLES; do
+            xcrun stapler staple "$OUT/$b" || echo "::warning::Could not staple $b"
+          done
+
+      - name: Zip plug-ins
+        run: |
           mkdir plugins
           ditto "$OUT/VST3/PsyBox.vst3" plugins/PsyBox.vst3
           ditto "$OUT/AU/PsyBox.component" plugins/PsyBox.component
@@ -73,10 +132,11 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # Quoted: PowerShell splits an unquoted -DPSYBOX_VERSION=1.2.0 at the first dot.
       - name: Configure
         run: >
           cmake -B build -A x64
-          -DPSYBOX_VERSION=${{ needs.version.outputs.numeric }}
+          "-DPSYBOX_VERSION=${{ needs.version.outputs.numeric }}"
           -DPSYBOX_BUILD_TESTS=OFF -DPSYBOX_COPY_PLUGIN=OFF
 
       - name: Build

@@ -365,10 +365,22 @@ git tag v1.2.0 && git push origin v1.2.0
 
 You get a macOS `.pkg` (universal, VST3 + AU + standalone), a Windows setup
 `.exe` (VST3 + standalone) and a zip of the bare plug-ins for each. A suffix
-such as `v1.2.0-beta.1` makes it a pre-release. The builds are not signed with
-a Developer ID, so macOS blocks the `.pkg` the first time: allow it under
-System Settings > Privacy & Security > Open Anyway. Windows SmartScreen asks
-the same (More info > Run anyway). The installer scripts are in `packaging/`.
+such as `v1.2.0-beta.1` makes it a pre-release. The installer scripts are in
+`packaging/`.
+
+The macOS build is signed with a Developer ID and notarized when these
+repository secrets are set (Settings > Secrets and variables > Actions):
+
+| Secret | Value |
+|--------|-------|
+| `MACOS_CERTIFICATES_P12` | base64 of a `.p12` holding both the *Developer ID Application* and the *Developer ID Installer* certificate with their keys |
+| `MACOS_CERTIFICATES_PASSWORD` | the `.p12` password |
+| `NOTARY_APPLE_ID` | Apple ID of the developer account |
+| `NOTARY_PASSWORD` | an app-specific password for that Apple ID |
+
+Without them the macOS build is unsigned and macOS blocks the `.pkg` the first
+time (System Settings > Privacy & Security > Open Anyway). The Windows
+installer is not signed, so SmartScreen asks once (More info > Run anyway).
 
 ### Core only
 

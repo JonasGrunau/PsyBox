@@ -5,7 +5,9 @@
 #
 # One component package per format (VST3, AU, Standalone), wrapped in a product
 # archive whose "Customize" page lets the user untick any of them. The bundles
-# keep the ad-hoc signature JUCE gives them at build time; the pkg is unsigned.
+# go in as they are (sign them first). Set INSTALLER_IDENTITY to a
+# "Developer ID Installer: ..." identity to sign the pkg; without it the pkg
+# is unsigned.
 set -euo pipefail
 
 ARTEFACTS=$1
@@ -69,5 +71,11 @@ cat > "$WORK/distribution.xml" <<EOF
 </installer-gui-script>
 EOF
 
+sign=()
+if [[ -n "${INSTALLER_IDENTITY:-}" ]]; then
+    sign=(--sign "$INSTALLER_IDENTITY" --timestamp)
+fi
+
 mkdir -p "$(dirname "$OUT")"
-productbuild --distribution "$WORK/distribution.xml" --package-path "$WORK/pkgs" "$OUT"
+productbuild --distribution "$WORK/distribution.xml" --package-path "$WORK/pkgs" \
+             ${sign[@]+"${sign[@]}"} "$OUT"
