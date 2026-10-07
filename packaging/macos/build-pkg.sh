@@ -62,7 +62,7 @@ cat > "$WORK/distribution.xml" <<EOF
     <choice id="au" title="Audio Unit" description="/Library/Audio/Plug-Ins/Components/PsyBox.component">
         <pkg-ref id="$ID.au"/>
     </choice>
-    <choice id="app" title="Standalone app" description="/Applications/PsyBox.app">
+    <choice id="app" title="Standalone app" description="/Applications/PsyBox.app" start_selected="false">
         <pkg-ref id="$ID.app"/>
     </choice>
     <pkg-ref id="$ID.vst3" version="$VERSION">vst3.pkg</pkg-ref>

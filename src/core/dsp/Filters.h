@@ -463,8 +463,9 @@ public:
             case T::CombPos: case T::CombNeg:
                 return comb.process (driveGain > 1.001f ? fastTanh (x * driveGain) : x);
             case T::Off: case T::Count:
-                return x;
+                break;
         }
+        return x;
     }
 
 private:

@@ -25,12 +25,14 @@ Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
 
+; The first type is the default: the standalone app starts unticked.
 [Types]
+Name: "plugin"; Description: "VST3 plug-in"
 Name: "full"; Description: "VST3 plug-in and standalone app"
 Name: "custom"; Description: "Custom"; Flags: iscustom
 
 [Components]
-Name: "vst3"; Description: "VST3 plug-in (Common Files\VST3)"; Types: full
+Name: "vst3"; Description: "VST3 plug-in (Common Files\VST3)"; Types: plugin full
 Name: "standalone"; Description: "Standalone app"; Types: full
 
 [Files]

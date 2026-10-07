@@ -64,10 +64,10 @@ void UnisonSettings::paint (juce::Graphics& g)
     const auto r = linesArea.toFloat();
     const auto id = uniIds (isB);
     psy::dsp::UnisonLayout l;
-    const float range = proc.plain (id.range);
-    l.compute ((int) proc.plain (id.count), proc.plain (id.detune), range, (int) proc.plain (id.mode), (int) proc.plain (id.stack),
+    const float pitchRange = proc.plain (id.range);
+    l.compute ((int) proc.plain (id.count), proc.plain (id.detune), pitchRange, (int) proc.plain (id.mode), (int) proc.plain (id.stack),
                proc.plain (id.blend), proc.plain (id.width));
-    float span = std::max (0.05f, range * 0.5f), maxGain = 0.f;
+    float span = std::max (0.05f, pitchRange * 0.5f), maxGain = 0.f;
     for (int k = 0; k < l.count; ++k)
     {
         span = std::max (span, std::abs (l.semis[(size_t) k]));

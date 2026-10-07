@@ -284,7 +284,7 @@ void Sidebar::paint (juce::Graphics& g)
             g.setGradientFill ({ col::panel, 0.f, bottom, col::panel.withAlpha (0.f), 0.f, bottom - kFade, false });
             g.fillRect (list.withTrimmedTop (list.getHeight() - (int) kFade));
         }
-        const int thumbH = juce::jmax (24, listH * listH / contentH());
+        const int thumbH = juce::jmax (24, listH * listH / juce::jmax (1, contentH()));
         const int thumbY = list.getY() + (listH - thumbH) * scrollY / maxScroll();
         g.setColour (col::textFaint.withAlpha (0.5f));
         g.fillRoundedRectangle (juce::Rectangle<int> (getWidth() - 5, thumbY, 2, thumbH).toFloat(), 1.f);

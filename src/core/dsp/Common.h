@@ -56,7 +56,7 @@ struct Rng
         state = old * 6364136223846793005ULL + inc;
         const auto xorshifted = (uint32_t) (((old >> 18u) ^ old) >> 27u);
         const auto rot = (uint32_t) (old >> 59u);
-        return (xorshifted >> rot) | (xorshifted << ((-rot) & 31));
+        return (xorshifted >> rot) | (xorshifted << ((32u - rot) & 31u));
     }
 
     float uniform() noexcept { return (float) (next() >> 8) * (1.f / 16777216.f); }  // [0, 1)
