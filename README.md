@@ -29,24 +29,29 @@ Psytrance synth shots: one hit of a beat (sometimes two) at the tempo, the way
 sample packs sell them. Every recipe value was fitted to 500 reference shots by
 rendering hundreds of generated ones the same way and comparing level over the
 shot, brightness and how it moves, octave bands, harmonics, stereo width and
-density. A shot is:
+density. The way each part is built follows Jilax's own Serum patches. A shot
+is:
 
 - **A bass-register saw stack, high-passed.** The root sits two octaves under
   the key (E3 plays an E1 root, like the reference "E" shots), and a steep,
-  slightly resonant high-pass at 190-380 Hz takes out the fundamental, so the
-  energy sits in a dense comb of harmonics from the 4th up. Some shots are
-  supersaws, wavetables, squares, FM tones or minor and major chords (a unison
-  stack of octave and fifth plus a third on osc B), an octave or two higher.
-- **Wide but barely detuned**: several unison voices with a few cents of
-  detune and full width, plus stereoize and chorus, so the side is about as
-  loud as the mid while the partials stay clean.
-- **Dense**: a hard or soft clipper at the end of the chain (Distortion with
-  **Auto Level**), after OTT-style multiband compression.
+  slightly resonant high-pass at 160-330 Hz takes out the fundamental, so the
+  energy sits in a dense comb of harmonics from the 4th up. Often a second
+  stack an octave and a fifth up (+19), sometimes a noise layer. Some shots are
+  supersaws, wavetables (scanned over the hit), squares, FM tones or minor and
+  major chords (a unison stack of octave and fifth plus a third on osc B), an
+  octave or two higher.
+- **Wide and thick**: up to sixteen unison voices at a moderate detune with
+  free-running phases and full width, plus stereoize and chorus, so the side is
+  about as loud as the mid and the gaps between the harmonics fill in.
+- **Dense**: a clipper at the end of the chain (Distortion, mostly hard, with
+  **Auto Level** and **Low Cut**), after OTT-style multiband compression. On
+  the brightest third the compressor's high band lifts the upper mids.
 - **One gesture**: a hold that slides down a few dB, a decay, a swell, a hit
   that rings out through the next beat (reverb and release), or a trance gate;
-  the low-pass closes over the hit in about half the shots, stays open, opens
-  or rises and falls in the rest; one in ten zaps, falls or rises in pitch.
-  Most fade over the last tenth of their length.
+  the low-pass (often a ladder) closes over the hit in about half the shots, by
+  an envelope or by an LFO synced to the beat, stays open, opens or rises and
+  falls in the rest; one in ten zaps, falls or rises in pitch. Most fade over
+  the last tenth of their length.
 
 Jilax uses the Length panel (one beat by default, Cut at End) with **One Shot**
 on: a tap plays the whole shot, like a sample. It has no arp. Drag the output
@@ -314,7 +319,9 @@ and a stereo width stage, in that order.
 
 The distortion has a **Low Cut** after its shaper (off at 20 Hz): clipping a
 high-passed sound brings its root back as a difference tone, and the low cut
-takes it out again. **Auto Level** measures the drive from the sound's own
+takes it out again. Cutting the lows under a clipped wave turns its flat tops
+into spikes, so the peaks the low cut raises are trimmed back to the clipper's
+ceiling, without bringing the lows back. **Auto Level** measures the drive from the sound's own
 level instead of from full scale (an RMS follower in front of the shaper, the
 level given back after it): the clipper bites the same on a quiet patch as on a
 loud one, and a decaying sound keeps its decay instead of being held up at the

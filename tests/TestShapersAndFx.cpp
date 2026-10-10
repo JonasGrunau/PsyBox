@@ -397,6 +397,31 @@ TEST_CASE ("The distortion's low cut is off at 20 Hz and takes out the lows abov
     CHECK (std::abs (toneDb (lc, from, len, 1000.0, fs) - toneDb (in, from, len, 1000.0, fs)) < 3.0);
 }
 
+TEST_CASE ("The distortion's low cut trims the peaks it raises without bringing the lows back", "[fx]")
+{
+    const float fs = 48000.f;
+    const int n = (int) fs;
+    const size_t from = (size_t) (0.3f * fs), to = (size_t) n;
+    const auto run = [&] (int type, float lowCutHz) {
+        auto l = sawTone (n, fs, 1.f), r = l;
+        Distortion d;
+        d.prepare (fs);
+        d.process (l.data(), r.data(), n, type, 24.f, 20000.f, 1.f, lowCutHz, true);
+        return l;
+    };
+    for (int type : { 0, 1, 3 })   // soft, hard, tube
+    {
+        CAPTURE (type);
+        const auto clipped = run (type, 20.f), cut = run (type, 150.f);
+        // cutting the 55 Hz difference tone out of a clipped wave turns its
+        // flat tops into spikes (about 7.5 dB more crest untrimmed)
+        CHECK (crestDb (cut, from, to) < crestDb (clipped, from, to) + 4.5);
+        // and the trim adds no lows of its own
+        CHECK (toneDb (cut, from, to - from, 55.0, fs) < toneDb (clipped, from, to - from, 55.0, fs) - 25.0);
+        CHECK (toneDb (cut, from, to - from, 110.0, fs) < toneDb (clipped, from, to - from, 110.0, fs) - 9.0);
+    }
+}
+
 TEST_CASE ("Auto Level clips the same at any input level and keeps a decay", "[fx]")
 {
     const float fs = 48000.f;

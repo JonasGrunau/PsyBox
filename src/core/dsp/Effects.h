@@ -69,6 +69,9 @@ public:
         for (auto& d : dc) d.reset();
         for (auto& f : low1) f.reset();
         for (auto& f : low2) f.reset();
+        for (auto& f : trim1) f.reset();
+        for (auto& f : trim2) f.reset();
+        for (auto& t : top) t.reset();
         level = meanSquare = 0.f;
         hist = {};
     }
@@ -76,7 +79,13 @@ public:
     // lowCutHz: a 24 dB high-pass on the distorted signal, which takes out
     // the lows a clipper makes from a high-passed sound (the difference
     // tones bring the fundamental back). At 20 Hz or below it is skipped,
-    // so the distortion sounds exactly as without it.
+    // so the distortion sounds exactly as without it. Cutting the lows
+    // under a clipped wave tilts its flat tops into spikes (about 3.5 dB
+    // more crest on a heavily clipped saw stack), so the peaks it raises
+    // over the shaper's ceiling are clipped again. Only that clip's
+    // residual, cut the same way, is added: clipping the whole signal again
+    // would bring the difference tones back. Rectify has no ceiling and
+    // keeps its peaks.
     //
     // autoLevel: the drive counts from the sound's own level instead of
     // from full scale. A linked RMS follower (the mean square over about
@@ -98,7 +107,10 @@ public:
             const float gc = prewarp (std::min (lowCutHz, 0.45f * fs), fs);
             for (auto& f : low1) f.setG (gc, 0.76536686f);
             for (auto& f : low2) f.setG (gc, 1.84775907f);
+            for (auto& f : trim1) f.setG (gc, 0.76536686f);
+            for (auto& f : trim2) f.setG (gc, 1.84775907f);
         }
+        const bool trim = cut && type != AdaaShaper::Rectify;
         float* ch[2] = { l, r };
         if (autoLevel)
         {
@@ -121,6 +133,7 @@ public:
                     if (cut) y = low2[c].process (low1[c].process (y).hp).hp;
                     float dry = x, wet = y / (pre * g);
                     if (compensate) restoreTop (c, dry, wet);
+                    if (trim) wet = trimPeaks (c, wet, 1.f / (pre * g));
                     ch[c][i] = dry + (wet - dry) * mix;
                 }
             }
@@ -134,8 +147,10 @@ public:
                 y = dc[c].process (y);
                 y = tone[c].process (y).lp;
                 if (cut) y = low2[c].process (low1[c].process (y).hp).hp;
-                float dry = x, wet = type == AdaaShaper::Fold || type == AdaaShaper::Hard ? y * 0.8f : y * std::max (comp, 0.35f) * 1.2f;
+                const float scale = type == AdaaShaper::Fold || type == AdaaShaper::Hard ? 0.8f : std::max (comp, 0.35f) * 1.2f;
+                float dry = x, wet = y * scale;
                 if (compensate) restoreTop (c, dry, wet);
+                if (trim) wet = trimPeaks (c, wet, scale);
                 ch[c][i] = dry + (wet - dry) * mix;
             }
     }
@@ -152,6 +167,14 @@ private:
     std::array<History, 2> hist {};
     bool compensate = false;
 
+    // The low cut's peaks back down to the shaper's ceiling (in the wet
+    // signal's scale), after the top is restored, which raises them too.
+    float trimPeaks (int c, float wet, float ceiling) noexcept
+    {
+        const float res = ceiling * top[c].process (wet / ceiling);
+        return wet + trim2[c].process (trim1[c].process (res).hp).hp;
+    }
+
     void restoreTop (int c, float& dry, float& wet) noexcept
     {
         auto& h = hist[(size_t) c];
@@ -165,7 +188,8 @@ private:
     float fs = 48000.f;
     float meanSquare = 0.f, level = 0.f;   // auto level: the mean square, then the followed level
     std::array<AdaaShaper, 2> sh;
-    std::array<Svf, 2> tone, low1, low2;
+    std::array<Svf, 2> tone, low1, low2, trim1, trim2;   // trim: the low cut again, on the re-clip's residual
+    std::array<ClipResidual, 2> top;
     std::array<DcBlocker, 2> dc;
 };
 
