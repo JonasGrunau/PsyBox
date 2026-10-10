@@ -42,15 +42,17 @@ is:
   octave or two higher.
 - **Wide and thick**: up to sixteen unison voices at a moderate detune with
   free-running phases and full width, plus stereoize and chorus, so the side is
-  about as loud as the mid and the gaps between the harmonics fill in.
+  about as loud as the mid and the gaps between the harmonics fill in. About
+  one shot in five is close to mono instead.
 - **Dense**: a clipper at the end of the chain (Distortion, mostly hard, with
   **Auto Level** and **Low Cut**), after OTT-style multiband compression. On
   the brightest third the compressor's high band lifts the upper mids.
 - **One gesture**: a hold that slides down a few dB, a decay, a swell, a hit
   that rings out through the next beat (reverb and release), or a trance gate;
   the low-pass (often a ladder) closes over the hit in about half the shots, by
-  an envelope or by an LFO synced to the beat, stays open, opens or rises and
-  falls in the rest; one in ten zaps, falls or rises in pitch. Most fade over
+  an envelope or by an LFO synced to the beat (the hit then often starts thin
+  and bright, the high-pass coming down with the filter), stays open, opens or
+  rises and falls in the rest; one in ten zaps, falls or rises in pitch. Most fade over
   the last tenth of their length.
 
 Jilax uses the Length panel (one beat by default, Cut at End) with **One Shot**

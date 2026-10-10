@@ -285,6 +285,23 @@ namespace
 
     enum class Motion { Static, Close, Shut, Open, RiseFall };
 
+    // Where the references fall the furthest (from a 2.5-6.5 kHz centroid),
+    // the hit is thin as well as bright: 100-200 Hz sits about 14 dB lower in
+    // the first 50 ms than later, and some air stays on after the filter has
+    // closed. The high-pass rides the filter envelope down to its corner, and
+    // a little noise skips the filter.
+    void thinHit (B& b)
+    {
+        if (b.state().geti (P::F2Type) != ft (FilterType::Off) && b.chance (0.6f))
+            b.uni (P::F2Env, 0.1f, 0.22f);
+        if (b.chance (0.4f))
+        {
+            b.set (P::NoiseType, 0.f);
+            b.on (P::NoiseDirect, true);
+            b.uni (P::NoiseLevel, 0.02f, 0.06f);
+        }
+    }
+
     // LFO 3, synced to the beat and restarted by the note: Jilax's way of
     // drawing a filter envelope. The LFO swings both ways, so the cutoff
     // knob sits in the middle of the sweep.
@@ -300,7 +317,7 @@ namespace
     Motion lowPass (B& b, Amp shape)
     {
         const bool decay = shape == Amp::Decay;
-        const auto motion = (Motion) b.weighted ({ 0.34f, 0.22f, decay ? 0.f : 0.3f, decay ? 0.f : 0.09f, 0.13f });
+        const auto motion = (Motion) b.weighted ({ 0.3f, 0.2f, decay ? 0.f : 0.38f, decay ? 0.f : 0.09f, 0.13f });
         const bool twoBeats = b.state().geti (P::EnergyBars) != B1_4;
         // a Moog-style ladder in most of Jilax's patches
         b.pick (P::F1Type, { ft (FilterType::LP12), ft (FilterType::LP18), ft (FilterType::LP24),
@@ -325,6 +342,7 @@ namespace
                 break;
             case Motion::Close:
             case Motion::Shut:
+            {
                 b.pick (P::F1Type, { ft (FilterType::LP12), ft (FilterType::LP18), ft (FilterType::LadderLP12), ft (FilterType::Ladder24) },
                         { 0.35f, 0.15f, 0.3f, 0.2f });
                 b.uni (P::F1Key, 0.f, 0.3f);
@@ -341,15 +359,20 @@ namespace
                     b.uni (P::F1Cutoff, 120.f, 400.f);
                     b.uni (P::F1Env, 0.7f, 1.f);
                     b.uni (P::FenvD, 150.f, 700.f);
+                    thinHit (b);
                     break;
                 }
+                // a third of them close from the top to a few kHz: bright
+                // shots that still fall one or two octaves
+                const bool brightEnd = b.chance (0.35f);
                 if (b.chance (0.55f))
                 {
                     // the beat LFO as the envelope: a jump and a straight fall over
                     // a beat (or an eighth, or half the shot: it hits again on the beat)
                     if (twoBeats) beatLfo (b, LfoShape::SawDown, { D1_2, D1_2, D1_4 }, 0.f);
                     else beatLfo (b, LfoShape::SawDown, { D1_4, D1_4, D1_4, D1_8, D1_2 }, 0.f);
-                    b.uni (P::F1Cutoff, 400.f, 1800.f);
+                    if (brightEnd) b.uni (P::F1Cutoff, 1800.f, 4500.f);
+                    else b.uni (P::F1Cutoff, 300.f, 1400.f);
                     b.set (P::F1Env, 0.f);
                     b.route (S::Lfo3, D::F1Cutoff, 0.2f, 0.38f);
                     break;
@@ -359,10 +382,13 @@ namespace
                 // that ends there keeps the top sounding through the shot
                 // (the references keep 60 % of their top after the first
                 // 100 ms) while the brightness still drops 1-2 octaves
-                b.uni (P::F1Cutoff, 300.f, 1500.f);
+                if (brightEnd) b.uni (P::F1Cutoff, 1500.f, 4000.f);
+                else b.uni (P::F1Cutoff, 300.f, 1500.f);
                 b.uni (P::F1Env, 0.6f, 0.95f);
                 b.uni (P::FenvD, 300.f, 1500.f);
+                thinHit (b);
                 break;
+            }
             case Motion::Open:
                 b.uni (P::F1Key, 0.f, 0.3f);
                 b.uni (P::F1Cutoff, 250.f, 800.f);
@@ -453,7 +479,7 @@ namespace
     // Bright: the high band from the upper mids, lifted further (the
     // brightest third of the references sit only 5-6 dB under their
     // loudest octave at 2.5 kHz, where a clipped saw stack is 9 dB down).
-    void ott (B& b, bool bright)
+    void ott (B& b, bool bright, bool closing)
     {
         b.on (P::CompOn, true);
         b.set (P::CompMode, (float) CompMode::Multiband);
@@ -470,7 +496,10 @@ namespace
         b.uni (P::MbHighDown, -28.f, -18.f);
         b.uni (P::MbLowUp, -44.f, -34.f);
         b.uni (P::MbMidUp, -44.f, -34.f);
-        b.uni (P::MbHighUp, -38.f, -28.f);   // lifts the air back up as a filter closes
+        // the upward lift brings the air back as a filter closes: off where
+        // the closing is the shot (its top has to fall away with the filter)
+        if (closing) b.uni (P::MbHighUp, -60.f, -50.f);
+        else b.uni (P::MbHighUp, -38.f, -28.f);
         b.uni (P::MbLowGain, -2.f, 2.f);
         b.uni (P::MbMidGain, 0.f, 3.f);
         if (bright) b.uni (P::MbHighGain, 6.f, 11.f);
@@ -493,6 +522,9 @@ namespace
 
     void effects (B& b, Body kind, Amp shape, Motion motion, float highPassHz)
     {
+        // about one reference in five is close to mono: the side 10-25 dB
+        // under the mid, where the rest have it about level
+        const bool narrow = b.chance (0.2f);
         // The references are clipped hard (about 7.5 dB crest where they are
         // loudest, against 12-15 dB for a high-passed saw stack): a clipper
         // at the very end of the chain, after the compressor and the tails.
@@ -536,7 +568,7 @@ namespace
             b.uni (P::PhaserCenter, 400.f, 2500.f);
             b.uni (P::PhaserMix, 0.35f, 0.6f);
         }
-        if (b.chance (kind == Body::Supersaw ? 0.7f : 0.4f))
+        if (! narrow && b.chance (kind == Body::Supersaw ? 0.7f : 0.4f))
         {
             b.on (P::ChorusOn, true);
             b.pick (P::ChorusMode, { 0, 1 }, { 0.7f, 0.3f });
@@ -545,10 +577,10 @@ namespace
             b.uni (P::ChorusFb, -0.3f, 0.5f);
             b.uni (P::ChorusMix, 0.25f, 0.5f);
         }
-        // a compressor on every shot (nearly all of Jilax's patches have one)
-        // the bright lift on most shots whose filter stays open, some that move slowly
-        const bool still = motion == Motion::Static || motion == Motion::RiseFall || motion == Motion::Open;
-        if (b.chance (0.78f)) ott (b, still && b.chance (motion == Motion::Static ? 0.9f : 0.5f));
+        // a compressor on every shot (nearly all of Jilax's patches have one),
+        // the bright lift on most static shots and half the rest
+        const bool closing = motion == Motion::Close || motion == Motion::Shut;
+        if (b.chance (0.78f)) ott (b, b.chance (motion == Motion::Static ? 0.9f : 0.5f), closing);
         else glue (b);
         if (b.chance (0.2f))
         {
@@ -578,9 +610,15 @@ namespace
         }
         // wide highs over narrower lows: the side climbs from about -5 dB of
         // the mid under 160 Hz to level with it above 2.5 kHz
-        if (b.chance (kind == Body::Supersaw ? 0.9f : 0.75f))
+        if (narrow)
         {
             b.on (P::WidthOn, true);
+            b.uni (P::WidthAmount, 0.05f, 0.4f);
+        }
+        else if (b.chance (kind == Body::Supersaw ? 0.9f : 0.75f))
+        {
+            b.on (P::WidthOn, true);
+            if (b.chance (0.3f)) b.uni (P::WidthAmount, 1.f, 1.3f);
             b.uni (P::WidthStereo, 0.5f, 1.f);
             b.uni (P::WidthTime, 6.f, 18.f);
             b.uni (P::WidthMonoHz, 100.f, 220.f);
