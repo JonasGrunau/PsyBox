@@ -85,6 +85,8 @@ Recipe arpRecipeFor (Category c) noexcept;          // arp settings (ArpRecipes.
 Recipe arpPatternRecipeFor (Category c) noexcept;   // the arp's 16 steps
 Recipe kickRecipeFor (Category c) noexcept;         // kick categories (KickRecipes.cpp)
 void jilaxRecipe (RecipeBuilder& b);                // Jilax shots (JilaxRecipes.cpp)
+void ghostStabRecipe (RecipeBuilder& b);            // Ghost Rider's offbeat stab (GhostRecipes.cpp)
+void ghostBassRecipe (RecipeBuilder& b);            // Ghost Rider's rolling bass (GhostRecipes.cpp)
 // Unison for the category's oscillators (leads and pads spread, basses keep
 // one voice). Runs after the sound recipe, on the same random stream.
 void unisonRecipe (Category c, RecipeBuilder& b);

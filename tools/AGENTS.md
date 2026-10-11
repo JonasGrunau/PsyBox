@@ -20,7 +20,7 @@ Developer executables that let you check sound and UI without a DAW.
 - Keep `RenderCategories.cpp` JUCE-free so it builds in `build-core`.
 
 ### Testing Requirements
-- Smoke-run after changes: `./build-core/psybox_render /tmp/psy 1` and check that WAVs appear for all 36 categories (the five kicks play four on the floor on F, F, G and D#; the basses roll or play offbeats on E, E, G, D, the reverse basses play the beat before every other kick; Jilax taps a shot every two beats on E3, E3, G3, D3 and One Shot plays each in full; Grid plays an offbeat 16th groove on E4, E4, G4, D4, or with `arp` holds E4 alone; energy sounds run their length). With `arp`, basses, kicks and energy sounds keep their own pattern.
+- Smoke-run after changes: `./build-core/psybox_render /tmp/psy 1` and check that WAVs appear for all 38 categories (the five kicks play four on the floor on F, F, G and D#; the basses roll or play offbeats on E, E, G, D, the reverse basses play the beat before every other kick; Jilax taps a shot every two beats on E3, E3, G3, D3 and One Shot plays each in full; Grid plays an offbeat 16th groove on E4, E4, G4, D4, or with `arp` holds E4 alone; Ghost Stab plays every offbeat on G#3, G#3, B3, F#3 held to just before the kick, or with `arp` holds G#3 alone; Ghost Bass rolls like Prog Bass; energy sounds run their length). With `arp`, basses, kicks and energy sounds keep their own pattern.
 - After UI changes: `PSYSNAP_DNDTEST=1 ./build/psybox_snapshot_artefacts/Release/psybox_snapshot /tmp 0` must print only PASS lines.
 
 ## Dependencies

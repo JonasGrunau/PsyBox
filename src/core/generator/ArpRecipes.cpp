@@ -127,6 +127,20 @@ namespace
         swing (b, 0.05f);
     }
 
+    // Ghost Rider's stab holds from the "and" to just before the next kick:
+    // on 1/8 the offbeat step's gate carries it (0.86-0.94 of the eighth),
+    // on 1/16 a tie does (see ghostStabPattern) and the gate ends the last
+    // sixteenth. Order mode, so the held chord's notes take turns only when
+    // the user holds more than one key.
+    void ghostStab (B& b)
+    {
+        const int div = b.pick (P::ArpDiv, { D1_8, D1_16 }, { 0.7f, 0.3f });
+        b.pick (P::ArpMode, { Order });
+        b.pick (P::ArpOctaves, { 1 });
+        if (div == D1_8) gate (b, 0.86f, 0.94f);
+        else gate (b, 0.72f, 0.85f);
+    }
+
     // Grids sit on straight 16ths with short gates: the note lane and the
     // rests make the groove.
     void grid (B& b)
@@ -794,6 +808,48 @@ namespace
         write (b, p);
     }
 
+    // Ghost Rider's stab rhythms, measured over the main sections of his
+    // tracks: the offbeat held to the kick in most, then held for a beat and
+    // a half, rolled on the sixteenths after the kick, or pushed to the last
+    // sixteenth. A tied step ('s') keeps the chord sounding into the next, so
+    // a held stab is one note. The arp rate (from ghostStab) decides the
+    // vocabulary: 1/8 steps make two-beat cells over two bars, 1/16 steps
+    // one-beat cells over one bar. The stabs are a riff: the chord moves
+    // through a progression, a new one every beat on 1/16 and every two
+    // beats on 1/8, and plays at least three of them.
+    void ghostStabPattern (B& b)
+    {
+        const bool eighths = b.state().geti (P::ArpDiv) == D1_8;
+        std::string a, other;
+        if (eighths)
+        {
+            const char* cells[] = { "-x-x", "-ssx", "-sx-" };
+            a = choose (b, cells, { 0.65f, 0.22f, 0.13f });
+            other = choose (b, cells, { 0.5f, 0.3f, 0.2f });
+        }
+        else
+        {
+            const char* cells[] = { "--sx", "-xxx", "---x", "--xx" };
+            a = choose (b, cells, { 0.55f, 0.25f, 0.1f, 0.1f });
+            other = choose (b, cells, { 0.5f, 0.2f, 0.2f, 0.1f });
+        }
+        const char* shapes[] = { "AAAA", "AAAB", "ABAB" };
+        auto p = ArpPattern::parse (form (choose (b, shapes, { 0.6f, 0.25f, 0.15f }), a, other));
+
+        // the chords: a progression, then livened until it plays three; a
+        // tied step belongs to the chord before it
+        Degrees d {};
+        sections (d, moving (b), 4);
+        ArpPattern heads = p;
+        for (int i = 1; i < kArpSteps; ++i)
+            if (p.has (i - 1, Slide)) heads.setFlag (i, On, false);
+        enliven (b, heads, d, 3, Motion { 0.f, 0.3f, { { 0, 2.f }, { -2, 2.f }, { -1, 2.f }, { 2, 1.5f }, { 3, 1.f }, { 4, 1.f } }, -3, 5 });
+        for (int i = 1; i < kArpSteps; ++i)
+            if (p.has (i - 1, Slide)) d[(size_t) i] = d[(size_t) i - 1];
+        setNotes (p, scale (b), d);
+        write (b, p);
+    }
+
     // Grids answer the kick and the bass: one-beat cells that mostly leave
     // the beat to the kick and play its "e", "and" and "a", laid out in a bar
     // form; or a Euclidean figure turned off the beat; or the dotted-eighth
@@ -1072,6 +1128,7 @@ Recipe arpPatternRecipeFor (Category c) noexcept
         case Category::Pluck:       return pluckPattern;
         case Category::Stab:        return stabPattern;
         case Category::Grid:        return gridPattern;
+        case Category::GhostStab:   return ghostStabPattern;
         case Category::Screech:     return screechPattern;
         case Category::AlienVoice:  return alienVoicePattern;
         case Category::Bubble:      return bubblePattern;
@@ -1094,6 +1151,7 @@ Recipe arpPatternRecipeFor (Category c) noexcept
         case Category::ProgBass:
         case Category::ReverseBass:
         case Category::ReverseSub:
+        case Category::GhostBass:
         case Category::Jilax:
         case Category::KickFullOn:
         case Category::KickGoa:
@@ -1117,6 +1175,7 @@ Recipe arpRecipeFor (Category c) noexcept
         case Category::Pluck:       return pluck;
         case Category::Stab:        return stab;
         case Category::Grid:        return grid;
+        case Category::GhostStab:   return ghostStab;
         case Category::Screech:     return screech;
         case Category::AlienVoice:  return alienVoice;
         case Category::Bubble:      return bubble;
@@ -1139,6 +1198,7 @@ Recipe arpRecipeFor (Category c) noexcept
         case Category::ProgBass:
         case Category::ReverseBass:
         case Category::ReverseSub:
+        case Category::GhostBass:
         case Category::Jilax:
         case Category::KickFullOn:
         case Category::KickGoa:

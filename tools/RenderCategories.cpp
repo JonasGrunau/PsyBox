@@ -74,6 +74,7 @@ namespace
                 break;
             }
             case Category::ProgBass:   // the roll, E1 E1 G1 D1 by the bar (octave -1 in the recipe)
+            case Category::GhostBass:
             {
                 static const int bars[4] = { 40, 40, 43, 38 };
                 for (int b = 0; b < 16; ++b)
@@ -97,6 +98,12 @@ namespace
             {
                 static const int bars[4] = { 52, 52, 55, 50 };
                 for (int b = 0; b < 16; b += 2) p.push_back ({ (double) b, 0.1, bars[b / 4], 0.8f });
+                break;
+            }
+            case Category::GhostStab:   // every offbeat held to just before the kick, G#3 G#3 B3 F#3 by the bar
+            {
+                static const int bars[4] = { 56, 56, 59, 54 };
+                for (int b = 0; b < 16; ++b) p.push_back ({ b + 0.5, 0.45, bars[b / 4], 0.8f });
                 break;
             }
             case Category::Grid:   // an offbeat 16th groove, E4 E4 G4 D4 by the bar
@@ -132,6 +139,7 @@ namespace
             case Category::Acid: case Category::Squelch: keys = { 36, 39, 43 }; break;
             case Category::Drone: case Category::Zap: case Category::Laser: keys = { 48 }; break;
             case Category::Grid: keys = { 64 }; break;   // the note lane carries the line
+            case Category::GhostStab: keys = { 56 }; break;   // one key: the patch stacks the fifths, the lane walks the chords
             default: keys = { 60, 63, 67 }; break;
         }
         std::vector<Note> p;

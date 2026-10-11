@@ -34,6 +34,7 @@ add_library(psybox_core STATIC
     src/core/generator/ArpRecipes.cpp
     src/core/generator/KickRecipes.cpp
     src/core/generator/JilaxRecipes.cpp
+    src/core/generator/GhostRecipes.cpp
     src/core/generator/Loudness.cpp
 )
 target_include_directories(psybox_core PUBLIC src/core)

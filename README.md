@@ -11,17 +11,34 @@ Builds as **VST3**, **Audio Unit** and **Standalone** (macOS).
 
 ## Categories
 
-36 kinds of sound, each with its own recipe, in six groups in the sidebar.
+38 kinds of sound, each with its own recipe, in six groups in the sidebar.
 Each group is a header; click one to open it and its sounds fold out under
 it, while closed groups show a dot per sound. The accents run as one rainbow
 down the whole list: red at the first sound of the first group, through
 every group, to magenta at the last kick.
 
-- **Main**: Acid · Grid · Jilax · Pluck · Psy Lead · Stab
+- **Main**: Acid · Ghost Stab · Grid · Jilax · Pluck · Psy Lead · Stab
 - **FX**: Alien Voice · Bubble · Glitch · Gurgle · Laser · Metallic · Screech · Squelch · Wobble · Zap
 - **Energy**: Downlifter · Impact · Noise FX · Reverse · Riser · Uplifter
 - **Background**: Atmos · Drone · Gate
 - **Bass** and **Kick**: below
+
+### Ghost Stab
+
+Ghost Rider's offbeat stab, fitted to 28 of his tracks (2014-2025): each one
+split into stems, the stab and the bass measured in every main section, and
+generated patches rendered and measured the same way. The chord comes in on
+the "and", holds (sagging a dB or two) and is gone just before the next
+kick. It is a stack of fifths (root, fifth and octave from Osc A's unison
+stack, often a twelfth or an octave from Osc B), a few voices moderately
+detuned, high-passed under its root (the high-pass follows the key), and a
+gentle one-pole low-pass for the 6-8 dB per octave his stabs fall above
+1.4 kHz. Wide: the Width stage puts the side about as loud as the mid above a
+mono low end, with reverb and a dotted-eighth or quarter echo behind it, and
+no compressor to dent the hold. With **Arp** ticked one held key plays a riff
+of chords in the key: on 1/8 the offbeats (or a beat and a half from the
+"and", tied), on 1/16 the "and" tied to the kick, rolled sixteenths after the
+kick or the push on the last sixteenth; the chord moves every beat or two.
 
 ### Grid
 
@@ -93,9 +110,9 @@ opens upward.
 
 ### Basses
 
-Six bass styles, under the **Bass** tab:
+Seven bass styles, under the **Bass** tab:
 
-Bass Shot · Offbeat Bass · Prog Bass · Psy Bass · Reverse Bass · Reverse Sub
+Bass Shot · Ghost Bass · Offbeat Bass · Prog Bass · Psy Bass · Reverse Bass · Reverse Sub
 
 Basses play on the synth engine, mono and dry, and have no arp: you play their
 rhythm. Their **Knock** panel (under Voicing) holds the pitch drop at the start
@@ -107,6 +124,12 @@ knock, envelope, loudness, stereo):
   pitch knock on every 16th, full level for the note and a dead stop.
 - **Prog Bass**: rounder and darker. One 12 dB low-pass fixed near 120 Hz
   whatever the key, a softer burst and knock.
+- **Ghost Bass**: Ghost Rider's rolling bass, fitted to his tracks (see Ghost
+  Stab). No knock: a saw through a 12 dB low-pass fixed near 150 Hz and a
+  high-pass at 55-78 Hz that thins the fundamental to about the second
+  harmonic's level (his kick owns the sub), with a slight filter flick at
+  every note. Within 0.7 dB of his notes over the first twelve harmonics.
+  Roll it on the "e", "and" and "a", or hold longer notes as bass stabs.
 - **Offbeat Bass**: one note between the kicks. A big pitch knock, then a
   low-pass that closes from a bright pluck to almost a sine, and a slow tail
   after the key is let go.

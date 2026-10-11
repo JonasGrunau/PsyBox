@@ -1640,6 +1640,8 @@ Recipe recipeFor (Category c) noexcept
         case Category::ReverseSub:  return reverseSub;
         case Category::Jilax:       return jilaxRecipe;
         case Category::Grid:        return grid;
+        case Category::GhostStab:   return ghostStabRecipe;
+        case Category::GhostBass:   return ghostBassRecipe;
         case Category::KickFullOn:
         case Category::KickGoa:
         case Category::KickDarkForest:

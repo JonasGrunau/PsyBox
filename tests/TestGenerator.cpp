@@ -301,7 +301,7 @@ TEST_CASE ("Every category has a name, a short name and a blurb", "[generator]")
         listed += (int) categoriesIn (f).size();
     }
     CHECK (listed == kNumCategories);
-    CHECK (familySize (Family::Bass) == 6);
+    CHECK (familySize (Family::Bass) == 7);
     CHECK (familySize (Family::Kick) == 5);
 }
 
@@ -360,8 +360,8 @@ TEST_CASE ("The sidebar tabs hold the sounds they are named for", "[generator][c
         const auto& l = categoriesIn (g);
         return std::find (l.begin(), l.end(), c) != l.end();
     };
-    for (auto c : { Acid, Grid, Jilax, PsyLead, Stab, Pluck }) CHECK (in (CategoryGroup::Main, c));
-    CHECK (categoriesIn (CategoryGroup::Main).size() == 6);
+    for (auto c : { Acid, GhostStab, Grid, Jilax, PsyLead, Stab, Pluck }) CHECK (in (CategoryGroup::Main, c));
+    CHECK (categoriesIn (CategoryGroup::Main).size() == 7);
     for (auto c : { Squelch, Zap, Laser, Screech, AlienVoice, Bubble, Gurgle, Wobble, Metallic, Glitch }) CHECK (in (CategoryGroup::Fx, c));
     for (auto c : { Riser, Downlifter, NoiseFx, Uplifter, Impact, Reverse }) CHECK (in (CategoryGroup::Energy, c));
     for (auto c : { Atmos, Drone, Gate }) CHECK (in (CategoryGroup::Background, c));
@@ -666,7 +666,8 @@ TEST_CASE ("Leads and pads get unison now and then, basses never", "[generator][
         const auto pad = g.generate (Category::Atmos, seed, ParamState(), LockSet(), false);
         leads += lead.geti (P::OscAUnison) > 1 || lead.geti (P::OscBUnison) > 1 ? 1 : 0;
         pads += pad.geti (P::OscAUnison) > 1 || pad.geti (P::OscBUnison) > 1 ? 1 : 0;
-        for (auto c : { Category::PsyBass, Category::ProgBass, Category::OffbeatBass, Category::BassShot, Category::ReverseBass, Category::ReverseSub })
+        for (auto c : { Category::PsyBass, Category::ProgBass, Category::OffbeatBass, Category::BassShot, Category::ReverseBass, Category::ReverseSub,
+                        Category::GhostBass })
         {
             const auto b = g.generate (c, seed, ParamState(), LockSet(), false);
             CHECK (b.geti (P::OscAUnison) == 1);
@@ -708,6 +709,73 @@ TEST_CASE ("Jilax shots last a beat or two, cut at the end, high-passed in the b
     CHECK (bassRoot > n * 6 / 10);        // most roots two octaves under the key
     CHECK (highPassed > n * 3 / 4);       // and the fundamental taken out
     CHECK (clippedLast > n * 3 / 4);      // a clipper at the end of the chain
+}
+
+TEST_CASE ("Ghost stabs start off the beat and stop before the next kick", "[generator][ghost]")
+{
+    Generator g;
+    const int n = 200;
+    int widened = 0, stacked = 0;
+    for (uint32_t seed = 1; seed <= (uint32_t) n; ++seed)
+    {
+        INFO ("seed " << seed);
+        const auto p = g.generate (Category::GhostStab, seed, ParamState(), LockSet(), true);
+        REQUIRE (p.on (P::ArpOn));
+        const int div = p.geti (P::ArpDiv);
+        REQUIRE ((div == 9 || div == 12));   // 1/8 or 1/16
+        const int perBeat = div == 9 ? 2 : 4;
+        const float gate = p.get (P::ArpGate);
+        CHECK (gate < 1.f);   // only the ties hold a stab over a step
+        const auto pat = ArpPattern::from (p);
+        // every stab: from its first step through its ties to the step that ends it
+        for (int i = 0; i < pat.length; ++i)
+        {
+            if (! pat.has (i, ArpPattern::On) || (i > 0 && pat.has (i - 1, ArpPattern::Slide))) continue;
+            CHECK (i % perBeat != 0);   // never on the kick
+            int end = i;
+            while (pat.has (end, ArpPattern::Slide) && end + 1 < pat.length && pat.has (end + 1, ArpPattern::On))
+            {
+                CHECK (pat.notes[(size_t) end + 1] == pat.notes[(size_t) i]);   // a tie holds its chord
+                ++end;
+            }
+            CHECK (end + gate < (float) ((end / perBeat + 1) * perBeat));   // gone before the next beat
+        }
+        CHECK (p.geti (P::Octave) <= 0);
+        CHECK_FALSE (p.on (P::CompOn));
+        CHECK (p.geti (P::F2Type) == (int) FilterType::HP24);
+        CHECK (p.get (P::F2Cutoff) >= 300.f);   // from C4: 240 Hz and up around G#3
+        CHECK (p.on (P::OscBOn));
+        CHECK (p.get (P::F2Key) == 1.f);
+        widened += p.on (P::WidthOn) ? 1 : 0;
+        stacked += p.geti (P::OscAUniStack) == (int) UniStack::OctFifth ? 1 : 0;
+    }
+    CHECK (hasArp (Category::GhostStab));
+    CHECK_FALSE (hasLength (Category::GhostStab));
+    CHECK (familyOf (Category::GhostStab) == Family::Synth);
+    CHECK (widened > n * 3 / 4);   // the side about as loud as the mid
+    CHECK (stacked > n / 2);       // a stack of fifths in most
+}
+
+TEST_CASE ("Ghost basses roll without a knock, their fundamental thinned for the kick", "[generator][ghost]")
+{
+    Generator g;
+    for (uint32_t seed = 1; seed <= 200; ++seed)
+    {
+        INFO ("seed " << seed);
+        const auto p = g.generate (Category::GhostBass, seed, ParamState(), LockSet(), true);
+        CHECK_FALSE (p.on (P::ArpOn));
+        CHECK (p.geti (P::VoiceMode) == (int) VoiceMode::Mono);
+        CHECK (p.geti (P::Octave) == -1);
+        CHECK (p.get (P::PenvAmt) == 0.f);
+        CHECK (p.geti (P::F2Type) == (int) FilterType::HP12);
+        CHECK (p.get (P::F2Cutoff) >= 55.f);
+        CHECK (p.get (P::F2Cutoff) <= 78.f);
+        CHECK (p.get (P::F1Cutoff) <= 190.f);
+        CHECK (p.get (P::AenvA) >= 1.5f);   // no click at the note start
+    }
+    CHECK (familyOf (Category::GhostBass) == Family::Bass);
+    CHECK (groupOf (Category::GhostBass) == CategoryGroup::Bass);
+    CHECK_FALSE (hasArp (Category::GhostBass));
 }
 
 TEST_CASE ("Grids are short hits on a 16th arp that leaves most beats to the kick", "[generator][grid]")

@@ -15,7 +15,7 @@ enum class Category : int
     Bubble, Gurgle, Wobble, Metallic, Riser, Downlifter, NoiseFx, Atmos, Drone,
     Uplifter, Impact, Gate, Glitch, Reverse,
     KickFullOn, KickGoa, KickDarkForest, KickHiTech, KickProgressive,
-    BassShot, OffbeatBass, ProgBass, ReverseBass, ReverseSub, Jilax, Grid, Count
+    BassShot, OffbeatBass, ProgBass, ReverseBass, ReverseSub, Jilax, Grid, GhostStab, GhostBass, Count
 };
 
 constexpr int kNumCategories = (int) Category::Count;
@@ -52,42 +52,44 @@ inline const std::array<CategoryInfo, kNumCategories>& categoryInfo() noexcept
     using enum CategoryGroup;
     static const std::array<CategoryInfo, kNumCategories> info { {
         { "Acid",         "Acid",    Main,       0xFE5654, "303 lines: diode ladder, accent, slide" },
-        { "Squelch",      "Squelch", Fx,         0x6EDE55, "Wet, vocal mid-bass with fast filter motion" },
-        { "Zap",          "Zap",     Fx,         0x1DD689, "Short pitch dives for percussive hits" },
-        { "Laser",        "Laser",   Fx,         0xCFDA01, "Sync sweeps and long pitch falls" },
-        { "Psy Bass",     "Psy",     Bass,       0x7B91FF, "Rolling 16th bass with a knock on every note" },
-        { "Psy Lead",     "Lead",    Main,       0xFE9526, "Wide saw and wavetable leads" },
-        { "Pluck",        "Pluck",   Main,       0xFE852B, "Percussive tonal plucks" },
-        { "Stab",         "Stab",    Main,       0xFEA524, "Chord stabs with room around them" },
-        { "Screech",      "Screech", Fx,         0x94DF39, "Resonant, distorted screams" },
-        { "Alien Voice",  "Alien",   Fx,         0xFDB41D, "Talking formant textures" },
-        { "Bubble",       "Bubble",  Fx,         0xF9C10E, "Resonant blips and bloops" },
-        { "Gurgle",       "Gurgle",  Fx,         0xE2D403, "Liquid, random filter chatter" },
-        { "Wobble",       "Wobble",  Fx,         0x45DB70, "Tempo-synced morphing tones" },
-        { "Metallic",     "Metal",   Fx,         0xB4DD1D, "FM bells, combs and clangs" },
-        { "Riser",        "Riser",   Energy,     0x0BC3CE, "Synth tones climbing in pitch for build-ups" },
-        { "Downlifter",   "Down",    Energy,     0x01D29D, "Falling sweeps for drops" },
-        { "Noise FX",     "Noise",   Energy,     0x06C9B9, "Filtered noise whooshes and textures" },
-        { "Atmos",        "Atmos",   Background, 0x06BCE3, "Evolving pads and air" },
-        { "Drone",        "Drone",   Background, 0x0FB7ED, "Slow, dark, endless tones" },
-        { "Uplifter",     "Uplift",  Energy,     0x02C0D9, "Noise sweeps that open upward" },
-        { "Impact",       "Impact",  Energy,     0x08CDAC, "Sub booms and hits for drops" },
-        { "Gate",         "Gate",    Background, 0x29B1F6, "Tempo-gated pads and chopped textures" },
-        { "Glitch",       "Glitch",  Fx,         0xF0CC0D, "Stuttered, bit-crushed digital chatter" },
-        { "Reverse",      "Rev",     Energy,     0x00C6C3, "Swells that cut off at the peak" },
-        { "Full-On Kick",     "Full-On", Kick, 0xC276FC, "Punchy and bright, tight for 16th rolls" },
-        { "Goa Kick",         "Goa",     Kick, 0xD571F5, "Round and boomy with a soft top" },
-        { "Dark Forest Kick", "Forest",  Kick, 0xAF7DFD, "Hard, distorted and short" },
-        { "Hi-Tech Kick",     "Hi-Tech", Kick, 0xE66EEA, "Very short, clicky and high" },
+        { "Squelch",      "Squelch", Fx,         0x65DD5C, "Wet, vocal mid-bass with fast filter motion" },
+        { "Zap",          "Zap",     Fx,         0x19D68C, "Short pitch dives for percussive hits" },
+        { "Laser",        "Laser",   Fx,         0xC4DB0C, "Sync sweeps and long pitch falls" },
+        { "Psy Bass",     "Psy",     Bass,       0x828EFF, "Rolling 16th bass with a knock on every note" },
+        { "Psy Lead",     "Lead",    Main,       0xFEA124, "Wide saw and wavetable leads" },
+        { "Pluck",        "Pluck",   Main,       0xFE9226, "Percussive tonal plucks" },
+        { "Stab",         "Stab",    Main,       0xFEAF1E, "Chord stabs with room around them" },
+        { "Screech",      "Screech", Fx,         0x89DF42, "Resonant, distorted screams" },
+        { "Alien Voice",  "Alien",   Fx,         0xFBBC13, "Talking formant textures" },
+        { "Bubble",       "Bubble",  Fx,         0xF4C70A, "Resonant blips and bloops" },
+        { "Gurgle",       "Gurgle",  Fx,         0xD9D716, "Liquid, random filter chatter" },
+        { "Wobble",       "Wobble",  Fx,         0x3EDA75, "Tempo-synced morphing tones" },
+        { "Metallic",     "Metal",   Fx,         0xA9DE28, "FM bells, combs and clangs" },
+        { "Riser",        "Riser",   Energy,     0x08C3CD, "Synth tones climbing in pitch for build-ups" },
+        { "Downlifter",   "Down",    Energy,     0x16D19F, "Falling sweeps for drops" },
+        { "Noise FX",     "Noise",   Energy,     0x05C9B8, "Filtered noise whooshes and textures" },
+        { "Atmos",        "Atmos",   Background, 0x02BDE1, "Evolving pads and air" },
+        { "Drone",        "Drone",   Background, 0x09B9EA, "Slow, dark, endless tones" },
+        { "Uplifter",     "Uplift",  Energy,     0x01C1D7, "Noise sweeps that open upward" },
+        { "Impact",       "Impact",  Energy,     0x07CDAD, "Sub booms and hits for drops" },
+        { "Gate",         "Gate",    Background, 0x21B3F3, "Tempo-gated pads and chopped textures" },
+        { "Glitch",       "Glitch",  Fx,         0xE9D003, "Stuttered, bit-crushed digital chatter" },
+        { "Reverse",      "Rev",     Energy,     0x15C6C2, "Swells that cut off at the peak" },
+        { "Full-On Kick",     "Full-On", Kick, 0xC575FB, "Punchy and bright, tight for 16th rolls" },
+        { "Goa Kick",         "Goa",     Kick, 0xD771F4, "Round and boomy with a soft top" },
+        { "Dark Forest Kick", "Forest",  Kick, 0xB37CFD, "Hard, distorted and short" },
+        { "Hi-Tech Kick",     "Hi-Tech", Kick, 0xE76EE9, "Very short, clicky and high" },
         { "Progressive Kick", "Prog",    Kick, 0xF56CDC, "Clean sine body with a deep knock" },
         // Categories added after the kicks (the enum only ever grows).
-        { "Bass Shot",    "Shot",    Bass,       0x40A9FB, "Progressive one-shot bass hits, OTT-compressed" },
-        { "Offbeat Bass", "Offbeat", Bass,       0x55A0FE, "One plucked note between the kicks" },
-        { "Prog Bass",    "Prog",    Bass,       0x6897FE, "Round, dark progressive bass with a soft knock" },
-        { "Reverse Bass", "Rev Bass", Bass,       0x8C8AFD, "A bass that swells into the next kick and stops dead" },
-        { "Reverse Sub",  "Rev Sub",  Bass,       0x9D84FD, "A sine sub that swells into the kick, sliding at the end" },
-        { "Jilax",        "Jilax",   Main,       0xFF7536, "Wide psytrance synth shots, one or two beats long" },
-        { "Grid",         "Grid",    Main,       0xFE6544, "Short FM, pluck and stab hits locked to the 16th grid" },
+        { "Bass Shot",    "Shot",    Bass,       0x38ACF9, "Progressive one-shot bass hits, OTT-compressed" },
+        { "Offbeat Bass", "Offbeat", Bass,       0x5F9CFE, "One plucked note between the kicks" },
+        { "Prog Bass",    "Prog",    Bass,       0x7194FF, "Round, dark progressive bass with a soft knock" },
+        { "Reverse Bass", "Rev Bass", Bass,       0x9288FD, "A bass that swells into the next kick and stops dead" },
+        { "Reverse Sub",  "Rev Sub",  Bass,       0xA282FD, "A sine sub that swells into the kick, sliding at the end" },
+        { "Jilax",        "Jilax",   Main,       0xFE822D, "Wide psytrance synth shots, one or two beats long" },
+        { "Grid",         "Grid",    Main,       0xFF7337, "Short FM, pluck and stab hits locked to the 16th grid" },
+        { "Ghost Stab",   "Ghost",   Main,       0xFE6445, "Wide fifth stacks on the offbeat, cut at the kick (Ghost Rider)" },
+        { "Ghost Bass",   "Ghost",   Bass,       0x4CA4FD, "Rolling prog bass with a quick filter flick on every note (Ghost Rider)" },
     } };
     return info;
 }
@@ -134,7 +136,7 @@ constexpr Family familyOf (Category c) noexcept
     if ((int) c >= (int) Category::KickFullOn && (int) c <= (int) Category::KickProgressive)
         return Family::Kick;
     if (c == Category::PsyBass || c == Category::BassShot || c == Category::OffbeatBass || c == Category::ProgBass
-        || c == Category::ReverseBass || c == Category::ReverseSub)
+        || c == Category::ReverseBass || c == Category::ReverseSub || c == Category::GhostBass)
         return Family::Bass;
     return Family::Synth;
 }
