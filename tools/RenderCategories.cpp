@@ -99,6 +99,14 @@ namespace
                 for (int b = 0; b < 16; b += 2) p.push_back ({ (double) b, 0.1, bars[b / 4], 0.8f });
                 break;
             }
+            case Category::Grid:   // an offbeat 16th groove, E4 E4 G4 D4 by the bar
+            {
+                static const int bars[4] = { 64, 64, 67, 62 };
+                static const char* groove = "-x-x--x--xx--x-x";
+                for (int i = 0; i < 64; ++i)
+                    if (groove[i % 16] == 'x') p.push_back ({ i * 0.25, 0.12, bars[i / 16], (i % 4 == 2) ? 1.f : 0.75f });
+                break;
+            }
             case Category::KickFullOn: case Category::KickGoa: case Category::KickDarkForest:
             case Category::KickHiTech: case Category::KickProgressive:
                 // four on the floor; the key changes every bar (F, F, G, D#) to hear the tracking
@@ -123,6 +131,7 @@ namespace
         {
             case Category::Acid: case Category::Squelch: keys = { 36, 39, 43 }; break;
             case Category::Drone: case Category::Zap: case Category::Laser: keys = { 48 }; break;
+            case Category::Grid: keys = { 64 }; break;   // the note lane carries the line
             default: keys = { 60, 63, 67 }; break;
         }
         std::vector<Note> p;

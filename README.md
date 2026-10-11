@@ -11,17 +11,31 @@ Builds as **VST3**, **Audio Unit** and **Standalone** (macOS).
 
 ## Categories
 
-35 kinds of sound, each with its own recipe, in six groups in the sidebar.
+36 kinds of sound, each with its own recipe, in six groups in the sidebar.
 Each group is a header; click one to open it and its sounds fold out under
 it, while closed groups show a dot per sound. The accents run as one rainbow
 down the whole list: red at the first sound of the first group, through
 every group, to magenta at the last kick.
 
-- **Main**: Acid · Jilax · Pluck · Psy Lead · Stab
+- **Main**: Acid · Grid · Jilax · Pluck · Psy Lead · Stab
 - **FX**: Alien Voice · Bubble · Glitch · Gurgle · Laser · Metallic · Screech · Squelch · Wobble · Zap
 - **Energy**: Downlifter · Impact · Noise FX · Reverse · Riser · Uplifter
 - **Background**: Atmos · Drone · Gate
 - **Bass** and **Kick**: below
+
+### Grid
+
+The short hits a full-on groove is built from, the "grids" of the sample
+packs: FM blips, plucks, small chord stabs and ring-modulated ticks, each over
+in a sixteenth or two, high-passed above the bass. Every hit comes out a little
+different (a new random value per note, or a sample & hold on the 16ths, on
+the brightness or the FM index), and some get a click from a quick pitch drop.
+Dry, with a ping-pong echo on the grid. With **Arp** ticked a grid plays
+straight 16ths with short gates: one-beat cells that leave most beats to the
+kick and play the "e", "and" and "a" around the bass, a Euclidean figure
+turned off the beat, or the dotted-eighth run, sometimes a three-beat loop
+against the bar. The line keeps to the key with octave and fifth jumps, and
+the last half-bar answers the first.
 
 ### Jilax
 
@@ -172,7 +186,7 @@ body holds flat to about 160 ms and is down 30 dB by about 220 ms.
   it alone.
 - Tick **Arp** next to Generate and every new Main, FX or Background sound
   comes with an arp in the style of its category: tied 303 slides for acid,
-  random blips for bubbles, each with a freshly generated step pattern and a
+  random blips for bubbles, offbeat 16ths for grids, each with a freshly generated step pattern and a
   line on its note lane, so holding one key already plays a riff. The
   sound itself is the same with or without it; only the arp settings differ.
   Energy sounds, basses and kicks have no arp. Set a **Key** and scale under

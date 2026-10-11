@@ -360,8 +360,8 @@ TEST_CASE ("The sidebar tabs hold the sounds they are named for", "[generator][c
         const auto& l = categoriesIn (g);
         return std::find (l.begin(), l.end(), c) != l.end();
     };
-    for (auto c : { Acid, Jilax, PsyLead, Stab, Pluck }) CHECK (in (CategoryGroup::Main, c));
-    CHECK (categoriesIn (CategoryGroup::Main).size() == 5);
+    for (auto c : { Acid, Grid, Jilax, PsyLead, Stab, Pluck }) CHECK (in (CategoryGroup::Main, c));
+    CHECK (categoriesIn (CategoryGroup::Main).size() == 6);
     for (auto c : { Squelch, Zap, Laser, Screech, AlienVoice, Bubble, Gurgle, Wobble, Metallic, Glitch }) CHECK (in (CategoryGroup::Fx, c));
     for (auto c : { Riser, Downlifter, NoiseFx, Uplifter, Impact, Reverse }) CHECK (in (CategoryGroup::Energy, c));
     for (auto c : { Atmos, Drone, Gate }) CHECK (in (CategoryGroup::Background, c));
@@ -708,4 +708,52 @@ TEST_CASE ("Jilax shots last a beat or two, cut at the end, high-passed in the b
     CHECK (bassRoot > n * 6 / 10);        // most roots two octaves under the key
     CHECK (highPassed > n * 3 / 4);       // and the fundamental taken out
     CHECK (clippedLast > n * 3 / 4);      // a clipper at the end of the chain
+}
+
+TEST_CASE ("Grids are short hits on a 16th arp that leaves most beats to the kick", "[generator][grid]")
+{
+    Generator g;
+    const int n = 200;
+    int offKick = 0, total = 0, highPassed = 0, varied = 0;
+    for (uint32_t seed = 1; seed <= (uint32_t) n; ++seed)
+    {
+        INFO ("seed " << seed);
+        const auto p = g.generate (Category::Grid, seed, ParamState(), LockSet(), true);
+        REQUIRE (p.on (P::ArpOn));
+        CHECK (p.geti (P::ArpDiv) == 12);   // 1/16
+        CHECK (p.get (P::ArpGate) <= 0.5f);
+        CHECK (p.get (P::AenvS) == 0.f);
+        CHECK (p.get (P::AenvD) <= 220.f);
+        CHECK (p.geti (P::Octave) <= 0);
+        const auto pat = ArpPattern::from (p);
+        CHECK ((pat.length == 16 || pat.length == 12));
+        int hits = 0;
+        for (int i = 0; i < pat.length; ++i)
+            if (pat.has (i, ArpPattern::On))
+            {
+                ++hits;
+                offKick += i % 4 != 0 ? 1 : 0;
+            }
+        for (int i = 0; i < pat.length; ++i)
+            if (pat.has (i, ArpPattern::On))
+            {
+                CHECK (pat.notes[(size_t) i] >= -8);   // never down into the bass
+                CHECK (pat.notes[(size_t) i] <= 23);   // an octave and a seventh up at most
+            }
+        CHECK (hits >= 3);
+        CHECK (hits <= 12);   // rests make the groove
+        total += hits;
+        const int f2 = p.geti (P::F2Type);
+        highPassed += (f2 == (int) FilterType::HP12 || f2 == (int) FilterType::HP24) ? 1 : 0;
+        for (int i = 0; i < kNumModSlots; ++i)
+        {
+            const int src = p.geti (modSrcParam (i));
+            if (src == (int) ModSrc::Random || src == (int) ModSrc::Lfo1) { ++varied; break; }
+        }
+    }
+    CHECK (hasArp (Category::Grid));
+    CHECK_FALSE (hasLength (Category::Grid));
+    CHECK (offKick > total * 7 / 10);   // mostly the "e", "and" and "a"
+    CHECK (highPassed > n * 7 / 10);    // above the bass
+    CHECK (varied > n * 6 / 10);        // each hit a little different
 }

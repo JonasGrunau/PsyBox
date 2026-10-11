@@ -127,6 +127,17 @@ namespace
         swing (b, 0.05f);
     }
 
+    // Grids sit on straight 16ths with short gates: the note lane and the
+    // rests make the groove.
+    void grid (B& b)
+    {
+        b.pick (P::ArpDiv, { D1_16 });
+        b.pick (P::ArpMode, { Order, Up, Random }, { 0.6f, 0.2f, 0.2f });
+        b.pick (P::ArpOctaves, { 1, 2 }, { 0.9f, 0.1f });
+        gate (b, 0.2f, 0.5f);
+        swing (b, 0.06f);
+    }
+
     void metallic (B& b)
     {
         b.pick (P::ArpDiv, { D1_16, D1_8T }, { 0.65f, 0.35f });
@@ -783,6 +794,46 @@ namespace
         write (b, p);
     }
 
+    // Grids answer the kick and the bass: one-beat cells that mostly leave
+    // the beat to the kick and play its "e", "and" and "a", laid out in a bar
+    // form; or a Euclidean figure turned off the beat; or the dotted-eighth
+    // run (3-3-3-3-2-2). Now and then the loop is three beats long and runs
+    // against the bar. The line keeps to the key and jumps to its octave and
+    // fifth, the b2, the second, the seventh or the fifth below now and then
+    // (never down into the bass), and the last half-bar answers the first.
+    void gridPattern (B& b)
+    {
+        ArpPattern p;
+        const int kind = b.weighted ({ 0.5f, 0.3f, 0.2f });
+        if (kind == 0)
+        {
+            const char* cells[] = { "-x-x", "--x-", "-xx-", "--xx", "x--x", "-x--", "x-x-", "-x-x", "x-xx", "---x" };
+            const float w[] = { 1.f, 1.f, 1.f, 1.f, 0.8f, 0.8f, 0.6f, 0.6f, 0.5f, 0.5f };
+            const std::string a = choose (b, cells, w), other = choose (b, cells, w);
+            const char* shapes[] = { "AABA", "ABAB", "AAAB", "ABAA" };
+            p = ArpPattern::parse (form (choose (b, shapes, { 0.3f, 0.3f, 0.25f, 0.15f }), a, other));
+        }
+        else if (kind == 1)
+        {
+            const int hits[] = { 5, 6, 7, 9, 10, 11 };
+            p = rotated (euclid (choose (b, hits, { 0.2f, 0.15f, 0.2f, 0.2f, 0.15f, 0.1f }), 16), integer (b, 1, 3));
+        }
+        else
+            p = rotated (ArpPattern::parse ("x--x--x--x--x-x-"), integer (b, 0, 2));
+        if (b.chance (0.2f)) p.length = 12;
+        const int rule = b.weighted ({ 0.35f, 0.3f, 0.35f });
+        accent (p, rule == 0 ? Accents::Offbeats : (rule == 1 ? Accents::FigureStart : Accents::None), 0, 4);
+
+        const Motion m { 0.4f, 0.1f, { { 0, 4.f }, { 7, 3.f }, { 4, 2.f }, { -3, 1.f }, { 9, 0.6f }, { 1, 0.8f }, { -1, 0.8f }, { 2, 0.6f } }, -3, 9 };
+        const Scale s = scale (b);
+        auto d = line (b, p, 8, m);
+        const int shifts[] = { 4, 3, -1, 1 };
+        answer (b, p, d, 8, m, answerOf (b, 0.3f, 0.5f, 0.2f), choose (b, shifts, { 0.35f, 0.3f, 0.2f, 0.15f }));
+        enliven (b, p, d, 3, m);
+        setNotes (p, s, d);
+        write (b, p);
+    }
+
     // Short bell loops (Euclidean over 10, 12 or 16) with wide, ringing
     // intervals: the b2 and the eleventh as well as fifths and octaves.
     void metallicPattern (B& b)
@@ -1020,6 +1071,7 @@ Recipe arpPatternRecipeFor (Category c) noexcept
         case Category::PsyLead:     return psyLeadPattern;
         case Category::Pluck:       return pluckPattern;
         case Category::Stab:        return stabPattern;
+        case Category::Grid:        return gridPattern;
         case Category::Screech:     return screechPattern;
         case Category::AlienVoice:  return alienVoicePattern;
         case Category::Bubble:      return bubblePattern;
@@ -1064,6 +1116,7 @@ Recipe arpRecipeFor (Category c) noexcept
         case Category::PsyLead:     return psyLead;
         case Category::Pluck:       return pluck;
         case Category::Stab:        return stab;
+        case Category::Grid:        return grid;
         case Category::Screech:     return screech;
         case Category::AlienVoice:  return alienVoice;
         case Category::Bubble:      return bubble;

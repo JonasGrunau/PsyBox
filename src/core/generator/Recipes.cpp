@@ -559,6 +559,94 @@ namespace
         b.macros ({ D::F1Reso, D::FilterEnvAmt, D::DetuneA, D::ReverbMix, D::DelayMix, D::ChorusMix, D::DistDrive });
     }
 
+    // The short hits a full-on track's groove is built from, the "grids" of
+    // the sample packs: FM blips, plucks, small chord stabs and ring-modded
+    // ticks that answer the kick and the rolling bass on the 16ths. Each one
+    // is over in a sixteenth or two and sits above the bass (a high-pass
+    // keeps it out of the bass's octaves); every hit comes out a little
+    // different, the way a grid of layered one-shots does. Dry, with an
+    // echo that lands on the grid too.
+    void grid (B& b)
+    {
+        polyVoice (b, 4, 8);
+        b.pick (P::Octave, { -1, 0 }, { 0.3f, 0.7f });
+        b.uni (P::VelSens, 0.3f, 0.6f);
+        const int kind = b.weighted ({ 0.4f, 0.3f, 0.2f, 0.1f });
+        switch (kind)
+        {
+            case 0:   // FM blip: the index falls in a few ms, a tick then a tone
+                fmA (b, { 1.f, 2.f, 3.f, 4.f, 2.f, 3.5f }, 0.5f, 3.f, 0.f, 0.35f);
+                modEnv (b, 0.f, 0.f, 12.f, 90.f, 0.f, 0.1f, 20.f, 60.f);
+                b.route (S::ModEnv, D::FmA, 0.25f, 0.55f);
+                break;
+            case 1:   // pluck: a saw or square the filter snaps shut on
+                analogA (b, b.chance (0.6f) ? kSaw : kSquare);
+                if (b.chance (0.35f))
+                {
+                    analogB (b, b.chance (0.5f) ? kSaw : kSquare, 0.3f, 0.6f);
+                    b.among (P::OscBCoarse, { 12.f, 7.f, 19.f });
+                    b.uni (P::OscBFine, -8.f, 8.f);
+                }
+                break;
+            case 2:   // a small chord stab: root, fifth and octave, or a third on osc B
+                analogA (b, kSaw);
+                if (b.chance (0.5f)) b.set (P::OscAUniStack, (float) UniStack::OctFifth);
+                analogB (b, kSaw, 0.4f, 0.7f);
+                b.among (P::OscBCoarse, { 3.f, 7.f, 10.f, 12.f });
+                b.uni (P::OscBFine, -10.f, 10.f);
+                break;
+            default:  // a ring-modded tick: square against a detuned sine
+                analogA (b, kSquare);
+                analogB (b, kSine, 0.f, 0.f);
+                b.among (P::OscBCoarse, { 7.f, 11.f, 13.f, 19.f, 25.f });
+                b.uni (P::RingLevel, 0.4f, 0.7f);
+                break;
+        }
+
+        // the snap: a filter envelope over in 30-160 ms (an FM blip is shaped
+        // by its index, so its filter mostly stays open)
+        if (kind == 0 && b.chance (0.6f))
+            filter1 (b, ft (FilterType::LP12), 6000.f, 16000.f, 0.f, 0.2f, 0.f, 0.f);
+        else
+            filter1 (b, b.chance (0.6f) ? ft (FilterType::LP12) : ft (FilterType::Ladder24), 350.f, 2200.f, 0.1f, 0.55f, 0.4f, 0.85f);
+        filterEnv (b, 0.f, 0.f, 30.f, 160.f, 0.f, 0.f, 20.f, 80.f);
+        if (b.chance (0.8f))
+        {
+            b.pick (P::F2Type, { ft (FilterType::HP12), ft (FilterType::HP24) }, { 0.5f, 0.5f });
+            b.uni (P::F2Cutoff, 180.f, 450.f);
+            b.uni (P::F2Reso, 0.f, 0.3f);
+        }
+        ampEnv (b, 0.f, 0.5f, 40.f, 220.f, 0.f, 0.f, 20.f, 90.f);
+        // a click on the front: the pitch drops a few semitones in a few ms
+        if (b.chance (0.35f))
+        {
+            b.set (P::PenvAttack, 0.f);
+            b.set (P::PenvDest, 0.f);
+            b.uni (P::PenvAmt, 7.f, 30.f);
+            b.uni (P::PenvDecay, 4.f, 25.f);
+            b.uni (P::PenvCurve, 0.5f, 0.9f);
+        }
+
+        // every hit a little different: a new random value per note, or a
+        // sample & hold on the 16ths (the "fractal" grid), on the brightness
+        // or the FM index; accents come out brighter
+        const D target = kind == 0 ? D::FmA : D::F1Cutoff;
+        if (b.chance (0.5f)) b.route (S::Random, target, 0.1f, 0.3f);
+        else if (b.chance (0.5f))
+        {
+            b.lfoSync (0, LfoShape::SampleHold, { D1_16, D1_8, D1_16D }, false);
+            b.route (S::Lfo1, target, 0.1f, 0.25f);
+        }
+        b.route (S::Velocity, D::F1Cutoff, 0.1f, 0.25f);
+        b.route (S::Macro1, D::FilterEnvAmt, 0.2f, 0.4f);
+
+        fxDelay (b, 0.75f, { D1_8D, D1_16D, D1_8, D1_16 }, 0.2f, 0.45f, 0.1f, 0.25f);
+        fxReverb (b, 0.4f, 0.6f, 1.8f, 0.05f, 0.15f);
+        fxDist (b, 0.3f, { (int) DistType::Soft, (int) DistType::Tube, (int) DistType::Hard }, 4.f, 14.f, 0.3f, 0.7f);
+        fxWidth (b, 0.4f, 0.3f, 0.8f);
+        b.macros ({ D::F1Cutoff, D::FilterEnvAmt, D::FmA, D::F1Reso, D::DelayMix, D::DistDrive, D::ReverbMix });
+    }
+
     void screech (B& b)
     {
         monoVoice (b, true, 20.f, 100.f);
@@ -1481,6 +1569,7 @@ void unisonRecipe (Category c, RecipeBuilder& b)
         case Category::PsyLead:    sp = { 0.6f, 0.4f, 3, 7, 0.1f, 0.28f, 0.6f, 0.85f, 0.6f, 1.f, false }; break;
         case Category::Pluck:      sp = { 0.4f, 0.3f, 2, 4, 0.05f, 0.15f, 0.4f, 0.7f, 0.4f, 0.8f, false }; break;
         case Category::Stab:       sp = { 0.5f, 0.35f, 3, 5, 0.08f, 0.22f, 0.5f, 0.8f, 0.6f, 1.f, false }; break;
+        case Category::Grid:       sp = { 0.25f, 0.15f, 2, 3, 0.04f, 0.12f, 0.3f, 0.6f, 0.3f, 0.8f, false }; break;
         case Category::Screech:    sp = { 0.3f, 0.2f, 2, 3, 0.04f, 0.12f, 0.3f, 0.6f, 0.3f, 0.7f, false }; break;
         case Category::Metallic:   sp = { 0.2f, 0.15f, 2, 3, 0.03f, 0.1f, 0.3f, 0.6f, 0.5f, 0.9f, true }; break;
         case Category::Atmos:      sp = { 0.7f, 0.5f, 4, 7, 0.12f, 0.35f, 0.7f, 0.9f, 0.8f, 1.f, true }; break;
@@ -1550,6 +1639,7 @@ Recipe recipeFor (Category c) noexcept
         case Category::ReverseBass: return reverseBass;
         case Category::ReverseSub:  return reverseSub;
         case Category::Jilax:       return jilaxRecipe;
+        case Category::Grid:        return grid;
         case Category::KickFullOn:
         case Category::KickGoa:
         case Category::KickDarkForest:
