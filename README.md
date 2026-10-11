@@ -36,9 +36,12 @@ gentle one-pole low-pass for the 6-8 dB per octave his stabs fall above
 1.4 kHz. Wide: the Width stage puts the side about as loud as the mid above a
 mono low end, with reverb and a dotted-eighth or quarter echo behind it, and
 no compressor to dent the hold. With **Arp** ticked one held key plays a riff
-of chords in the key: on 1/8 the offbeats (or a beat and a half from the
-"and", tied), on 1/16 the "and" tied to the kick, rolled sixteenths after the
-kick or the push on the last sixteenth; the chord moves every beat or two.
+of chords in the key, mostly on 1/16: the "and" tied to the kick, with beats
+rolled on the sixteenths after the kick, doubled on the "and" and "a", pushed
+to the last sixteenth, held for a beat and a half or left out, in a bar form
+that turns around at its end (on 1/8, two bars of offbeats and holds). The
+chords move every beat, every half bar, or hold and turn at the end, now and
+then a sixteenth ahead of the beat; no stab starts on the kick.
 
 ### Grid
 
@@ -210,7 +213,10 @@ body holds flat to about 160 ms and is down 30 dB by about 220 ms.
 - Tick **Arp** next to Generate and every new Main, FX or Background sound
   comes with an arp in the style of its category: tied 303 slides for acid,
   random blips for bubbles, offbeat 16ths for grids, each with a freshly generated step pattern and a
-  line on its note lane, so holding one key already plays a riff. The
+  line on its note lane, so holding one key already plays a riff. Riffs are
+  built from each category's figures in bar forms (AAAB, ABAB, ABAC...),
+  turned off the beat, pushed into the next bar and answered, so each press
+  of Generate writes a different one. The
   sound itself is the same with or without it; only the arp settings differ.
   Energy sounds, basses and kicks have no arp. Set a **Key** and scale under
   the Arp switch (Phrygian, Minor, Harmonic Min, Phrygian Dom, Dorian, Major)

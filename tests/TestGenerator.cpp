@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <map>
 #include <set>
 #include <string_view>
 
@@ -597,6 +598,39 @@ TEST_CASE ("No arp category generates a one- or two-note pattern more than now a
         }
         INFO (categoryInfo()[(size_t) c].name);
         CHECK (lively >= kSeeds * 9 / 10);
+    }
+}
+
+TEST_CASE ("Every arp category writes many different rhythms and none of them most of the time", "[generator][arp]")
+{
+    // drones play every step by design: their variety is in the notes
+    Generator g;
+    for (Category c : categoryDisplayOrder())
+    {
+        if (! hasArp (c)) continue;
+        constexpr int kSeeds = 100;
+        std::map<std::string, int> rhythms, lines;
+        for (uint32_t seed = 1; seed <= kSeeds; ++seed)
+        {
+            const auto st = g.generate (c, seed, ParamState(), LockSet(), true);
+            const auto p = ArpPattern::from (st);
+            std::string r = std::to_string (st.geti (P::ArpDiv)) + "/" + std::to_string (p.length) + ":";
+            std::string l = r;
+            for (int i = 0; i < p.length; ++i)
+            {
+                r += p.has (i, ArpPattern::On) ? (p.has (i, ArpPattern::Slide) ? 's' : 'x') : '-';
+                l += p.has (i, ArpPattern::On) ? std::to_string (p.notes[(size_t) i]) + "," : "-,";
+            }
+            ++rhythms[r];
+            ++lines[l];
+        }
+        int top = 0;
+        for (const auto& [r, n] : rhythms) top = std::max (top, n);
+        INFO (categoryInfo()[(size_t) c].name << ": " << rhythms.size() << " rhythms, the commonest in " << top);
+        CHECK ((int) lines.size() >= kSeeds * 3 / 4);
+        if (c == Category::Drone) continue;
+        CHECK ((int) rhythms.size() >= 15);
+        CHECK (top <= kSeeds / 5);
     }
 }
 
