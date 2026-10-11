@@ -175,11 +175,8 @@ void KickVoice::renderMono (float* outL, float* outR, int offsetOs, int numOs, c
             released = true;
         }
         const float a = amp.process();
-        if (! amp.active())
-        {
-            active = false;
-            break;
-        }
+        if (! amp.active() && ! choking)
+            choke();   // the saturator's DC blocker still holds a little offset: fade it rather than drop it
 
         g1 *= d1;
         g2 *= d2;

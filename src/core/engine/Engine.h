@@ -154,6 +154,11 @@ private:
     void kickNoteOn (int note, float velocity) noexcept;
     void followEngineMode() noexcept;
     Voice& allocateVoice (bool& stolen) noexcept;
+    // A voice that still sounds would click if it restarted in place (its
+    // filters ring on the envelope's jump): it moves to an idle slot at or
+    // above `from` and fades out there, and slot i is free for a fresh start.
+    // False when it is quiet enough to restart, or no slot is idle.
+    bool handOff (size_t i, size_t from) noexcept;
     void renderVoices (int offset, int n) noexcept;
     // The effects in the patch's order. Distortion first runs on the
     // oversampled signal before the decimator instead (see process).

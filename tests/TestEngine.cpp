@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <set>
 #include <string>
+#include <tuple>
 
 using namespace psy;
 
@@ -960,4 +961,110 @@ TEST_CASE ("A One Shot sound plays its whole length from a tap", "[engine][energ
     const auto shot = hold (p, 2.0, 0.02);
     CHECK (power (cut.l, 0.5 * beat, 0.9 * beat) < power (shot.l, 0.5 * beat, 0.9 * beat) - 40.0);
     CHECK (power (shot.l, beat + 0.5, 2.0) < power (shot.l, 0.5 * beat, 0.9 * beat) - 60.0);
+}
+
+namespace
+{
+    // Plays { seconds, note, on } events and returns the left channel.
+    std::vector<float> playEvents (const ParamState& p, double seconds, const std::vector<std::tuple<double, int, bool>>& events)
+    {
+        Engine e;
+        e.setParams (p);
+        e.prepare (48000.0, 256);
+        const int total = (int) (seconds * 48000.0);
+        std::vector<float> l ((size_t) total), r ((size_t) total);
+        for (int pos = 0; pos < total; pos += 256)
+        {
+            const int n = std::min (256, total - pos);
+            std::vector<MidiEvent> ev;
+            for (const auto& [t, note, down] : events)
+            {
+                const int at = (int) (t * 48000.0);
+                if (at >= pos && at < pos + n)
+                    ev.push_back ({ at - pos, down ? MidiEvent::NoteOn : MidiEvent::NoteOff, note, down ? 0.8f : 0.f });
+            }
+            e.process (l.data() + pos, r.data() + pos, n, ev.data(), (int) ev.size(), 145.0);
+        }
+        return l;
+    }
+
+    // The biggest jump from one sample to the next in [t0, t1) seconds. A
+    // click is a jump far bigger than the waveform's own steepest slope.
+    float maxStep (const std::vector<float>& x, double t0, double t1)
+    {
+        float m = 0.f;
+        for (auto i = std::max ((size_t) 1, (size_t) (t0 * 48000.0)); i < std::min (x.size(), (size_t) (t1 * 48000.0)); ++i)
+            m = std::max (m, std::abs (x[i] - x[i - 1]));
+        return m;
+    }
+} // namespace
+
+TEST_CASE ("An instant attack, a 1 ms release and a gate chop ramp instead of clicking", "[engine][click]")
+{
+    ParamState p;
+    p.set (P::F1Type, 0.f);   // no filter to round anything off
+    p.set (P::AenvA, 0.f);
+    p.set (P::AenvS, 1.f);
+    p.set (P::AenvR, 1.f);
+    p.set (P::OscARetrig, 1.f);
+
+    // a triangle starts at -1: with no attack it jumped there (66x its own slope)
+    p.set (P::OscAShape, 1.f);
+    auto x = playEvents (p, 0.3, { { 0.0, 48, true }, { 0.2, 48, false } });
+    const float slope = maxStep (x, 0.05, 0.15);
+    CHECK (maxStep (x, 0.0, 0.01) < 2.f * slope);
+    CHECK (maxStep (x, 0.2, 0.25) < 2.f * slope);   // the exponential release fell 5x its slope in a sample
+
+    // a sine chopped by a square LFO on the level (it jumped 47x its slope)
+    p.set (P::OscAShape, 0.f);
+    p.set (P::Lfo1Shape, 4.f);
+    p.set (P::Lfo1Sync, 0.f);
+    p.set (P::Lfo1Rate, 8.f);
+    p.set (P::Mod1Src, (float) ModSrc::Lfo1);
+    p.set (P::Mod1Dst, (float) ModDst::Amp);
+    p.set (P::Mod1Amt, 1.f);
+    x = playEvents (p, 0.5, { { 0.0, 48, true } });
+    CHECK (maxStep (x, 0.055, 0.45) < 2.f * maxStep (x, 0.02, 0.055));   // the first half cycle is open
+}
+
+TEST_CASE ("A retriggered mono note starts as cleanly as a fresh voice", "[engine][click]")
+{
+    // A resonant filter swept by its envelope: retriggered in place, the
+    // envelope's jump pinged the still-ringing filter (twice the top end of a
+    // fresh start). Now the sounding voice fades out in a spare slot.
+    ParamState p;
+    p.set (P::F1Type, (float) FilterType::LP12);
+    p.set (P::F1Cutoff, 300.f);
+    p.set (P::F1Reso, 0.9f);
+    p.set (P::F1Env, 0.7f);
+    p.set (P::FenvD, 80.f);
+    p.set (P::AenvS, 1.f);
+    const auto top = [] (const std::vector<float>& x) {
+        double s = 0.0;
+        for (auto i = (size_t) (0.06 * 48000.0); i < (size_t) (0.066 * 48000.0); ++i)
+        {
+            const double d = (double) x[i] - 2.0 * x[i - 1] + x[i - 2];
+            s += d * d;
+        }
+        return s;
+    };
+    const std::vector<std::tuple<double, int, bool>> notes { { 0.0, 48, true }, { 0.06, 55, true }, { 0.3, 48, false }, { 0.3, 55, false } };
+    p.set (P::VoiceMode, (float) VoiceMode::Poly);
+    const double fresh = top (playEvents (p, 0.4, notes));
+    p.set (P::VoiceMode, (float) VoiceMode::Mono);
+    CHECK (top (playEvents (p, 0.4, notes)) < 1.3 * fresh);
+
+    // the old voice is gone 3 ms later, and a release still ends everything
+    Engine e;
+    e.setParams (p);
+    e.prepare (48000.0, 48);
+    std::vector<float> l (48), r (48);
+    const MidiEvent first { 0, MidiEvent::NoteOn, 48, 0.8f }, second { 0, MidiEvent::NoteOn, 55, 0.8f };
+    e.process (l.data(), r.data(), 48, &first, 1, 145.0);
+    for (int b = 0; b < 20; ++b) e.process (l.data(), r.data(), 48, nullptr, 0, 145.0);
+    e.process (l.data(), r.data(), 48, &second, 1, 145.0);
+    CHECK (e.activeVoices() == 2);
+    for (int b = 0; b < 4; ++b) e.process (l.data(), r.data(), 48, nullptr, 0, 145.0);
+    CHECK (e.activeVoices() == 1);
+    CHECK (tailPeak (p, { { on (48) }, { on (55) }, { on (48) }, {}, { off (48) }, { off (55) } }) < 1e-4f);
 }

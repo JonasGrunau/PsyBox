@@ -49,8 +49,15 @@ public:
     void changeNote (int note, bool accent, bool doGlide);
     void release();
     void kill();
+    // Out in 3 ms whatever the envelope does: a voice making room for a new note.
+    void fadeOut() noexcept;
 
-    bool isActive() const noexcept { return amp.active(); }
+    // Sounding until the smoothed level has followed the envelope down too.
+    bool isActive() const noexcept { return (amp.active() && outFade > 0.f) || level2 > 1e-5f; }
+    // The output level (envelope, velocity and Amp modulation, smoothed);
+    // below kQuiet a voice can restart in place without a click.
+    float level() const noexcept { return level2; }
+    static constexpr float kQuiet = 0.002f;
     bool isGateOn() const noexcept { return gate; }
     int getNote() const noexcept { return note; }
     uint64_t age = 0;
@@ -113,6 +120,19 @@ private:
     float pitchNow = 60.f, pitchTarget = 60.f;
     bool gliding = false;
     int typeA = -1, typeB = -1;
+    // The level moves at most a full note's level per millisecond, then a
+    // 0.1 ms one-pole rounds the corners: an instant attack, a retrigger, a
+    // fast release or a gate chop becomes a ~1 ms ramp instead of a click,
+    // and anything slower passes as it is.
+    float level1 = 0.f, level2 = 0.f, levelSlew = 1.f, levelCoef = 1.f;
+    // Oscillators that start from a reset phase jump from silence to their
+    // first sample, and a resonant filter rings on that step: the mix fades
+    // in over 1 ms before the filters.
+    float onset = 1.f, onsetInc = 1.f;
+    float outFade = 1.f, outFadeStep = 0.f, outFadeRate = 0.f;   // fadeOut()
+    std::array<float, 2> cutOct {};   // each filter's cutoff offset (octaves) as last set
+    float cutFall = 1.f;
+    bool cutFresh = true;
 
     float oscSample (int which, int k, int type, double inc, float shape, float pw, float detune, int table, float wtPos,
                      float fmRatio, float fmIndex, float fmFb, const dsp::SyncInfo* sync, float xmodPm, float harmonicLimit) noexcept;

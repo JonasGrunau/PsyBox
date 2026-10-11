@@ -207,14 +207,18 @@ private:
 };
 
 // ---------------------------------------------------------------------------
-// LFO, bipolar output in [-1, 1].
+// LFO, bipolar output in [-1, 1]. The square, saws and S&H jump; a 0.35 ms
+// one-pole rounds every edge so a jump on the level, a filter or an FM index
+// doesn't click.
 // ---------------------------------------------------------------------------
 class Lfo
 {
 public:
-    void setSampleRate (float sr) noexcept { fs = sr; }
+    void setSampleRate (float sr) noexcept { fs = sr; edge = 1.f - std::exp (-1.f / (0.00035f * sr)); }
     void seed (uint64_t s) noexcept { rng.reseed (s); prevRand = rng.bipolar(); nextRand = rng.bipolar(); held = prevRand; }
     void reset (float startPhase) noexcept { p = startPhase - std::floor (startPhase); odd = false; }
+    // The next value is taken as it is, without rounding from the last: a new note on a silent voice.
+    void snap() noexcept { fresh = true; }
 
     float process (int shape, float hz) noexcept
     {
@@ -227,21 +231,24 @@ public:
             nextRand = rng.bipolar();
             held = nextRand;
         }
+        float raw;
         switch (shape)
         {
-            case 0: out = std::sin (kTwoPi * p); break;
-            case 1: out = p < 0.25f ? 4.f * p : (p < 0.75f ? 2.f - 4.f * p : 4.f * p - 4.f); break;
-            case 2: out = 2.f * p - 1.f; break;
-            case 3: out = 1.f - 2.f * p; break;
-            case 4: out = p < 0.5f ? 1.f : -1.f; break;
-            case 5: out = held; break;
+            case 0: raw = std::sin (kTwoPi * p); break;
+            case 1: raw = p < 0.25f ? 4.f * p : (p < 0.75f ? 2.f - 4.f * p : 4.f * p - 4.f); break;
+            case 2: raw = 2.f * p - 1.f; break;
+            case 3: raw = 1.f - 2.f * p; break;
+            case 4: raw = p < 0.5f ? 1.f : -1.f; break;
+            case 5: raw = held; break;
             default:
             {
                 const float s = 0.5f - 0.5f * std::cos (kPi * p);  // cosine interpolation
-                out = prevRand + (nextRand - prevRand) * s;
+                raw = prevRand + (nextRand - prevRand) * s;
                 break;
             }
         }
+        if (fresh) { out = raw; fresh = false; }
+        else out += edge * (raw - out);
         return out;
     }
 
@@ -251,8 +258,8 @@ public:
     float phase2() const noexcept { return p + (odd ? 1.f : 0.f); }
 
 private:
-    float fs = 48000.f, p = 0.f, out = 0.f;
-    bool odd = false;
+    float fs = 48000.f, p = 0.f, out = 0.f, edge = 1.f;
+    bool odd = false, fresh = true;
     Rng rng;
     float prevRand = 0.f, nextRand = 0.f, held = 0.f;
 };

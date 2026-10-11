@@ -24,6 +24,11 @@ void Voice::setRates (float baseRate, float osRate)
     penv.setSampleRate (baseRate);
     for (auto& l : lfos)
         l.setSampleRate (baseRate);
+    levelSlew = 0.5f / (0.001f * baseRate);   // 0.5 is a full note's level (see the gain in render)
+    levelCoef = 1.f - std::exp (-1.f / (0.0001f * baseRate));
+    onsetInc = 1.f / (0.001f * baseRate);
+    outFadeRate = 1.f / (0.003f * baseRate);
+    cutFall = 0.5f / (0.001f * baseRate);   // octaves a sample: half an octave a millisecond
     f1.setRate (osRate);
     f2.setRate (osRate);
     f1R.setRate (osRate);
@@ -36,11 +41,15 @@ void Voice::start (int n, float vel, bool acc, bool retrigger, bool stolen, floa
                    uint64_t seed)
 {
     const auto& p = *ctx.p;
+    if (outFadeStep > 0.f && outFade <= 0.f)
+        kill();   // faded out with its envelopes still running: start from silence
     rng.reseed (seed);
     note = n;
     velocity = vel;
     accent = acc;
     gate = true;
+    outFade = 1.f;
+    outFadeStep = 0.f;
     randomVal = rng.bipolar();
     pitchTarget = (float) n;
     gliding = glideFrom >= 0.f;
@@ -56,14 +65,21 @@ void Voice::start (int n, float vel, bool acc, bool retrigger, bool stolen, floa
         for (int i = 0; i < kNumLfos; ++i)
             if (p.on (lfoParam (i, 4)))
                 lfos[(size_t) i].reset (p.get (lfoParam (i, 5)));
+        if (! stolen)
+        {
+            level1 = level2 = 0.f;
+            cutFresh = true;
+            for (auto& l : lfos) l.snap();
+        }
 
         // Resetting phase on a voice that is still sounding would click.
-        const bool quiet = ! stolen || amp.value() < 0.01f;
+        const bool quiet = ! stolen || level2 < kQuiet;
         if (quiet)
         {
             // the unison voices draw their phases from their own generator,
             // so the first voice and everything after it start as before
             Rng phases (seed ^ 0x756E69736F6EULL);
+            onset = 0.f;
             if (p.on (P::OscARetrig)) syncPhase = 0.0;
             resetOscs (0, p.on (P::OscARetrig), phases);
             resetOscs (1, p.on (P::OscBRetrig), phases);
@@ -135,12 +151,21 @@ void Voice::release()
     menv.noteOff();
 }
 
+void Voice::fadeOut() noexcept
+{
+    gate = false;
+    outFadeStep = outFadeRate;
+}
+
 void Voice::kill()
 {
     gate = false;
     amp.kill();
     fenv.kill();
     menv.kill();
+    level1 = level2 = 0.f;
+    outFade = 1.f;
+    outFadeStep = 0.f;
     f1.reset();
     f2.reset();
     f1R.reset();
@@ -227,7 +252,7 @@ void Voice::render (float* outL, float* outR, int chunkOffsetBase, int nBase, co
 
     for (int n = 0; n < nBase; ++n)
     {
-        if (! amp.active())
+        if (! isActive())
             break;
 
         // ---- control rate -------------------------------------------------
@@ -335,13 +360,23 @@ void Voice::render (float* outL, float* outR, int chunkOffsetBase, int nBase, co
             uniB.update (nB, detB, p.get (P::OscBUniRange), p.geti (P::OscBUniMode), p.geti (P::OscBUniStack),
                          p.get (P::OscBBlend), p.get (P::OscBUniWidth), stereo);
 
-        // Filters: cutoff in octaves around the knob value
+        // Filters: cutoff in octaves around the knob value. It opens as fast
+        // as it is told but closes at most cutFall octaves a sample, from no
+        // higher than 20 kHz: a deep envelope that snaps shut in a couple of
+        // milliseconds leaves only a click of brightness.
+        const auto closing = [this] (int slot, float oct, float knobHz) {
+            auto& s = cutOct[(size_t) slot];
+            oct = std::min (oct, std::log2 (20000.f / knobHz));
+            s = cutFresh ? oct : std::max (oct, s - cutFall);
+            return s;
+        };
         const float envAmt1 = p.get (P::F1Env) + M (ModDst::FilterEnvAmt);
         const float keyOct = ((float) note - 60.f) / 12.f;
         const float accentEnv = 1.f + 0.8f * accentAmt;
         if (f1Type != 0)
         {
-            const float oct = envAmt1 * 8.f * fEnv * accentEnv + p.get (P::F1Key) * keyOct + M (ModDst::F1Cutoff) * 8.f;
+            const float oct = closing (0, envAmt1 * 8.f * fEnv * accentEnv + p.get (P::F1Key) * keyOct + M (ModDst::F1Cutoff) * 8.f,
+                                       p.get (P::F1Cutoff));
             const FilterNow f { p.get (P::F1Cutoff) * std::exp2 (oct), clamp01 (p.get (P::F1Reso) + M (ModDst::F1Reso)),
                                 clamp01 (p.get (P::F1Vowel) + M (ModDst::F1Vowel)) };
             const float drive = clamp01 (p.get (P::F1Drive) + M (ModDst::F1Drive));
@@ -351,7 +386,9 @@ void Voice::render (float* outL, float* outR, int chunkOffsetBase, int nBase, co
         }
         if (f2Type != 0)
         {
-            const float oct = (p.get (P::F2Env) + M (ModDst::F2EnvAmt)) * 8.f * fEnv * accentEnv + p.get (P::F2Key) * keyOct + M (ModDst::F2Cutoff) * 8.f;
+            const float oct = closing (1, (p.get (P::F2Env) + M (ModDst::F2EnvAmt)) * 8.f * fEnv * accentEnv + p.get (P::F2Key) * keyOct
+                                              + M (ModDst::F2Cutoff) * 8.f,
+                                       p.get (P::F2Cutoff));
             const FilterNow f { p.get (P::F2Cutoff) * std::exp2 (oct), clamp01 (p.get (P::F2Reso) + M (ModDst::F2Reso)),
                                 clamp01 (p.get (P::F1Vowel) + M (ModDst::F1Vowel)) };
             const float drive = clamp01 (p.get (P::F2Drive) + M (ModDst::F2Drive));
@@ -360,12 +397,20 @@ void Voice::render (float* outL, float* outR, int chunkOffsetBase, int nBase, co
             filtNow[1] = f;
         }
 
+        cutFresh = false;
+
         // the level can follow the energy sweep: up (fade in) or down (fade out)
         const float fade = ctx.sweepFade >= 0.f ? 1.f - ctx.sweepFade * (1.f - sweep) : 1.f + ctx.sweepFade * sweep;
-        const float gain = aEnv * velGain * accentGain * std::clamp (1.f + M (ModDst::Amp), 0.f, 2.f) * fade * 0.5f;
+        if (outFadeStep > 0.f)
+            outFade = std::max (0.f, outFade - outFadeStep);
+        const float gain = aEnv * velGain * accentGain * std::clamp (1.f + M (ModDst::Amp), 0.f, 2.f) * fade * 0.5f * outFade;
+        level1 += std::clamp (gain - level1, -levelSlew, levelSlew);
+        level2 += levelCoef * (level1 - level2);
         const float pan = std::clamp (M (ModDst::Pan), -1.f, 1.f);
-        const float gL = std::cos ((pan + 1.f) * kPi * 0.25f) * 1.41421356f * gain;
-        const float gR = std::sin ((pan + 1.f) * kPi * 0.25f) * 1.41421356f * gain;
+        const float gL = std::cos ((pan + 1.f) * kPi * 0.25f) * 1.41421356f * level2;
+        const float gR = std::sin ((pan + 1.f) * kPi * 0.25f) * 1.41421356f * level2;
+        const float mixGain = 0.5f * onset;
+        onset = std::min (1.f, onset + onsetInc);
 
         // ---- audio rate ---------------------------------------------------
         const int base = (chunkOffsetBase + n) * os;
@@ -435,8 +480,8 @@ void Voice::render (float* outL, float* outR, int chunkOffsetBase, int nBase, co
                 if (noiseDirect) direct = nz;
                 else { x += nz; xR += nz; }
             }
-            x *= 0.5f;
-            xR *= 0.5f;
+            x *= mixGain;
+            xR *= mixGain;
 
             float y, yR;
             if (parallel && f2Type != 0)

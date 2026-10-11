@@ -240,6 +240,20 @@ Voice& Engine::allocateVoice (bool& stolen) noexcept
     return *best;
 }
 
+bool Engine::handOff (size_t i, size_t from) noexcept
+{
+    if (! voices[i].isActive() || voices[i].level() < Voice::kQuiet)
+        return false;
+    for (size_t j = voices.size(); j-- > std::max (from, (size_t) 1);)
+        if (j != i && ! voices[j].isActive())
+        {
+            std::swap (voices[i], voices[j]);
+            voices[j].fadeOut();
+            return true;
+        }
+    return false;
+}
+
 void Engine::keyOn (int note, float velocity) noexcept
 {
     if (arpActive) arp.keyOn (note, velocity);
@@ -374,8 +388,10 @@ void Engine::voiceNoteOn (int note, float velocity) noexcept
     {
         bool stolen = false;
         Voice& v = allocateVoice (stolen);
+        const auto slot = (size_t) (&v - voices.data());
+        handOff (slot, (size_t) std::clamp (cur.geti (P::PolyVoices), 1, kMaxVoices));
         const float glideFrom = hasGlide && glideAlways && lastPitch >= 0.f ? lastPitch : -1.f;
-        v.start (note, velocity, accent, true, stolen || v.isActive(), glideFrom, ctx, seed);
+        v.start (note, velocity, accent, true, v.isActive(), glideFrom, ctx, seed);
         v.age = ++ageCounter;
         leadVoice = (int) (&v - voices.data());
     }
@@ -394,6 +410,7 @@ void Engine::voiceNoteOn (int note, float velocity) noexcept
         else
         {
             const float from = doGlide && v.isActive() ? v.currentPitchSemis() : -1.f;
+            handOff (0, 1);
             v.start (note, velocity, accent, true, v.isActive(), from, ctx, seed);
         }
         v.age = ++ageCounter;
@@ -447,8 +464,9 @@ void Engine::voiceNoteOff (int note) noexcept
             v.changeNote (prev, heldAccent[(size_t) numHeld - 1], hasGlide);
         else
         {
-            v.start (prev, 0.8f, heldAccent[(size_t) numHeld - 1], true, true,
-                     hasGlide ? v.currentPitchSemis() : -1.f, ctx, ++noteSeed * 2654435761u);
+            const float from = hasGlide ? v.currentPitchSemis() : -1.f;
+            handOff (0, 1);
+            v.start (prev, 0.8f, heldAccent[(size_t) numHeld - 1], true, v.isActive(), from, ctx, ++noteSeed * 2654435761u);
         }
         lastPitch = (float) prev;
     }

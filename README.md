@@ -307,6 +307,16 @@ random), the energy Sweep, 4 macros and a 16-slot mod matrix whose targets
 include the effects. The envelope, LFO and Sweep displays run live: a dot per
 sounding voice moves along the curve, the newest with a playhead.
 
+Nothing clicks by accident. A voice's level moves at most a full note's level
+per millisecond, so an instant attack, a retrigger, a 1 ms release or a
+square-LFO gate chop becomes a ramp of about 1 ms; slower envelopes pass as
+they are. A fresh note's oscillators fade in over 1 ms before the filters, so
+a resonant filter doesn't ring on their first step. A retriggered or stolen
+voice that still sounds fades out over 3 ms in a spare slot while the new note
+starts clean. LFO edges are rounded over 0.35 ms, and a filter closes at most
+half an octave per millisecond (it still opens at once). A kick fades out over
+3 ms at the end of its envelope.
+
 Arpeggiator (Arp view): Up, Down, Up/Down, Random and played order
 over 1 to 4 octaves, with rate, gate, swing and hold, playing a 16-step pattern
 with per-step accent, slide and note (up to two octaves up or down from the key

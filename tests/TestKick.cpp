@@ -200,6 +200,24 @@ TEST_CASE ("Retriggering a ringing kick does not click", "[kick]")
     CHECK (atRetrigger <= fromSilence * 1.25f);
 }
 
+TEST_CASE ("A kick's tail fades out instead of stopping on a step", "[kick]")
+{
+    // When the envelope ran out the voice stopped dead, dropping what the
+    // saturator's DC blocker still held (up to -50 dB on generated kicks).
+    const auto x = render (kickPatch(), 1.0, { { 0, 29, 1.f } });
+    size_t tail = 0;   // where the last 20 ms peaked below 0.01
+    for (size_t i = 960; i < x.size() && tail == 0; ++i)
+    {
+        float pk = 0.f;
+        for (size_t j = i - 960; j < i; ++j) pk = std::max (pk, std::abs (x[j]));
+        if (pk < 0.01f) tail = i;
+    }
+    REQUIRE (tail > 0);
+    float step = 0.f;
+    for (size_t i = tail; i < x.size(); ++i) step = std::max (step, std::abs (x[i] - x[i - 1]));
+    CHECK (step < 4e-5f);   // was 1.1e-4 on this kick, a jump to zero
+}
+
 TEST_CASE ("Near-simultaneous notes make one kick", "[kick]")
 {
     const auto p = kickPatch();
