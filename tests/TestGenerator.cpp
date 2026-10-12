@@ -859,3 +859,54 @@ TEST_CASE ("Grids are short hits on a 16th arp that leaves most beats to the kic
     CHECK (highPassed > n * 7 / 10);    // above the bass
     CHECK (varied > n * 6 / 10);        // each hit a little different
 }
+
+TEST_CASE ("Acid comes both ways: the classic wet 303 and the psy kind, cut and driven", "[generator][acid]")
+{
+    Generator g;
+    const int n = 300;
+    int psy = 0, goa = 0;
+    double steps[2] = {}, played[2] = {}, up[2] = {};
+    for (uint32_t seed = 1; seed <= (uint32_t) n; ++seed)
+    {
+        INFO ("seed " << seed);
+        const auto p = g.generate (Category::Acid, seed, ParamState(), LockSet(), true);
+        const int f2 = p.geti (P::F2Type);
+        const bool cut = f2 == (int) FilterType::HP12 || f2 == (int) FilterType::HP18 || f2 == (int) FilterType::HP24;
+        const auto pat = ArpPattern::from (p);
+        for (int i = 0; i < pat.length; ++i)
+            if (pat.has (i, ArpPattern::On))
+            {
+                played[cut] += 1.0;
+                up[cut] += pat.notes[(size_t) i] >= 12 ? 1.0 : 0.0;
+            }
+        steps[cut] += pat.length;
+        CHECK (p.geti (P::ArpDiv) == 12);   // 1/16 either way
+        if (! cut)
+        {
+            // the classic: a squelchy resonant 303 with its lows left in
+            CHECK (f2 == (int) FilterType::Off);
+            CHECK (p.get (P::F1Reso) >= 0.55f);
+            continue;
+        }
+        ++psy;
+        CHECK (p.on (P::DistOn));            // always driven
+        CHECK (p.geti (P::FRouting) == 0);   // the cut before the clipper
+        CHECK (p.get (P::F1Reso) <= 0.8f);
+        CHECK (p.get (P::ArpSwing) <= 0.04f + 1e-4f);   // straight
+        if (p.on (P::DistAuto))
+        {
+            CHECK (p.get (P::DistMix) >= 0.85f);
+            CHECK (p.on (P::CompOn));   // its makeup after the clipper
+            CHECK (p.get (P::CompOut) >= 2.f);
+        }
+        else ++goa;
+    }
+    CHECK (psy > n * 4 / 10);   // a good mix of both
+    CHECK (psy < n * 7 / 10);
+    CHECK (goa > psy / 6);      // and some of the psy ones the softer Goa kind
+    CHECK (goa < psy / 2);
+    // the psy line rolls on and leaps an octave or two off its pedal
+    CHECK (played[1] / steps[1] > played[0] / steps[0] + 0.08);
+    CHECK (up[1] / played[1] > 0.4);
+    CHECK (up[1] / played[1] > 2.0 * up[0] / played[0]);
+}

@@ -288,8 +288,105 @@ namespace
     // Recipes
     // =========================================================================
 
+    // Psy acid, fitted to dry psy trance acid loops (Cr2's Psy Trance Acid
+    // Rave): the lows cut at 300-550 Hz before the distortion, so the
+    // fundamental sits 15-30 dB under the loudest harmonic; the filter driven
+    // and the line clipped or folded after it, so h2-h8 sit nearly level and
+    // the top falls ~2 dB an octave band instead of the 6 of a clean ladder.
+    // Less resonance, a short shallow filter sweep and a slow LFO: the grit
+    // carries the line, not the squelch. The Goa kind keeps more resonance,
+    // a lower cut, a softer drive and a phaser or a dotted delay.
+    void psyAcid (B& b)
+    {
+        const bool goa = b.chance (0.3f);
+        monoVoice (b, true, 15.f, goa ? 70.f : 45.f);
+        b.uni (P::Accent, 0.6f, 1.f);
+        b.pick (P::Octave, { -1, 0 }, { 0.5f, 0.5f });
+        b.set (P::VelSens, 0.25f);
+
+        analogA (b, b.chance (0.55f) ? kSaw : kSquare, 0.85f);
+        // a second oscillator a few cents off beats against the first in the clipper
+        if (b.chance (0.3f))
+        {
+            analogB (b, b.chance (0.5f) ? kSaw : kSquare, 0.3f, 0.6f);
+            b.among (P::OscBCoarse, { 0.f, 0.f, 12.f, -12.f });
+            b.uni (P::OscBFine, 4.f, 14.f);
+        }
+
+        b.pick (P::F1Type, { ft (FilterType::Diode303), ft (FilterType::Ladder24), ft (FilterType::LP24) }, { 0.5f, 0.3f, 0.2f });
+        b.uni (P::F1Cutoff, goa ? 600.f : 1000.f, goa ? 2000.f : 3000.f);
+        b.uni (P::F1Reso, goa ? 0.5f : 0.3f, goa ? 0.8f : 0.6f);
+        b.uni (P::F1Env, goa ? 0.3f : 0.15f, goa ? 0.6f : 0.45f);
+        b.uni (P::F1Drive, goa ? 0.4f : 0.6f, 1.f);
+        b.uni (P::F1Key, 0.3f, 0.6f);
+        filterEnv (b, 0.f, 2.f, 80.f, goa ? 450.f : 300.f, 0.f, 0.15f, 30.f, 100.f);
+        ampEnv (b, 0.5f, 2.f, 300.f, 900.f, 0.7f, 1.f, 20.f, 60.f);
+
+        // the cut before the clipper, mostly fixed in Hz to leave the bass its room
+        b.set (P::FRouting, 0.f);
+        if (goa) b.pick (P::F2Type, { ft (FilterType::HP12), ft (FilterType::HP18) });
+        else b.pick (P::F2Type, { ft (FilterType::HP18), ft (FilterType::HP24) }, { 0.3f, 0.7f });
+        const float cut = b.uni (P::F2Cutoff, goa ? 200.f : 350.f, goa ? 380.f : 600.f);
+        b.uni (P::F2Reso, 0.05f, 0.3f);
+        b.uni (P::F2Key, 0.f, 0.3f);
+
+        if (b.chance (goa ? 0.4f : 0.6f))
+        {
+            b.lfoSync (0, b.chance (0.5f) ? LfoShape::Triangle : LfoShape::Sine, { D4_1, D2_1, D1_1 }, false);
+            b.route (S::Lfo1, D::F1Cutoff, 0.05f, 0.2f);
+        }
+        b.route (S::Macro1, D::F1Cutoff, 0.3f, 0.5f);
+        b.route (S::Macro2, D::F1Reso, 0.25f, 0.35f);
+
+        // The references' top falls ~2 dB an octave band, flatter than a
+        // clipped wave (~5): a fold gets there on its own, a clipper with the
+        // OTT's lifted highs. Auto Level drives every patch the same, so a
+        // quiet filter output still clips and the accents keep their jump.
+        b.on (P::DistOn, true);
+        int dist = (int) DistType::Tube;
+        float drive = 0.f;
+        if (goa)
+        {
+            dist = b.pick (P::DistType, { (int) DistType::Tube, (int) DistType::Hard, (int) DistType::Soft }, { 0.5f, 0.3f, 0.2f });
+            b.uni (P::DistDrive, 12.f, 22.f);
+            b.uni (P::DistMix, 0.6f, 0.9f);
+        }
+        else
+        {
+            dist = b.pick (P::DistType, { (int) DistType::Fold, (int) DistType::Hard, (int) DistType::Tube, (int) DistType::Rectify },
+                           { 0.4f, 0.25f, 0.2f, 0.15f });
+            drive = b.uni (P::DistDrive, dist == (int) DistType::Fold ? 16.f : 18.f, dist == (int) DistType::Fold ? 26.f : 30.f);
+            b.uni (P::DistMix, 0.85f, 1.f);
+            b.on (P::DistAuto, true);
+        }
+        b.uni (P::DistTone, goa ? 6000.f : 10000.f, goa ? 12000.f : 16000.f);
+        b.uni (P::DistLowCut, 0.4f * cut, 0.6f * cut);
+
+        // Auto Level gives the clipper's output back about (drive - 18) dB
+        // under a line already quiet without its lows; the compressor after
+        // it makes that up, so the leveller has room left (it tops out at
+        // +24 dB, and a fold without the OTT needed all of it).
+        if (! goa)
+        {
+            const bool clipped = dist == (int) DistType::Hard || dist == (int) DistType::Tube;
+            const bool ott = b.chance (clipped ? 0.9f : 0.5f);
+            if (ott) fxCompMulti (b);
+            else fxCompGlue (b);
+            const float makeup = drive - (ott ? 12.f : 4.f);
+            b.uni (P::CompOut, std::min (24.f, makeup - 2.f), std::min (24.f, makeup + 2.f));
+        }
+        fxWidth (b, 0.7f, 0.2f, 0.5f);
+        fxPhaser (b, goa ? 0.4f : 0.1f);
+        fxDelay (b, goa ? 0.7f : 0.4f, { D1_8D, D1_16D, D1_8 }, 0.15f, 0.35f, 0.06f, 0.16f);
+        fxReverb (b, 0.15f, 0.6f, 1.5f, 0.04f, 0.1f);
+        b.macros ({ D::F2Cutoff, D::DistDrive, D::FilterEnvAmt, D::DelayMix, D::PhaserMix });
+    }
+
     void acid (B& b)
     {
+        // the two acids: the psy one, dirty and cut, and the classic wet 303
+        if (b.chance (0.55f)) { psyAcid (b); return; }
+
         monoVoice (b, true, 40.f, 95.f);
         b.uni (P::Accent, 0.5f, 0.95f);
         b.pick (P::Octave, { -1, 0 }, { 0.35f, 0.65f });

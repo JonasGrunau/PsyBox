@@ -51,7 +51,7 @@ inline const std::array<CategoryInfo, kNumCategories>& categoryInfo() noexcept
     // around blue, so no accent shouts louder than another.
     using enum CategoryGroup;
     static const std::array<CategoryInfo, kNumCategories> info { {
-        { "Acid",         "Acid",    Main,       0xFE5654, "303 lines: diode ladder, accent, slide" },
+        { "Acid",         "Acid",    Main,       0xFE5654, "303 lines: wet and squelchy, or cut and driven psy" },
         { "Squelch",      "Squelch", Fx,         0x65DD5C, "Wet, vocal mid-bass with fast filter motion" },
         { "Zap",          "Zap",     Fx,         0x19D68C, "Short pitch dives for percussive hits" },
         { "Laser",        "Laser",   Fx,         0xC4DB0C, "Sync sweeps and long pitch falls" },

@@ -23,6 +23,27 @@ every group, to magenta at the last kick.
 - **Background**: Atmos · Drone · Gate
 - **Bass** and **Kick**: below
 
+### Acid
+
+Two kinds, about half each. The classic 303: a saw or square through the diode
+ladder at high resonance, a long filter envelope, accents and slides, a light
+drive, delay and reverb. The wet, squelchy acid of acid house.
+
+The psy kind was fitted to dry psy trance acid loops by rendering generated
+lines the same way and comparing their spectra, harmonics and dynamics. The
+lows are cut at 300-600 Hz before the distortion, so the fundamental sits
+15-30 dB under the loudest harmonic and the line leaves the bass its room. The
+filter is driven and the line folded or clipped after it (Auto Level, so a
+quiet filter still clips and the accents keep their jump), with an OTT or glue
+compressor making up the level. Harmonics 2-8 sit nearly level and the top
+falls about 2 dB an octave where a clean ladder falls 6. Less resonance and a
+shorter, shallower filter sweep, with a slow LFO on the cutoff: the grit
+carries the line, not the squelch. A third of them are the Goa kind: a lower
+cut, more resonance, a tube or soft drive, a phaser and a dotted delay. With
+**Arp** ticked the psy line plays straight and rolls on (a rest or two a bar,
+few slides), a pedal on the key leaping an octave or two up to the octave,
+b2, third, fifth or seventh.
+
 ### Ghost Stab
 
 Ghost Rider's offbeat stab, fitted to 28 of his tracks (2014-2025): each one
@@ -211,7 +232,8 @@ body holds flat to about 160 ms and is down 30 dB by about 220 ms.
 - **Lock** a knob (right-click it, or alt-click) and Generate and Mutate leave
   it alone.
 - Tick **Arp** next to Generate and every new Main, FX or Background sound
-  comes with an arp in the style of its category: tied 303 slides for acid,
+  comes with an arp in the style of its category: tied 303 slides for acid
+  (rolling octave leaps for psy acid),
   random blips for bubbles, offbeat 16ths for grids, each with a freshly generated step pattern and a
   line on its note lane, so holding one key already plays a riff. Riffs are
   built from each category's figures in bar forms (AAAB, ABAB, ABAC...),
@@ -354,7 +376,8 @@ pattern in the category's style every time: a rhythm from the category's
 figures (303 motifs, rolling, offbeat, 3-3-2, Euclidean loops, fills into the
 next bar) and a line in a psy scale (Phrygian, minor, harmonic minor, Phrygian
 dominant, Dorian) that repeats and answers itself. Acid sits on the key and
-jumps an octave on its accents, leads play broken chords through a
+jumps an octave on its accents (psy acid rolls on, a pedal on the key leaping
+an octave or two up), leads play broken chords through a
 progression, lasers fall down a chord, pads and gates play slow broken chords
 on a moving progression, drones walk it and climb inside each chord, stabs
 lead with their top note. Every pattern plays at least three notes (nearly

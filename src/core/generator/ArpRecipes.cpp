@@ -37,10 +37,27 @@ namespace
 
     // ---- lines -----------------------------------------------------------------
 
-    // 303 line: long gates tie into slides on the legato voice.
+    // Psy acid (the Acid recipe's dirty kind) cuts its lows on filter 2
+    // before the distortion; its line rolls straight and leaps by octaves.
+    bool psyAcid (const ParamState& s)
+    {
+        const int t = s.geti (P::F2Type);
+        return s.on (P::DistOn) && (t == (int) FilterType::HP12 || t == (int) FilterType::HP18 || t == (int) FilterType::HP24);
+    }
+
+    // 303 line: long gates tie into slides on the legato voice. The psy
+    // kind runs straight, its octave leaps written on the note lane.
     void acid (B& b)
     {
         b.pick (P::ArpDiv, { D1_16 });
+        if (psyAcid (b.state()))
+        {
+            b.pick (P::ArpMode, { Order });
+            b.pick (P::ArpOctaves, { 1 });
+            gate (b, 0.7f, 1.1f);
+            swing (b, 0.04f);
+            return;
+        }
         b.pick (P::ArpMode, { Random, UpDown, Order }, { 0.45f, 0.3f, 0.25f });
         b.pick (P::ArpOctaves, { 1, 2 }, { 0.75f, 0.25f });
         gate (b, 0.5f, 1.3f);
@@ -688,13 +705,59 @@ namespace
 
     // ---- lines -----------------------------------------------------------------
 
+    // Psy acid, as in the psy trance acid loops: the line rolls on (a rest
+    // or two a bar), straight and seldom sliding, and leaps from a pedal on
+    // the key to notes an octave or two up, the octave itself most, then
+    // the b2, third, fifth and seventh above it (A#1 up to C#4, D2 up to
+    // A4). Accents on the offbeats, rolling 3 against 4, or on every beat;
+    // an accent on the pedal may jump it an octave.
+    void psyAcidPattern (B& b)
+    {
+        const char* motifs[] = { "xxxxxxxx", "xxx-xxxx", "xxxxx-xx", "xx-xxxxx", "xxxx-xxx", "x-xxxxxx",
+                                 "xxxxxxx-", "xx-xx-xx", "xxx-xx-x", "x-xx-xxx", "xxxxxx-x" };
+        const float w[] = { 1.5f, 1.f, 1.f, 1.f, 1.f, 1.f, 0.8f, 1.f, 0.8f, 0.8f, 0.8f };
+        const std::string a = choose (b, motifs, w);
+        const int shape = b.weighted ({ 0.35f, 0.2f, 0.25f, 0.2f });
+        const std::string second = shape == 0 ? vary (b, a)
+                                 : shape == 1 ? otherThan (b, motifs, w, a)
+                                 : shape == 2 ? a : fill (b, a);
+        auto p = ArpPattern::parse (a + second);
+
+        const int rule = b.weighted ({ 0.4f, 0.4f, 0.2f });
+        if (rule == 0) accent (p, Accents::Offbeats);
+        else if (rule == 1) accent (p, Accents::EveryThird, integer (b, 0, 2));
+        else accent (p, Accents::FigureStart, 0, 4);
+        bool any = false;
+        for (int i = 0; i < p.length; ++i) any = any || p.has (i, Accent);
+        if (! any) p.setFlag (0, Accent, true);
+
+        if (b.chance (0.5f)) slideIntoAccents (p, 1);
+        slideOnWeakSteps (b, p, 2, 0.15f);
+
+        const Motion m { 0.4f, 0.05f, { { 0, 4.f }, { 7, 3.f }, { 14, 1.2f }, { 8, 1.f }, { 9, 1.f }, { 11, 1.f }, { 13, 0.6f },
+                                        { 4, 0.6f }, { 1, 0.5f } }, 0, 14 };
+        const Scale s = scale (b);
+        auto d = line (b, p, 8, m);
+        const int shifts[] = { 1, -1, -2, 3 };
+        answer (b, p, d, 8, m, answerOf (b, 0.3f, 0.4f, 0.3f), choose (b, shifts, { 0.35f, 0.25f, 0.2f, 0.2f }));
+        enliven (b, p, d, 3, m);
+        if (b.chance (0.6f)) liftAccents (p, d);
+        // a leap shifted past the lane's two octaves comes down one
+        for (auto& x : d)
+            while (semitones (s, x) > kArpNoteRange) x -= 7;
+        setNotes (p, s, d);
+        write (b, p);
+    }
+
     // 303 line: an 8-step motif and its answer (A A', A B, A A, or a fill
     // into the next bar), accents on a rule (3 against 4, offbeats, motif
     // starts), slides into accents and on the weak 16ths. Now and then a
     // 3-beat loop against the 4/4 bar. The line sits on the key and leaves
     // it for the b2, third, fifth and seventh; accents may jump an octave.
+    // The psy kind plays its own line.
     void acidPattern (B& b)
     {
+        if (psyAcid (b.state())) { psyAcidPattern (b); return; }
         const char* motifs[] = { "x-xxx-x-", "xx-x-xx-", "x-x-xxx-", "xxx-x-x-", "x-xx-xx-", "xx-xx-x-", "x-xxx-xx",
                                  "xx-xxx-x", "xxx-xx-x", "x-xxxx-x", "xx-x-xxx", "x--xx-xx", "xx-xx-xx", "x-xx-xxx" };
         const float w[] = { 1.f, 1.f, 1.f, 1.f, 1.f, 1.f, 1.f, 1.f, 1.f, 1.f, 1.f, 1.f, 1.f, 1.f };
