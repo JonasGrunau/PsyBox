@@ -136,7 +136,8 @@ is:
 
 Jilax uses the Length panel (one beat by default, Cut at End) with **One Shot**
 on: a tap plays the whole shot, like a sample. It has no arp. Drag the output
-window to bounce a shot as a WAV.
+window to bounce a shot as a WAV (each bounce is a new file in
+~/Music/PsyBox/Bounces, so a clip already in your DAW never changes).
 
 ### Energy
 
@@ -248,9 +249,9 @@ body holds flat to about 160 ms and is down 30 dB by about 220 ms.
   The amount slider sets how far.
 - **Every patch plays about as loud.** After Generate, Mutate or a new arp
   pattern, the patch is played offline the ways it is usually played (a held
-  key and 16ths from C2 to C5, the arp, a riser over its length, kicks four to
-  the floor) and its loudest moment is measured (K-weighted, 400 ms, like
-  LUFS). **Level** (top bar, next to Vol) is set so that moment lands on
+  key and 16ths from C2 to C5, basses E1 to E3, 303s C1 to C3, the arp, a
+  riser over its length, kicks four to the floor) and its loudest moment is
+  measured (K-weighted, 400 ms, like LUFS). **Level** (top bar, next to Vol) is set so that moment lands on
   -16 LUFS, so a new patch never jumps out louder than the last. Volume stays
   yours; lock Level to keep your own.
 - **Lock** a knob (right-click it, or alt-click) and Generate and Mutate leave
@@ -275,7 +276,11 @@ body holds flat to about 160 ms and is down 30 dB by about 220 ms.
   Acid sound is exactly as you left it. The first visit to a category generates
   a fresh sound.
 - **Undo** and **Redo** in the top bar step through your Generate and Mutate
-  history.
+  history, keeping the tweaks you made in between. Volume and both qualities
+  are yours: Generate, Init, undo, presets and category switches leave them.
+- Switching a patch while notes play (Generate, Mutate, undo, a preset, a
+  host preset or A/B compare) fades the old sound out and brings back what
+  sounded, sustain pedal included.
 - **Macros**: every Generate gives all four macros a job (cutoff, resonance,
   reverb, drive...) and names them after it: "Cutoff", "Env Amount", "Filter +
   Space". The names follow the matrix, so dragging a macro onto another knob
