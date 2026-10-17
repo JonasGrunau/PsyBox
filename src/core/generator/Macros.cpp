@@ -17,6 +17,13 @@ namespace
 
     bool filterOn (const ParamState& s, P type) noexcept { return s.geti (type) != (int) FilterType::Off; }
 
+    // The 6 dB filters have no resonance, so a Reso macro on them is dead.
+    bool resoActive (const ParamState& s, P type) noexcept
+    {
+        const int t = s.geti (type);
+        return t != (int) FilterType::Off && t != (int) FilterType::LP6 && t != (int) FilterType::HP6;
+    }
+
     bool lfoRouted (const ParamState& s, int lfo) noexcept
     {
         for (int i = 0; i < kNumModSlots; ++i)
@@ -34,10 +41,12 @@ namespace
         };
         switch (d)
         {
-            case D::F1Cutoff: case D::F1Reso: case D::F1Drive: return filterOn (s, P::F1Type);
+            case D::F1Cutoff: case D::F1Drive: return filterOn (s, P::F1Type);
+            case D::F1Reso:       return resoActive (s, P::F1Type);
             case D::F1Vowel:      return s.geti (P::F1Type) == (int) FilterType::Formant;
             case D::FilterEnvAmt: return filterOn (s, P::F1Type) && std::abs (s.get (P::F1Env)) > 0.05f;
-            case D::F2Cutoff: case D::F2Reso: case D::F2Drive: return filterOn (s, P::F2Type);
+            case D::F2Cutoff: case D::F2Drive: return filterOn (s, P::F2Type);
+            case D::F2Reso:       return resoActive (s, P::F2Type);
             case D::F2EnvAmt:     return filterOn (s, P::F2Type) && std::abs (s.get (P::F2Env)) > 0.05f;
             case D::PitchEnvAmt:  return std::abs (s.get (P::PenvAmt)) > 1.f;
             case D::ShapeA:       return osc (false, OscType::Analog);
@@ -294,7 +303,7 @@ void RecipeBuilder::macros (std::initializer_list<ModDst> targets)
             case Kind::Pitch: case Kind::Amp: case Kind::None: break;
         }
         const P knob = (P) ((int) P::Macro1 + m);
-        const float v = uni (knob, range.first, range.second);
+        float v = uni (knob, range.first, range.second);
         // synths may come out a little brighter; a bass keeps its exact
         // brightness (the number is drawn either way, so seeds stay put)
         const float drawn = rng.range (0.6f, 1.f);
@@ -315,7 +324,21 @@ void RecipeBuilder::macros (std::initializer_list<ModDst> targets)
             const float shift = knobP == P::PhosCutoff ? s.get (modAmtParam (i)) * v * share
                                                        : octaves / std::log2 (d.max / d.min);   // in the knob's (log) range
             auto& r = ranges.e[(size_t) knobP];
-            s.set (knobP, d.toPlain (std::max (0.f, d.toNorm (s.get (knobP)) - shift)));
+            const float knobNorm = d.toNorm (s.get (knobP));
+            if (shift > knobNorm && ! locked (knob))
+            {
+                // The knob can't go down far enough (a dark recipe cutoff): park it at
+                // 0 and start the macro lower instead, so knob + macro still lands
+                // where the recipe drew. Mutate keeps the cutoff's drawn width.
+                v *= knobNorm / shift;
+                s.set (knob, v);
+                auto& mr = ranges.e[(size_t) knob];
+                mr.lo = std::min (mr.lo, def (knob).toNorm (v));
+                s.set (knobP, d.toPlain (0.f));
+                if (r.touched) { r.hi = std::max (0.f, r.hi - r.lo); r.lo = 0.f; }
+                continue;
+            }
+            s.set (knobP, d.toPlain (std::max (0.f, knobNorm - shift)));
             if (r.touched) { r.lo = std::max (0.f, r.lo - shift); r.hi = std::max (0.f, r.hi - shift); }
         }
     }

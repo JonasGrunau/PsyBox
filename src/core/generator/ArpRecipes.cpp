@@ -11,6 +11,7 @@
 // offbeat "and".
 
 #include "Generator.h"
+#include "RecipeCommon.h"
 
 #include <algorithm>
 #include <array>
@@ -21,13 +22,11 @@
 namespace psy
 {
 
+using namespace recipe;
+
 namespace
 {
     using B = RecipeBuilder;
-
-    // syncDiv indices
-    enum Div { D4_1, D2_1, D1_1, D1_2, D1_2D, D1_2T, D1_4, D1_4D, D1_4T, D1_8, D1_8D, D1_8T,
-               D1_16, D1_16D, D1_16T, D1_32, D1_32T, D1_64 };
 
     constexpr int Up = (int) ArpMode::Up, Down = (int) ArpMode::Down, UpDown = (int) ArpMode::UpDown,
                   Random = (int) ArpMode::Random, Order = (int) ArpMode::Order;
@@ -1407,7 +1406,6 @@ namespace
         Degrees d {};
         brokenChords (p, d, roots, chordShape (b), p.length / 4, b.chance (0.65f));
         enliven (b, p, d, std::max (4, lively (b)), Motion { 0.f, 0.4f, { { 0, 2.f }, { 2, 2.f }, { 4, 2.f }, { 7, 1.5f }, { -1, 1.f } }, -3, 9 });
-        landSlides (p);
         setNotes (p, scale (b), d);
         write (b, p);
     }

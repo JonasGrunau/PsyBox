@@ -22,9 +22,12 @@
 // over the first 60 ms of a note. Mono.
 
 #include "Generator.h"
+#include "RecipeCommon.h"
 
 namespace psy
 {
+
+using namespace recipe;
 
 namespace
 {
@@ -32,13 +35,9 @@ namespace
     using S = ModSrc;
     using D = ModDst;
 
-    constexpr float kSaw = 2.f;
 
     // syncDiv indices
-    enum Div { D4_1, D2_1, D1_1, D1_2, D1_2D, D1_2T, D1_4, D1_4D, D1_4T, D1_8, D1_8D, D1_8T,
-               D1_16, D1_16D, D1_16T, D1_32, D1_32T, D1_64 };
 
-    int ft (FilterType t) { return (int) t; }
 
     void osc (B& b, bool isB, float shape)
     {
@@ -56,30 +55,6 @@ namespace
         b.uni (isB ? P::OscBUniWidth : P::OscAUniWidth, 0.85f, 1.f);
         b.pick (isB ? P::OscBUniMode : P::OscAUniMode, { (int) UniMode::Linear, (int) UniMode::Super }, { 0.5f, 0.5f });
         b.set (isB ? P::OscBRetrig : P::OscARetrig, 0.f);
-    }
-
-    void fxReverb (B& b, float p, float decLo, float decHi, float mixLo, float mixHi)
-    {
-        if (! b.chance (p)) return;
-        b.on (P::ReverbOn, true);
-        b.uni (P::ReverbDecay, decLo, decHi);
-        b.uni (P::ReverbMix, mixLo, mixHi);
-        b.uni (P::ReverbSize, 0.5f, 0.9f);
-        b.uni (P::ReverbDamp, 0.2f, 0.5f);
-        b.uni (P::ReverbPre, 10.f, 40.f);
-    }
-
-    void fxDelay (B& b, float p, std::initializer_list<int> divs, float fbLo, float fbHi, float mixLo, float mixHi)
-    {
-        if (! b.chance (p)) return;
-        b.on (P::DelayOn, true);
-        b.set (P::DelaySync, 1.f);
-        b.pick (P::DelayDiv, divs);
-        b.uni (P::DelayFb, fbLo, fbHi);
-        b.uni (P::DelayMix, mixLo, mixHi);
-        b.on (P::DelayPing, b.chance (0.7f));
-        b.uni (P::DelayLowCut, 250.f, 600.f);
-        b.uni (P::DelayHighCut, 4000.f, 9000.f);
     }
 } // namespace
 
@@ -135,8 +110,8 @@ void ghostStabRecipe (RecipeBuilder& b)
 
     b.route (S::Macro1, D::F1Cutoff, 0.2f, 0.4f);
 
-    fxReverb (b, 0.9f, 1.2f, 3.f, 0.15f, 0.3f);
-    fxDelay (b, 0.7f, { D1_8D, D1_4, D1_8 }, 0.2f, 0.4f, 0.12f, 0.25f);
+    fxReverb (b, 0.9f, 1.2f, 3.f, 0.15f, 0.3f, 0.5f, 0.9f, 0.2f, 0.5f, 10.f, 40.f);
+    fxDelay (b, 0.7f, { D1_8D, D1_4, D1_8 }, 0.2f, 0.4f, 0.12f, 0.25f, 250.f, 600.f, 4000.f, 9000.f);
     if (b.chance (0.3f))
     {
         b.on (P::ChorusOn, true);
@@ -202,16 +177,7 @@ void ghostBassRecipe (RecipeBuilder& b)
     b.route (S::Macro1, D::F1Cutoff, 0.2f, 0.35f);
     b.route (S::Macro2, D::FilterEnvAmt, 0.2f, 0.3f);
 
-    // the basses' glue: a few dB off the body, made up level with the kicks
-    b.on (P::CompOn, true);
-    b.set (P::CompMode, (float) CompMode::Normal);
-    b.uni (P::CompThresh, -24.f, -20.f);
-    b.uni (P::CompRatio, 3.f, 5.f);
-    b.uni (P::CompKnee, 6.f, 10.f);
-    b.uni (P::CompAttack, 3.f, 8.f);
-    b.uni (P::CompRelease, 50.f, 90.f);
-    b.set (P::CompMix, 1.f);
-    b.uni (P::CompOut, 10.f, 13.f);
+    fxCompBass (b);   // the basses' glue
     b.macros ({ D::F1Reso, D::F1Drive });
 }
 

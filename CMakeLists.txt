@@ -53,6 +53,21 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
     target_compile_options(psybox_core PRIVATE -Wall -Wextra -Wno-unused-parameter)
 endif()
 set_target_properties(psybox_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
+# Generated patches are a pure function of the seed on every platform: arm64
+# clang fuses a + b * c into an FMA, MSVC on x64 does not, so the last bit of a
+# drawn value would differ. Keep the generator's arithmetic unfused.
+if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+    set_source_files_properties(
+        src/core/generator/Generator.cpp
+        src/core/generator/Recipes.cpp
+        src/core/generator/Macros.cpp
+        src/core/generator/ArpRecipes.cpp
+        src/core/generator/KickRecipes.cpp
+        src/core/generator/JilaxRecipes.cpp
+        src/core/generator/GhostRecipes.cpp
+        src/core/generator/PhosRecipes.cpp
+        PROPERTIES COMPILE_OPTIONS -ffp-contract=off)
+endif()
 
 # ---------------------------------------------------------------------------
 # Plugin

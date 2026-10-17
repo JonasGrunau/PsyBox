@@ -37,7 +37,7 @@ float RecipeBuilder::uni (P p, float lo, float hi)
     const float plain = d.toPlain (n);
     if (! locked (p))
         s.set (p, plain);
-    return locked (p) ? s.get (p) : s.get (p);
+    return s.get (p);
 }
 
 int RecipeBuilder::weighted (std::initializer_list<float> weights)
@@ -67,9 +67,16 @@ int RecipeBuilder::pick (P p, std::initializer_list<int> options, std::initializ
     auto& r = ranges.e[(size_t) p];
     r.touched = true;
     r.numOptions = 0;
+    const bool hasWeights = weights.size() == options.size();
+    int i = 0;
     for (int o : options)
-        if (r.numOptions < (int) r.options.size())
+    {
+        // an option the recipe gave no weight stays out of Mutate's reach too
+        const bool excluded = hasWeights && *(weights.begin() + i) <= 0.f;
+        ++i;
+        if (! excluded && r.numOptions < (int) r.options.size())
             r.options[(size_t) r.numOptions++] = (int8_t) o;
+    }
     if (! locked (p))
         s.set (p, (float) value);
     return locked (p) ? s.geti (p) : value;
@@ -153,6 +160,7 @@ ParamState Generator::generate (Category c, uint32_t seed, const ParamState& cur
     dsp::Rng arpRng (((uint64_t) seed << 8) ^ (uint64_t) ((int) c + 1) * 0xC2B2AE3D27D4EB4FULL ^ 0x41525050ULL);
     RecipeBuilder arp (out, locks, arpRng, ranges);
     arp.setCategory (c);
+    arp.continueSlotsFrom (b);
     withArp = withArp && hasArp (c);   // basses, kicks and energy sounds have none
     arp.on (P::ArpOn, withArp);
     if (withArp)
@@ -191,16 +199,20 @@ ParamState Generator::mutate (float amount, uint32_t seed, const ParamState& cur
         const auto& d = defs[(size_t) i];
         const float g = rng.gaussian();   // consume unconditionally for stability
         const float u = rng.uniform();
+        const uint32_t pickRaw = rng.next();   // for choices; drawn for every param so locks don't shift the rest
         if (locks.test ((size_t) i) || ! r.touched)
             continue;
         if (i == (int) P::Quality || i == (int) P::RenderQuality || i == (int) P::MasterVol || i == (int) P::EngineMode
             || i == (int) P::EnergyMode || i == (int) P::ArpKey || i == (int) P::ArpScale)
             continue;
 
-        if (d.mapping == Mapping::Choice || d.mapping == Mapping::Toggle || d.unit == Unit::Int)
+        // Choices and picked integers hop between the recipe's options; an
+        // integer drawn from a range (voices, unison counts) moves like a
+        // continuous param and is rounded by snap.
+        if (d.mapping == Mapping::Choice || d.mapping == Mapping::Toggle || (d.unit == Unit::Int && r.numOptions > 0))
         {
             if (r.numOptions > 1 && u < amount * 0.35f)
-                out.v[(size_t) i] = (float) r.options[(size_t) (rng.next() % (uint32_t) r.numOptions)];
+                out.v[(size_t) i] = (float) r.options[(size_t) (pickRaw % (uint32_t) r.numOptions)];
             continue;
         }
 

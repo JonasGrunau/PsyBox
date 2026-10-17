@@ -6,23 +6,18 @@
 // Every value set here remains a normal, editable parameter afterwards.
 
 #include "Generator.h"
+#include "RecipeCommon.h"
 
 namespace psy
 {
+
+using namespace recipe;
 
 namespace
 {
     using B = RecipeBuilder;
     using S = ModSrc;
     using D = ModDst;
-
-    constexpr float kSaw = 2.f, kSquare = 3.f, kTri = 1.f, kSine = 0.f;
-
-    // syncDiv indices
-    enum Div { D4_1, D2_1, D1_1, D1_2, D1_2D, D1_2T, D1_4, D1_4D, D1_4T, D1_8, D1_8D, D1_8T,
-               D1_16, D1_16D, D1_16T, D1_32, D1_32T, D1_64 };
-
-    int ft (FilterType t) { return (int) t; }
 
     // ---- shared building blocks -------------------------------------------
 
@@ -153,30 +148,6 @@ namespace
 
     // ---- effects --------------------------------------------------------------
 
-    void fxDelay (B& b, float p, std::initializer_list<int> divs, float fbLo, float fbHi, float mixLo, float mixHi)
-    {
-        if (! b.chance (p)) return;
-        b.on (P::DelayOn, true);
-        b.set (P::DelaySync, 1.f);
-        b.pick (P::DelayDiv, divs);
-        b.uni (P::DelayFb, fbLo, fbHi);
-        b.uni (P::DelayMix, mixLo, mixHi);
-        b.on (P::DelayPing, b.chance (0.7f));
-        b.uni (P::DelayLowCut, 150.f, 500.f);
-        b.uni (P::DelayHighCut, 3500.f, 9000.f);
-    }
-
-    void fxReverb (B& b, float p, float decLo, float decHi, float mixLo, float mixHi)
-    {
-        if (! b.chance (p)) return;
-        b.on (P::ReverbOn, true);
-        b.uni (P::ReverbDecay, decLo, decHi);
-        b.uni (P::ReverbMix, mixLo, mixHi);
-        b.uni (P::ReverbSize, 0.4f, 0.95f);
-        b.uni (P::ReverbDamp, 0.2f, 0.7f);
-        b.uni (P::ReverbPre, 5.f, 60.f);
-    }
-
     void fxDist (B& b, float p, std::initializer_list<int> types, float dLo, float dHi, float mixLo, float mixHi)
     {
         if (! b.chance (p)) return;
@@ -269,21 +240,6 @@ namespace
         b.uni (P::CompOut, 4.f, 8.f);
     }
 
-    // The basses' glue: soft knee, gentle ratio, a few dB of gain reduction
-    // on the body and the make-up that puts them level with the kicks.
-    void fxCompBass (B& b)
-    {
-        b.on (P::CompOn, true);
-        b.set (P::CompMode, (float) CompMode::Normal);
-        b.uni (P::CompThresh, -24.f, -20.f);
-        b.uni (P::CompRatio, 3.f, 5.f);
-        b.uni (P::CompKnee, 6.f, 10.f);
-        b.uni (P::CompAttack, 3.f, 8.f);
-        b.uni (P::CompRelease, 50.f, 90.f);
-        b.set (P::CompMix, 1.f);
-        b.uni (P::CompOut, 10.f, 13.f);
-    }
-
     // =========================================================================
     // Recipes
     // =========================================================================
@@ -373,6 +329,8 @@ namespace
             if (ott) fxCompMulti (b);
             else fxCompGlue (b);
             const float makeup = drive - (ott ? 12.f : 4.f);
+            // fxCompGlue drew CompOut already (4-8 dB); this second draw overrides
+            // it, and stays so the seeds keep their values
             b.uni (P::CompOut, std::min (24.f, makeup - 2.f), std::min (24.f, makeup + 2.f));
         }
         fxWidth (b, 0.7f, 0.2f, 0.5f);
@@ -395,8 +353,7 @@ namespace
         analogA (b, b.chance (0.65f) ? kSaw : kSquare, 0.85f);
         if (b.chance (0.2f)) b.uni (P::SubLevel, 0.1f, 0.3f);
 
-        const int type = b.pick (P::F1Type, { ft (FilterType::Diode303), ft (FilterType::Ladder24) }, { 0.8f, 0.2f });
-        (void) type;
+        b.pick (P::F1Type, { ft (FilterType::Diode303), ft (FilterType::Ladder24) }, { 0.8f, 0.2f });
         b.uni (P::F1Cutoff, 180.f, 900.f);
         b.uni (P::F1Reso, 0.55f, 0.92f);
         b.uni (P::F1Env, 0.35f, 0.8f);
@@ -687,7 +644,13 @@ namespace
                 break;
             case 2:   // a small chord stab: root, fifth and octave, or a third on osc B
                 analogA (b, kSaw);
-                if (b.chance (0.5f)) b.set (P::OscAUniStack, (float) UniStack::OctFifth);
+                if (b.chance (0.5f))
+                {
+                    // the stack puts the fifth on the second outer pair: root, octave
+                    // and fifth need 5 voices (unisonRecipe leaves the count alone)
+                    b.set (P::OscAUniStack, (float) UniStack::OctFifth);
+                    b.set (P::OscAUnison, 5.f);
+                }
                 analogB (b, kSaw, 0.4f, 0.7f);
                 b.among (P::OscBCoarse, { 3.f, 7.f, 10.f, 12.f });
                 b.uni (P::OscBFine, -10.f, 10.f);
@@ -702,7 +665,8 @@ namespace
 
         // the snap: a filter envelope over in 30-160 ms (an FM blip is shaped
         // by its index, so its filter mostly stays open)
-        if (kind == 0 && b.chance (0.6f))
+        const bool openBlip = kind == 0 && b.chance (0.6f);
+        if (openBlip)
             filter1 (b, ft (FilterType::LP12), 6000.f, 16000.f, 0.f, 0.2f, 0.f, 0.f);
         else
             filter1 (b, b.chance (0.6f) ? ft (FilterType::LP12) : ft (FilterType::Ladder24), 350.f, 2200.f, 0.1f, 0.55f, 0.4f, 0.85f);
@@ -735,7 +699,8 @@ namespace
             b.route (S::Lfo1, target, 0.1f, 0.25f);
         }
         b.route (S::Velocity, D::F1Cutoff, 0.1f, 0.25f);
-        b.route (S::Macro1, D::FilterEnvAmt, 0.2f, 0.4f);
+        // the open blip's filter envelope is 0, so its macro opens the FM index instead
+        b.route (S::Macro1, openBlip ? D::FmA : D::FilterEnvAmt, 0.2f, 0.4f);
 
         fxDelay (b, 0.75f, { D1_8D, D1_16D, D1_8, D1_16 }, 0.2f, 0.45f, 0.1f, 0.25f);
         fxReverb (b, 0.4f, 0.6f, 1.8f, 0.05f, 0.15f);
@@ -1068,10 +1033,9 @@ namespace
         energyLength (b, { B2, B4, B8 }, { 0.3f, 0.45f, 0.25f }, 2.f, 10.f);
         b.uni (P::EnergyCurve, -0.2f, 0.6f);
         b.uni (P::EnergyFade, 0.3f, 0.8f);
-        const int f = b.pick (P::F1Type, { ft (FilterType::BP12), ft (FilterType::BP24), ft (FilterType::Notch), ft (FilterType::LadderBP),
+        b.pick (P::F1Type, { ft (FilterType::BP12), ft (FilterType::BP24), ft (FilterType::Notch), ft (FilterType::LadderBP),
                                            ft (FilterType::CombPos), ft (FilterType::Formant) },
                               { 0.25f, 0.15f, 0.15f, 0.15f, 0.15f, 0.15f });
-        (void) f;
         b.uni (P::F1Cutoff, 300.f, 4000.f);
         b.uni (P::F1Reso, 0.3f, 0.9f);
         b.uni (P::F1Vowel, 0.f, 1.f);
@@ -1104,7 +1068,8 @@ namespace
     void atmos (B& b)
     {
         polyVoice (b, 8, 12);
-        if (b.chance (0.5f)) supersawA (b, 0.3f, 0.7f);
+        const bool supersaw = b.chance (0.5f);
+        if (supersaw) supersawA (b, 0.3f, 0.7f);
         else wavetableA (b, { 2, 0, 6 }, 0.1f, 0.8f);
         if (b.chance (0.7f))
         {
@@ -1122,7 +1087,9 @@ namespace
         ampEnv (b, 400.f, 2500.f, 1000.f, 1000.f, 0.7f, 1.f, 1500.f, 5000.f);
         b.lfo (1, LfoShape::Sine, 0.05f, 0.3f, false);
         b.route (S::Lfo2, D::F1Cutoff, 0.1f, 0.2f);
-        b.route (S::Lfo2, D::WtPosA, 0.1f, 0.25f);
+        // only a wavetable has a position to scan; the amount is drawn either way
+        if (supersaw) b.rnd (0.1f, 0.25f);
+        else b.route (S::Lfo2, D::WtPosA, 0.1f, 0.25f);
         b.route (S::Macro1, D::F1Cutoff, 0.2f, 0.4f);
 
         fxReverb (b, 1.f, 5.f, 15.f, 0.35f, 0.6f);
@@ -1592,9 +1559,9 @@ namespace
     // (Bass Shots 2/018 E, 025 G#, 026 G#: one beat at 140 BPM) by rendering
     // and comparing level, pitch and harmonics. It swells from silence (about
     // -40 dB after 30 ms, -12 dB at 180 ms) to full at 55-60 % of the beat,
-    // holds its pitch, then slides from just past the middle to the end: a
-    // fifth or an octave down from an octave up, or a fourth or fifth up from
-    // the note, easing in. A fall is a warm sine (a quieter sine an octave up
+    // holds its pitch, then slides from just past the middle to the end by an
+    // octave (half the patches), a fifth or a fourth (a quarter each), down
+    // from an octave up (two thirds) or up from the note, easing in. A fall is a warm sine (a quieter sine an octave up
     // for the second harmonic, a little tube for the third); a rise is a saw
     // through a band-pass that follows the key (the fundamental 6 dB under
     // the second harmonic), as in the references. Stops dead. Mono, dry.
@@ -1688,7 +1655,12 @@ void unisonRecipe (Category c, RecipeBuilder& b)
         const P on = isB ? P::OscBOn : P::OscAOn, type = isB ? P::OscBType : P::OscAType;
         if (! roll || ! b.state().on (on) || b.state().geti (type) == (int) OscType::Supersaw)
             return;
-        b.uni (isB ? P::OscBUnison : P::OscAUnison, (float) sp.nLo, (float) sp.nHi);
+        // a recipe that set a stack chose its voice count (the stack needs it):
+        // draw the number anyway so the seeds stay put
+        if (! isB && b.state().geti (P::OscAUniStack) != (int) UniStack::Off)
+            b.rnd (0.f, 1.f);
+        else
+            b.uni (isB ? P::OscBUnison : P::OscAUnison, (float) sp.nLo, (float) sp.nHi);
         b.uni (isB ? P::OscBDetune : P::OscADetune, sp.detLo, sp.detHi);
         b.uni (isB ? P::OscBBlend : P::OscABlend, sp.blendLo, sp.blendHi);
         b.uni (isB ? P::OscBUniWidth : P::OscAUniWidth, sp.widthLo, sp.widthHi);

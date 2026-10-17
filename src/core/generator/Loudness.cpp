@@ -15,6 +15,7 @@ namespace
     constexpr double kFs = 48000.0, kBpm = 145.0;
     constexpr int kBlock = 256;
     constexpr float kHeadroom = 24.f;   // measured this far down, so the output's soft clip never touches it
+    constexpr float kSilence = -70.f;   // quieter than this is no sound (all sources off), not something to boost
 
     struct Biquad
     {
@@ -42,12 +43,12 @@ namespace
     struct Note { double beat, beats; };
 
     // The range a sound is played in: basses E1 to E3, acid and squelch
-    // lines C1 to C3, kicks on F1, everything else C2 to C5.
+    // and Phoscyon lines C1 to C3, kicks on F1, everything else C2 to C5.
     std::vector<int> auditionKeys (Category c)
     {
         if (familyOf (c) == Family::Kick) return { 29 };
         if (familyOf (c) == Family::Bass) return { 28, 40, 52 };
-        if (c == Category::Acid || c == Category::Squelch) return { 24, 36, 48 };
+        if (c == Category::Acid || c == Category::Squelch || isPhoscyon (c)) return { 24, 36, 48 };
         return { 36, 48, 60, 72 };
     }
 
@@ -56,6 +57,7 @@ namespace
     float measure (ParamState p, const std::vector<Note>& notes, int key, double beats)
     {
         p.set (P::PatchGain, 0.f);
+        p.set (P::Quality, 0.f);   // the gain differs <= 0.05 dB between qualities; Eco renders up to 2.8x faster
         p.set (P::MasterVol, -kHeadroom);
 
         const double spb = kFs * 60.0 / kBpm;
@@ -174,7 +176,10 @@ void levelPatch (ParamState& patch, Category c, const LockSet& locks)
     if (locks.test ((size_t) P::PatchGain))
         return;
     const auto& d = def (P::PatchGain);
-    patch.set (P::PatchGain, std::clamp (kTargetLoudness - auditionLoudness (patch, c), d.min, d.max));
+    const float loudness = auditionLoudness (patch, c);
+    if (loudness < kSilence)   // nothing plays (every source off): keep the gain, don't boost silence by the maximum
+        return;
+    patch.set (P::PatchGain, std::clamp (kTargetLoudness - loudness, d.min, d.max));
 }
 
 } // namespace psy

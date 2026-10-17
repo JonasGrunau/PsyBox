@@ -22,11 +22,12 @@ constexpr float kTargetLoudness = -16.f;   // where the kicks and basses already
 // kicks four to the floor on F1; an energy sound held for its length (at most
 // two bars, the sweep shrinks with it); anything else a key held for two
 // bars and a bar of 16ths, each from C2 to C5 (basses E1 to E3, acid and
-// squelch C1 to C3), plus the arp running when it has one.
+// squelch and Phoscyon C1 to C3), plus the arp running when it has one.
 float auditionLoudness (const ParamState& patch, Category c);
 
 // Sets Level so the audition lands on kTargetLoudness (within the param's
-// range). Leaves a locked Level alone.
+// range). Leaves a locked Level alone, and a silent patch (below -70 LUFS)
+// at the gain it has.
 void levelPatch (ParamState& patch, Category c, const LockSet& locks);
 
 } // namespace psy

@@ -41,9 +41,12 @@
 //    tube saturator, and an EQ cutting under 100-210 Hz at the end.
 
 #include "Generator.h"
+#include "RecipeCommon.h"
 
 namespace psy
 {
+
+using namespace recipe;
 
 namespace
 {
@@ -51,14 +54,10 @@ namespace
     using S = ModSrc;
     using D = ModDst;
 
-    constexpr float kSaw = 2.f, kSquare = 3.f;
 
     // syncDiv indices
-    enum Div { D4_1, D2_1, D1_1, D1_2, D1_2D, D1_2T, D1_4, D1_4D, D1_4T, D1_8, D1_8D, D1_8T,
-               D1_16, D1_16D, D1_16T, D1_32, D1_32T, D1_64 };
     enum Bars { B1_4, B1_2, B1 };
 
-    int ft (FilterType t) { return (int) t; }
 
     // ---- the body -----------------------------------------------------------
 
@@ -292,7 +291,8 @@ namespace
     // a little noise skips the filter.
     void thinHit (B& b)
     {
-        if (b.state().geti (P::F2Type) != ft (FilterType::Off) && b.chance (0.6f))
+        const bool ride = b.chance (0.6f);   // drawn first, so a locked F2 type doesn't skip it
+        if (b.state().geti (P::F2Type) != ft (FilterType::Off) && ride)
             b.uni (P::F2Env, 0.1f, 0.22f);
         if (b.chance (0.4f))
         {

@@ -10,6 +10,18 @@
 
 using namespace psy;
 
+namespace
+{
+    // The slot a macro sends to `dst`, or -1.
+    int macroSlot (const ParamState& s, int macro, ModDst dst)
+    {
+        for (int i = 0; i < kNumModSlots; ++i)
+            if (s.geti (modSrcParam (i)) == (int) ModSrc::Macro1 + macro && s.geti (modDstParam (i)) == (int) dst)
+                return i;
+        return -1;
+    }
+}
+
 TEST_CASE ("Same category and seed always give the same patch", "[generator]")
 {
     Generator a, b;
@@ -757,6 +769,8 @@ TEST_CASE ("Ghost stabs start off the beat and stop before the next kick", "[gen
     {
         INFO ("seed " << seed);
         const auto p = g.generate (Category::GhostStab, seed, ParamState(), LockSet(), true);
+        bool cutoffMacro = false;   // a cutoff macro takes the knob down to keep the sound where the recipe drew it
+        for (int m = 0; m < 4; ++m) cutoffMacro = cutoffMacro || macroSlot (p, m, ModDst::F2Cutoff) >= 0;
         REQUIRE (p.on (P::ArpOn));
         const int div = p.geti (P::ArpDiv);
         REQUIRE ((div == 9 || div == 12));   // 1/8 or 1/16
@@ -780,7 +794,7 @@ TEST_CASE ("Ghost stabs start off the beat and stop before the next kick", "[gen
         CHECK (p.geti (P::Octave) <= 0);
         CHECK_FALSE (p.on (P::CompOn));
         CHECK (p.geti (P::F2Type) == (int) FilterType::HP24);
-        CHECK (p.get (P::F2Cutoff) >= 300.f);   // from C4: 240 Hz and up around G#3
+        if (! cutoffMacro) CHECK (p.get (P::F2Cutoff) >= 300.f);   // from C4: 240 Hz and up around G#3
         CHECK (p.on (P::OscBOn));
         CHECK (p.get (P::F2Key) == 1.f);
         widened += p.on (P::WidthOn) ? 1 : 0;
@@ -912,4 +926,164 @@ TEST_CASE ("Acid comes both ways: the classic wet 303 and the psy kind, cut and 
     CHECK (played[1] / steps[1] > played[0] / steps[0] + 0.08);
     CHECK (up[1] / played[1] > 0.4);
     CHECK (up[1] / played[1] > 2.0 * up[0] / played[0]);
+}
+
+// ---- review fixes ---------------------------------------------------------
+
+TEST_CASE ("Every short name is different and fits a chip", "[generator][category]")
+{
+    std::set<std::string> seen;
+    for (const auto& info : categoryInfo())
+    {
+        CHECK (std::string_view (info.shortName).size() <= 8);
+        CHECK (seen.insert (info.shortName).second);
+    }
+}
+
+TEST_CASE ("Every choice list fits the options a recipe remembers", "[generator]")
+{
+    for (const auto& d : paramDefs())
+        if (d.mapping == Mapping::Choice && d.choices != &choices::modDst)   // the matrix targets are set, never picked
+            CHECK ((int) d.max + 1 <= kMaxChoiceOptions);
+}
+
+TEST_CASE ("Grid chord stabs stack root, octave and fifth with enough voices to play the fifth", "[generator][grid]")
+{
+    Generator g;
+    int stacks = 0;
+    for (uint32_t seed = 0; seed < 300; ++seed)
+    {
+        const auto p = g.generate (Category::Grid, seed, ParamState(), LockSet());
+        if (p.geti (P::OscAUniStack) != (int) UniStack::OctFifth) continue;
+        ++stacks;
+        // the stack puts the fifth on the second pair outside the centre: 5 voices
+        CHECK (p.geti (P::OscAUnison) >= 5);
+    }
+    CHECK (stacks > 20);
+}
+
+TEST_CASE ("Locking Jilax's second filter type does not reshuffle the other parameters", "[generator][jilax]")
+{
+    Generator g;
+    for (uint32_t seed = 0; seed < 300; ++seed)
+    {
+        const auto free = g.generate (Category::Jilax, seed, ParamState(), LockSet());
+        LockSet locks;
+        locks.set ((size_t) P::F2Type);
+        const auto locked = g.generate (Category::Jilax, seed, free, locks);
+        for (int i = 0; i < kNumParams; ++i)
+            CHECK (free.v[(size_t) i] == locked.v[(size_t) i]);
+    }
+}
+
+TEST_CASE ("A cutoff macro on a dark Phoscyon patch keeps the recipe's brightness and Mutate can move the cutoff", "[generator][macro][phoscyon]")
+{
+    int parked = 0, movable = 0;
+    float mean = 0.f;
+    for (uint32_t seed = 0; seed < 200; ++seed)
+    {
+        Generator g;
+        const auto p = g.generate (Category::Phoscyon, seed, ParamState(), LockSet());
+        for (int m = 0; m < 4; ++m)
+        {
+            const int slot = macroSlot (p, m, ModDst::PhosCutoff);
+            if (slot < 0) continue;
+            const float knob = p.get (P::PhosCutoff);
+            const float effective = knob + p.get (modAmtParam (slot)) * p.get ((P) ((int) P::Macro1 + m));
+            // the recipe drew at most 0.75; the macro brightens a synth by up to 1/0.6 of what it takes off
+            CHECK (effective <= 0.75f / 0.6f + 1e-3f);
+            if (knob == 0.f)
+            {
+                ++parked;
+                // the knob gave way to the macro: it lands where the recipe drew (a dark or
+                // mid cutoff, below 0.35), scaled up by the share a synth may brighten by
+                CHECK (effective <= 0.35f / 0.6f + 1e-3f);
+                mean += effective;
+                if (g.lastRanges().e[(size_t) P::PhosCutoff].hi > 0.f) ++movable;
+            }
+        }
+    }
+    CHECK (parked > 20);
+    CHECK (movable == parked);
+    CHECK (mean / (float) parked < 0.15f);   // a dark recipe stays dark (the macro used to open it past 0.3)
+}
+
+TEST_CASE ("No macro drives the resonance of a 6 dB filter", "[generator][macro]")
+{
+    Generator g;
+    for (Category c : { Category::ReverseBass, Category::GhostStab, Category::ReverseSub })
+        for (uint32_t seed = 0; seed < 150; ++seed)
+        {
+            const auto p = g.generate (c, seed, ParamState(), LockSet());
+            for (int m = 0; m < 4; ++m)
+                if (macroSlot (p, m, ModDst::F1Reso) >= 0)
+                {
+                    CHECK (p.geti (P::F1Type) != (int) FilterType::LP6);
+                    CHECK (p.geti (P::F1Type) != (int) FilterType::HP6);
+                }
+        }
+}
+
+TEST_CASE ("Grid's macro 1 always drives something audible", "[generator][grid][macro]")
+{
+    Generator g;
+    for (uint32_t seed = 0; seed < 300; ++seed)
+    {
+        const auto p = g.generate (Category::Grid, seed, ParamState(), LockSet());
+        if (macroSlot (p, 0, ModDst::FilterEnvAmt) >= 0)
+            CHECK (std::abs (p.get (P::F1Env)) > 0.05f);
+    }
+}
+
+TEST_CASE ("Atmos scans a wavetable position only when Osc A is a wavetable", "[generator]")
+{
+    Generator g;
+    for (uint32_t seed = 0; seed < 100; ++seed)
+    {
+        const auto p = g.generate (Category::Atmos, seed, ParamState(), LockSet());
+        bool lfoToWt = false;
+        for (int i = 0; i < kNumModSlots; ++i)
+            if (p.geti (modSrcParam (i)) == (int) ModSrc::Lfo2 && p.geti (modDstParam (i)) == (int) ModDst::WtPosA)
+                lfoToWt = true;
+        if (p.geti (P::OscAType) == (int) OscType::Supersaw) CHECK (! lfoToWt);
+        else CHECK (lfoToWt);
+    }
+}
+
+TEST_CASE ("Mutate keeps to the options a recipe allowed and reaches integer parameters", "[generator]")
+{
+    int moved = 0, unisonPatches = 0;
+    for (uint32_t seed = 0; seed < 100; ++seed)
+    {
+        Generator g;
+        const auto p = g.generate (Category::PsyLead, seed, ParamState(), LockSet());
+        if (p.geti (P::OscAUnison) > 1) ++unisonPatches;
+        for (uint32_t m = 1; m <= 20; ++m)
+        {
+            const auto q = g.mutate (1.f, m, p, LockSet());
+            // PsyLead's unison mode is Linear or Super, never Random (weight 0)
+            if (p.geti (P::OscAUnison) > 1)
+                CHECK (q.geti (P::OscAUniMode) != (int) UniMode::Random);
+            if (q.geti (P::PolyVoices) != p.geti (P::PolyVoices)) ++moved;
+        }
+    }
+    CHECK (unisonPatches > 20);
+    CHECK (moved > 0);
+}
+
+TEST_CASE ("Locking one parameter does not reshuffle what Mutate does to the others", "[generator]")
+{
+    Generator g;
+    const auto p = g.generate (Category::Atmos, 5, ParamState(), LockSet());
+    for (uint32_t m = 1; m <= 30; ++m)
+    {
+        const auto free = g.mutate (1.f, m, p, LockSet());
+        LockSet locks;
+        locks.set ((size_t) P::OscAType);
+        locks.set ((size_t) P::F1Type);
+        const auto locked = g.mutate (1.f, m, p, locks);
+        for (int i = 0; i < kNumParams; ++i)
+            if (i != (int) P::OscAType && i != (int) P::F1Type)
+                CHECK (free.v[(size_t) i] == locked.v[(size_t) i]);
+    }
 }

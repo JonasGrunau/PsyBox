@@ -15,6 +15,10 @@ namespace psy
 
 using LockSet = std::bitset<kNumParams>;
 
+// The longest choice list a recipe can remember (Filter type: 20, the
+// Phoscyon distortion models: 19). TestGenerator checks every choice fits.
+constexpr int kMaxChoiceOptions = 20;
+
 // What a recipe allowed for each parameter, so Mutate stays inside the
 // category's character instead of wandering off into noise.
 struct RangeMemory
@@ -23,7 +27,7 @@ struct RangeMemory
     {
         bool touched = false;
         float lo = 0.f, hi = 0.f;       // normalised range for continuous params
-        std::array<int8_t, 12> options {};
+        std::array<int8_t, kMaxChoiceOptions> options {};
         int numOptions = 0;             // for choices
     };
     std::array<Entry, kNumParams> e;
@@ -34,8 +38,8 @@ struct RangeMemory
 class RecipeBuilder
 {
 public:
-    RecipeBuilder (ParamState& state, const LockSet& locks, dsp::Rng& rng, RangeMemory& ranges)
-        : s (state), locks (locks), rng (rng), ranges (ranges) {}
+    RecipeBuilder (ParamState& state, const LockSet& lockedParams, dsp::Rng& random, RangeMemory& rangeMemory)
+        : s (state), locks (lockedParams), rng (random), ranges (rangeMemory) {}
 
     // Fixed value (still recorded so Mutate leaves it alone).
     void set (P p, float plain);
@@ -64,6 +68,9 @@ public:
     void lfoSync (int index, LfoShape shape, std::initializer_list<int> divisions, bool retrig);
 
     ParamState& state() { return s; }
+    // A second builder on the same patch (the arp's) carries on after the
+    // sound's last mod slot instead of overwriting slot 0.
+    void continueSlotsFrom (const RecipeBuilder& other) { nextSlot = other.nextSlot; }
     // The category being built (macros keep basses dry, unison picks its voices).
     void setCategory (Category c) { cat = c; }
     Category category() const { return cat; }
