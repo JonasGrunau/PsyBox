@@ -157,6 +157,60 @@ TEST_CASE ("Accented notes (velocity 64 and up) hit louder and brighter", "[phos
     CHECK (std::abs (rmsDb (off, 0.0, 0.06) - rmsDb (plain, 0.0, 0.06)) < 1.0);
 }
 
+TEST_CASE ("Accented 16ths start without a click, however much accent is left over", "[phoscyon][click]")
+{
+    // A fast line of accents with a long accent decay: each note starts while
+    // the last one's accent still rings. The onset may not be any rougher (in
+    // the second difference, a high-band proxy) than the note's own body.
+    auto p = phosPatch();
+    p.set (P::PhosAccDecay, 1.f);
+    p.set (P::PhosCutoff, 0.3f);
+    std::vector<Note> line;
+    const double step = 0.125;
+    for (int i = 0; i < 12; ++i)
+        line.push_back ({ i * step, i * step + 0.06, 45, (i % 3 == 2) ? 0.45f : 0.9f });   // accent, accent, plain
+    const auto out = render (p, 12 * step + 0.2, line, 120.0);
+    const auto rough = [&] (double t0, double t1) {
+        double m = 0.0;
+        for (int i = std::max (1, (int) (t0 * kFs)); i < std::min ((int) out.size() - 1, (int) (t1 * kFs)); ++i)
+            m = std::max (m, (double) std::abs (out[(size_t) i + 1] - 2.f * out[(size_t) i] + out[(size_t) i - 1]));
+        return m;
+    };
+    for (int i = 1; i < 12; ++i)
+    {
+        INFO ("note " << i);
+        const double t = i * step;
+        CHECK (rough (t - 0.002, t + 0.002) < 2.0 * rough (t + 0.005, t + 0.05));
+    }
+}
+
+TEST_CASE ("The Phoscyon distortion doesn't fold a driven high line back", "[phoscyon][fx]")
+{
+    // a 2.6 kHz sine through the hard RAT clipper makes a square: at 48 kHz its
+    // 11th harmonic would fold back only ~21 dB under the fundamental;
+    // oversampled 4x, the folds stay more than 30 dB down
+    dsp::PhosDistortion d;
+    d.prepare ((float) kFs);
+    const size_t n = 1 << 15;
+    const double f0 = 2625.0;   // an exact bin, so harmonics land on bins
+    std::vector<float> l (n), r (n);
+    for (size_t i = 0; i < n; ++i)
+        l[i] = r[i] = 0.5f * (float) std::sin (2.0 * M_PI * f0 * (double) i / kFs);
+    d.process (l.data(), r.data(), (int) n, 18, 0.9f, 0.f, 0.f, false);
+    const std::vector<float> tail (l.begin() + 4096, l.begin() + 4096 + 16384);
+    const auto db = testutil::spectrumDb (tail, 16384);
+    double harm = -300.0, other = -300.0;
+    for (size_t b = 4; b < db.size() - 4; ++b)
+    {
+        const double hz = (double) b * kFs / 16384.0;
+        const double k = hz / f0;
+        if (std::abs (k - std::round (k)) * f0 < 30.0) harm = std::max (harm, db[b]);
+        else other = std::max (other, db[b]);
+    }
+    INFO ("harmonics " << harm << " dB, aliases " << other << " dB");
+    CHECK (other < harm - 30.0);
+}
+
 TEST_CASE ("Cutoff and Envmod open the filter, Decay holds it open longer", "[phoscyon]")
 {
     auto p = phosPatch();

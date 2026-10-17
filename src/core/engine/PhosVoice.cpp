@@ -13,6 +13,7 @@ namespace
 {
     constexpr int kControl = 8;              // oversampled samples per control-rate update
     constexpr float kFadeMs = 3.f;
+    constexpr double kMegAmpMs = 0.3, kAccOnMs = 0.3, kAccOffMs = 3.0, kAmpMs = 0.1;   // declicking (see PhosVoice.h)
     constexpr double kQuiet = 1e-5;
 
     // Linear interpolation in an evenly spaced table over 0..1.
@@ -105,6 +106,7 @@ void PhosVoice::trigger (int n, bool accent, const PhosSettings& s) noexcept
         outHp.reset();
         osc.reset (rng.uniform());
         meg = sweep = vca = vcaTail = accEnv = 0.0;
+        megAmp = accOn = ampNow = 0.0;
         pitch = (double) n;
         vibPhase = 0.0;
     }
@@ -151,6 +153,7 @@ void PhosVoice::kill() noexcept
 {
     active = gate = fading = false;
     meg = sweep = vca = 0.0;
+    megAmp = accOn = ampNow = 0.0;
     fade = 1.f;
     inHp.reset();
     ladder.reset();
@@ -246,6 +249,8 @@ void PhosVoice::render (float* outL, float* outR, int chunkOffsetBase, int nBase
     const double vibDepth = (double) s.vibDepth * M.vibSemis * mods.wheel;
     const double width = s.tm5;
     const double pwDuty = M.sqDuty + M.sqPwShift * s.pwShift;
+    const double megAmpUp = 1.0 - perSample (kMegAmpMs, rate), ampUp = 1.0 - perSample (kAmpMs, rate);
+    const double accUp = 1.0 - perSample (kAccOnMs, rate), accDown = 1.0 - perSample (kAccOffMs, rate);
 
     for (int i = 0; i < n; ++i)
     {
@@ -306,8 +311,10 @@ void PhosVoice::render (float* outL, float* outR, int chunkOffsetBase, int nBase
         if (gate) accEnv += (1.0 - accEnv) * vcaUp;
         else accEnv *= accRel;
         // the VCA, then the output coupling: a note cut off rings out through it
-        const double amp = vca + (accented ? accAmp * meg * accEnv : 0.0);
-        float out = outHp.hp (y * (float) amp) * gain;
+        megAmp += (meg - megAmp) * megAmpUp;
+        accOn += ((accented ? 1.0 : 0.0) - accOn) * (accented ? accUp : accDown);
+        ampNow += (vca + accAmp * megAmp * accEnv * accOn - ampNow) * ampUp;
+        float out = outHp.hp (y * (float) ampNow) * gain;
         if (s.noise > 0.f)
             out += rng.bipolar() * M.noiseLevel * s.noise * (float) vca;
         if (fading)

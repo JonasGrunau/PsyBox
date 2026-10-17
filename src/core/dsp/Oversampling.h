@@ -17,6 +17,45 @@
 namespace psy::dsp
 {
 
+// A linear-phase half-band low-pass: length N = 4q + 1, the centre tap 0.5,
+// every other tap zero. Returns the centre and the odd taps at +-1, +-3 ...
+// (Kaiser window for `attenuationDb`).
+inline void designHalfband (int q, double attenuationDb, float& centre, std::vector<float>& taps)
+{
+    const int N = 4 * q + 1;
+    const int c = (N - 1) / 2;
+    const double beta = attenuationDb > 50.0 ? 0.1102 * (attenuationDb - 8.7)
+                                             : 0.5842 * std::pow (attenuationDb - 21.0, 0.4) + 0.07886 * (attenuationDb - 21.0);
+    const auto i0 = [] (double x) {
+        double sum = 1.0, term = 1.0;
+        for (int k = 1; k < 50; ++k)
+        {
+            term *= (x / (2.0 * k)) * (x / (2.0 * k));
+            sum += term;
+        }
+        return sum;
+    };
+
+    std::vector<double> h ((size_t) N);
+    double dc = 0.0;
+    for (int n = 0; n < N; ++n)
+    {
+        const int m = n - c;
+        const double sinc = m == 0 ? 0.5 : std::sin (0.5 * kPiD * m) / (kPiD * m);
+        const double r = (2.0 * n) / (N - 1) - 1.0;
+        const double w = i0 (beta * std::sqrt (std::max (0.0, 1.0 - r * r))) / i0 (beta);
+        h[(size_t) n] = sinc * w;
+        dc += h[(size_t) n];
+    }
+    for (auto& v : h)
+        v /= dc;
+
+    centre = (float) h[(size_t) c];
+    taps.clear();
+    for (int k = 1; k <= c; k += 2)
+        taps.push_back ((float) h[(size_t) (c + k)]);  // symmetric pairs at +-k
+}
+
 class HalfbandDecimator
 {
 public:
@@ -24,43 +63,11 @@ public:
     // samples = q output samples.
     void design (int q, double transitionFraction, double attenuationDb)
     {
-        const int N = 4 * q + 1;
-        const int c = (N - 1) / 2;
-        const double beta = attenuationDb > 50.0 ? 0.1102 * (attenuationDb - 8.7)
-                                                 : 0.5842 * std::pow (attenuationDb - 21.0, 0.4) + 0.07886 * (attenuationDb - 21.0);
         (void) transitionFraction;  // length chosen by the caller for this transition
-
-        const auto i0 = [] (double x) {
-            double sum = 1.0, term = 1.0;
-            for (int k = 1; k < 50; ++k)
-            {
-                term *= (x / (2.0 * k)) * (x / (2.0 * k));
-                sum += term;
-            }
-            return sum;
-        };
-
-        std::vector<double> h ((size_t) N);
-        double dc = 0.0;
-        for (int n = 0; n < N; ++n)
-        {
-            const int m = n - c;
-            const double sinc = m == 0 ? 0.5 : std::sin (0.5 * kPiD * m) / (kPiD * m);
-            const double r = (2.0 * n) / (N - 1) - 1.0;
-            const double w = i0 (beta * std::sqrt (std::max (0.0, 1.0 - r * r))) / i0 (beta);
-            h[(size_t) n] = sinc * w;
-            dc += h[(size_t) n];
-        }
-        for (auto& v : h)
-            v /= dc;
-
-        centre = (float) h[(size_t) c];
-        taps.clear();
-        for (int k = 1; k <= c; k += 2)
-            taps.push_back ((float) h[(size_t) (c + k)]);  // symmetric pairs at +-k
-
+        const int c = 2 * q;
+        designHalfband (q, attenuationDb, centre, taps);
         latencyIn = c;
-        const int histSize = N + 8;
+        const int histSize = 4 * q + 1 + 8;
         hist.assign ((size_t) histSize * 2, 0.f);
         histLen = histSize;
         pos = 0;
@@ -106,6 +113,49 @@ private:
         hist[(size_t) (pos + histLen)] = v;
         pos = (pos + 1) % histLen;
     }
+};
+
+// The way up: doubles the rate with the same half-band, one sample at a time
+// (polyphase: the even outputs are the input q samples late, the odd ones
+// the taps' sums). Latency q input samples.
+class HalfbandInterpolator
+{
+public:
+    void design (int qIn, double attenuationDb)
+    {
+        q = qIn;
+        designHalfband (q, attenuationDb, centre, taps);
+        histLen = 2 * q + 8;
+        hist.assign ((size_t) histLen * 2, 0.f);
+        pos = 0;
+    }
+
+    void reset() noexcept
+    {
+        std::fill (hist.begin(), hist.end(), 0.f);
+        pos = 0;
+    }
+
+    int latencyInputSamples() const noexcept { return q; }
+
+    // one input sample in, two output samples out
+    void process (float in, float* out2) noexcept
+    {
+        hist[(size_t) pos] = in;
+        hist[(size_t) (pos + histLen)] = in;
+        pos = (pos + 1) % histLen;
+        const float* x = hist.data() + pos + histLen - 1;  // x[0] newest, x[-j] older
+        out2[0] = 2.f * centre * x[-q];
+        float acc = 0.f;
+        for (int k = 0; k < q; ++k)
+            acc += taps[(size_t) k] * (x[-(q + k)] + x[-(q - 1 - k)]);
+        out2[1] = 2.f * acc;
+    }
+
+private:
+    std::vector<float> taps, hist;
+    float centre = 0.5f;
+    int q = 0, histLen = 0, pos = 0;
 };
 
 // Decimates a block rendered at 1x, 2x or 4x down to the base rate.

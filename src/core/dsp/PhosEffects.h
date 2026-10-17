@@ -9,6 +9,7 @@
 #include "Common.h"
 #include "Effects.h"
 #include "Filters.h"
+#include "Oversampling.h"
 
 #include <array>
 #include <cmath>
@@ -147,6 +148,7 @@ public:
         float kneeScale = 18.1f, ratPreHz = 9750.f, ratPostHz = 20000.f, biasScale = 0.0233f;
         float colorQ0 = 1.1f, colorQSlope = 0.02f;
         float levelPre = -10.5f, levelPost = -13.76f, attackMs = 0.835f, releaseMs = 58.2f;
+        float gainMs = 1.f, capPreDb = 36.f, capPostDb = 24.f;
     };
     static const Tuning& tuning() noexcept { static const Tuning t; return t; }
     // A different set (the fitting tool's); null for the standard one.
@@ -175,11 +177,35 @@ public:
     }
     static float preampGain (const Model& m, float drive, const Tuning& t = tuning()) noexcept { return dbToGain (preampDb (m, drive, t)); }
 
+    // The clipper runs oversampled to at least ~176 kHz (4x at 44.1/48 kHz, 2x
+    // at 88.2/96, none above), wherever the effect sits in the chain, so a
+    // driven high line doesn't fold back. Costs about half a millisecond. The
+    // half-bands don't depend on the rate: they are designed (and allocated)
+    // here once, so prepare() is safe on the audio thread (a quality change).
+    PhosDistortion()
+    {
+        for (auto& c : ch)
+        {
+            c.up1.design (10, 90.0);
+            c.up2.design (4, 90.0);
+            c.down1.design (10, 0.0, 90.0);
+            c.down2.design (4, 0.0, 90.0);
+        }
+    }
+
     void prepare (float sampleRate) noexcept
     {
         fs = sampleRate;
+        osFactor = fs < 80000.f ? 4 : fs < 160000.f ? 2 : 1;
         lastModel = -1;
         reset();
+    }
+
+    int latencySamples() const noexcept
+    {
+        if (osFactor == 4) return 10 + 2 + 2 + 10;
+        if (osFactor == 2) return 10 + 10;
+        return 0;
     }
 
     void reset() noexcept
@@ -190,8 +216,13 @@ public:
             c.color.reset();
             c.ratIn.reset();
             c.ratOut.reset();
+            c.up1.reset();
+            c.up2.reset();
+            c.down1.reset();
+            c.down2.reset();
         }
         env = 0.f;
+        gain = 1.f;
     }
 
     void process (float* l, float* r, int n, int model, float drive, float color, float dynamics, bool post) noexcept
@@ -212,6 +243,8 @@ public:
         const float rel = 1.f - std::exp (-1.f / (t.releaseMs * 0.001f * fs));
         const float target = dbToGain (post ? t.levelPost : t.levelPre);
         const bool rat = m.clip == Rat;
+        const float smooth = t.gainMs > 0.f ? 1.f - std::exp (-1.f / (t.gainMs * 0.001f * fs)) : 1.f;
+        const float capPre = dbToGain (t.capPreDb), capPost = dbToGain (t.capPostDb);
 
         for (int i = 0; i < n; ++i)
         {
@@ -228,26 +261,52 @@ public:
             const auto level = [&] (float x0, float x1) {
                 const float pk = std::max (std::abs (x0), std::abs (x1));
                 env += (pk - env) * (pk > env ? att : rel);
-                return dynamics > 0.f ? std::pow (target / std::max (env, 1e-5f), dynamics) : 1.f;
+                const float want = dynamics > 0.f ? std::pow (target / std::max (env, 1e-5f), dynamics) : 1.f;
+                gain += (std::min (want, post ? capPost : capPre) - gain) * smooth;
+                return gain;
             };
             if (! post && dynamics > 0.f)
             {
-                const float g = std::min (level (v[0], v[1]), 64.f);
+                const float g = level (v[0], v[1]);
                 v[0] *= g;
                 v[1] *= g;
             }
             for (int k = 0; k < 2; ++k)
             {
                 auto& s = ch[(size_t) k];
-                float u = v[k] * pre;
-                if (rat) u = s.ratIn.lp (u);
-                float y = clip (m, u + bias, t) - zero;
-                if (rat) y = s.ratOut.lp (y);
+                const auto shape = [&] (float x) {
+                    float u = x * pre;
+                    if (rat) u = s.ratIn.lp (u);
+                    float y = clip (m, u + bias, t) - zero;
+                    if (rat) y = s.ratOut.lp (y);
+                    return y;
+                };
+                float y;
+                if (osFactor == 1)
+                    y = shape (v[k]);
+                else
+                {
+                    float x2[2], x4[4], y2[2];
+                    s.up1.process (v[k], x2);
+                    if (osFactor == 4)
+                    {
+                        s.up2.process (x2[0], x4);
+                        s.up2.process (x2[1], x4 + 2);
+                        for (auto& x : x4) x = shape (x);
+                        s.down2.process (x4, y2, 2);
+                    }
+                    else
+                    {
+                        y2[0] = shape (x2[0]);
+                        y2[1] = shape (x2[1]);
+                    }
+                    s.down1.process (y2, &y, 1);
+                }
                 v[k] = y * out;
             }
             if (post && dynamics > 0.f)
             {
-                const float g = std::min (level (v[0], v[1]), 16.f);
+                const float g = level (v[0], v[1]);
                 v[0] *= g;
                 v[1] *= g;
             }
@@ -273,11 +332,13 @@ private:
     {
         Biquad preHp, preEq, tiltLo, tiltHi, postHp;
         Svf color;
-        TptOnePole ratIn, ratOut;
+        TptOnePole ratIn, ratOut;   // at the oversampled rate
+        HalfbandInterpolator up1, up2;
+        HalfbandDecimator down1, down2;
     };
     std::array<Chan, 2> ch {};
-    float fs = 48000.f, lastColor = 0.f, env = 0.f;
-    int lastModel = -1;
+    float fs = 48000.f, lastColor = 0.f, env = 0.f, gain = 1.f;
+    int lastModel = -1, osFactor = 1;
     const Tuning* tune = &tuning();
 
     void configure (const Model& m, int model, float color) noexcept
@@ -291,8 +352,9 @@ private:
             s.tiltHi.shelf (fs, m.tiltHz, m.tiltDb * 0.5, 0.7071, true);
             s.postHp.highPass (fs, std::max (m.postHpHz, 1.f), 0.7071);
             s.color.setG (prewarp (m.colorHz, fs), 1.f / (t.colorQ0 + t.colorQSlope * m.colorReso));
-            s.ratIn.setG (prewarp (t.ratPreHz, fs));
-            s.ratOut.setG (prewarp (t.ratPostHz, fs));
+            const float osRate = fs * (float) osFactor;
+            s.ratIn.setG (prewarp (t.ratPreHz, osRate));
+            s.ratOut.setG (prewarp (t.ratPostHz, osRate));
         }
         lastModel = model;
         lastColor = color;

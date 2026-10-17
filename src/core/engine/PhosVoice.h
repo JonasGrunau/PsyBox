@@ -166,6 +166,11 @@ private:
     double vcaUp = 0.0, vcaDown = 1.0, vcaRel = 1.0, vcaTailRel = 1.0;
     double vcaTail = 0.0;     // the slow part of a released note
     double accEnv = 0.0, accRel = 1.0;   // the accent's own gate on the VCA (it lets go more slowly)
+    // declicking, as the original's onsets: the envelope as the accent's VCA
+    // path sees it (a fresh note's jump to full takes ~0.3 ms), the accent
+    // switching on and off over 0.3 / 3 ms, and the summed gain through a
+    // 0.1 ms pole, so a note never starts or changes level within a sample
+    double megAmp = 0.0, accOn = 0.0, ampNow = 0.0;
     bool wasGate = false;
     float accentAmt = 0.f;
 
