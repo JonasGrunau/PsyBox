@@ -57,7 +57,10 @@ namespace
     float measure (ParamState p, const std::vector<Note>& notes, int key, double beats)
     {
         p.set (P::PatchGain, 0.f);
-        p.set (P::Quality, 0.f);   // the gain differs <= 0.05 dB between qualities; Eco renders up to 2.8x faster
+        // Standard (2x), the live default, whatever the user's Quality: the
+        // gain is the same for everyone. Not Eco: at 1x the wavetables fold
+        // their top away, which moved a Gate pad by 0.6 LU.
+        p.set (P::Quality, 1.f);
         p.set (P::MasterVol, -kHeadroom);
 
         const double spb = kFs * 60.0 / kBpm;
