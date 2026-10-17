@@ -15,6 +15,10 @@
 // PSYSNAP_PARAMS="comp_on=1,comp_mode=0" sets plain parameter values after Generate.
 // PSYSNAP_UNISON=1 opens Osc A's unison settings (the gear), =2 holds Osc A's
 // voice lines up as if the mouse were on its UNISON field.
+// PSYSNAP_SWAPTEST=<out.f32> plays a held key through the first category's
+// arp in real time on a second thread while Generate runs twice from this one
+// (the way a user hits it mid-line), writes the mono output as float32 and
+// prints where each Generate came in. No editor.
 // PSYSNAP_STRIP=n scrolls the Phoscyon FX rack to effect n (use with
 // PSYSNAP_VIEW=1), e.g. 10 for the Phoscyon Limiter.
 // PSYSNAP_CHAINDRAG=n holds the FX chain's first row dragged to row n (use
@@ -24,6 +28,9 @@
 #include "plugin/PluginProcessor.h"
 #include "ui/FxPage.h"
 
+#include <atomic>
+#include <chrono>
+#include <thread>
 #include <typeinfo>
 
 static void selectTabs (juce::Component& c, int tab)
@@ -79,6 +86,42 @@ static T* findChild (juce::Component& c, std::function<bool (T&)> match)
 // Drives the knob the way a drop and a ring drag do, with synthetic mouse
 // events sent to the components (no window: macOS won't show one for a
 // console tool, and JUCE's drag container itself is stock).
+static int runSwapTest (PsyBoxProcessor& proc, psy::Category c, const char* path)
+{
+    constexpr int block = 256, rate = 48000;
+    proc.setArpGeneration (true);
+    proc.setCategory (c);
+    proc.generateWithSeed (0x51u);
+    proc.prepareToPlay (rate, block);
+    const int blocks = rate * 4 / block;
+    std::vector<float> out ((size_t) (blocks * block));
+    std::atomic<int> played { 0 };
+    std::thread audio ([&] {
+        juce::AudioBuffer<float> buf (2, block);
+        juce::MidiBuffer midi;
+        const auto start = std::chrono::steady_clock::now();
+        for (int b = 0; b < blocks; ++b)
+        {
+            midi.clear();
+            if (b == 0) midi.addEvent (juce::MidiMessage::noteOn (1, 36, (juce::uint8) 100), 0);
+            proc.processBlock (buf, midi);
+            std::copy (buf.getReadPointer (0), buf.getReadPointer (0) + block, out.begin() + (std::ptrdiff_t) b * block);
+            played = (b + 1) * block;
+            std::this_thread::sleep_until (start + std::chrono::microseconds ((int64_t) (b + 1) * block * 1000000 / rate));
+        }
+    });
+    for (double t : { 1.0, 2.3 })
+    {
+        while (played.load() < (int) (t * rate))
+            std::this_thread::sleep_for (std::chrono::milliseconds (1));
+        std::printf ("generate at %d\n", played.load());
+        proc.generate();
+    }
+    audio.join();
+    juce::File (path).replaceWithData (out.data(), out.size() * sizeof (float));
+    return 0;
+}
+
 static int runDragAndDropTest (PsyBoxProcessor& proc, juce::AudioProcessorEditor& editor)
 {
     int failures = 0;
@@ -168,6 +211,8 @@ int main (int argc, char** argv)
 
     PsyBoxEditor::forceKeyboard = std::getenv ("PSYSNAP_KEYS") != nullptr;
     PsyBoxProcessor proc;
+    if (auto* swapOut = std::getenv ("PSYSNAP_SWAPTEST"))
+        return runSwapTest (proc, (psy::Category) juce::jlimit (0, psy::kNumCategories - 1, cats[0]), swapOut);
     proc.prepareToPlay (48000.0, 512);
     std::unique_ptr<juce::AudioProcessorEditor> editor (proc.createEditor());
 

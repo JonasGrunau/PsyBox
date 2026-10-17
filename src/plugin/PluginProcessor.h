@@ -187,18 +187,37 @@ private:
     juce::String presetName { "Init" };
     std::atomic<int> lastPlayedNote { 48 };
 
-    // Patch swaps (Generate, Mutate, undo, presets, category switch) bump the
-    // epoch before touching any parameter. The audio thread then fades the
-    // old sound out on the old values, resets the engine (voices, filters, FX
-    // tails) and retriggers the held notes with the new patch.
+    // Patch swaps (Generate, Mutate, undo, presets, category switch) open a
+    // change (`PatchChange`) before touching any parameter and close it once
+    // every new value is written. The audio thread fades the old sound out on
+    // the old values, stays silent while a change is still open (generating
+    // and leveling a patch takes tens of ms, longer than the fade), then
+    // resets the engine (voices, filters, FX tails) and retriggers the held
+    // notes with the whole new patch. Changes nest (a category switch that
+    // generates); a change left open longer than a second restarts anyway.
     std::atomic<uint32_t> patchEpoch { 0 };
+    std::atomic<int> openChanges { 0 };
     uint32_t seenEpoch = 0;
+    int maxHold = 48000;   // samples: a second at the current rate
     enum class Swap { None, FadingOut, Restart };
     Swap swap = Swap::None;
     int fadePos = 0;
     std::array<float, 128> heldVelocity {};   // audio thread: notes currently down
     std::array<bool, 128> pressedInFade {};   // audio thread: note-ons that arrived during the fade-out
-    void beginPatchChange() noexcept { patchEpoch.fetch_add (1, std::memory_order_release); }
+    void beginPatchChange() noexcept
+    {
+        openChanges.fetch_add (1);   // before the epoch: whoever sees the new epoch sees it open
+        patchEpoch.fetch_add (1);
+    }
+    void endPatchChange() noexcept { openChanges.fetch_sub (1); }
+    struct PatchChange
+    {
+        explicit PatchChange (PsyBoxProcessor& p) : proc (p) { proc.beginPatchChange(); }
+        ~PatchChange() { proc.endPatchChange(); }
+        PatchChange (const PatchChange&) = delete;
+        PatchChange& operator= (const PatchChange&) = delete;
+        PsyBoxProcessor& proc;
+    };
     static constexpr int kFadeOut = 480, kFadeIn = 128;   // 10 ms, ~3 ms at 48 kHz
     std::atomic<double> lastBpm { 120.0 };
     MacroNames macroNames;   // typed names; empty = automatic

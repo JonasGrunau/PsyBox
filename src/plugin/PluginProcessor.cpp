@@ -92,6 +92,7 @@ void PsyBoxProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
     setLatencySamples (reportedLatency);
     swap = Swap::None;
     seenEpoch = patchEpoch.load();
+    maxHold = (int) sampleRate;
     heldVelocity.fill (0.f);
 }
 
@@ -204,10 +205,13 @@ void PsyBoxProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
             if (r != l) r[i] *= g;
             ++fadePos;
         }
-        if (fadePos >= kFadeOut)
+        // silent until the new patch is all written (the epoch first: a change
+        // that opens after this read shows up as a new epoch next block)
+        const uint32_t epoch = patchEpoch.load();
+        if (fadePos >= kFadeOut && (openChanges.load() == 0 || fadePos >= kFadeOut + maxHold))
         {
             engine.reset();   // voices, filter states, delay and reverb tails; params jump, no smoothing
-            seenEpoch = patchEpoch.load (std::memory_order_acquire);
+            seenEpoch = epoch;
             swap = Swap::Restart;
             fadePos = 0;
         }
@@ -310,6 +314,7 @@ void PsyBoxProcessor::applyState (const ParamState& state)
 void PsyBoxProcessor::setCategory (Category c)
 {
     if (c == category) return;
+    const PatchChange change (*this);   // the switch and, on a first visit, the new sound: one swap
     switchCategory (c);
     if (slots[(size_t) c].valid)
     {
@@ -329,7 +334,7 @@ void PsyBoxProcessor::saveSlot()
 
 void PsyBoxProcessor::switchCategory (Category c)
 {
-    beginPatchChange();
+    const PatchChange change (*this);
     saveSlot();
     category = c;
     const auto& slot = slots[(size_t) c];
@@ -393,10 +398,11 @@ void PsyBoxProcessor::generate()
 
 void PsyBoxProcessor::generateWithSeed (uint32_t s)
 {
-    beginPatchChange();
-    seed = s;
-    auto patch = generator.generate (category, seed, currentState(), locks, arpGeneration, kickKeyGeneration);
+    // the new sound first (tens of ms) while the old one plays on, then one short swap
+    auto patch = generator.generate (category, s, currentState(), locks, arpGeneration, kickKeyGeneration);
     levelPatch (patch, category, locks);   // every new patch about as loud as the last
+    const PatchChange change (*this);
+    seed = s;
     applyState (patch);
     resetMacroNames();   // a new sound: the macros are named after what they now drive
     presetName = juce::String (categoryInfo()[(size_t) category].name) + " #" + juce::String::toHexString ((int) seed).toUpperCase().paddedLeft ('0', 6);
@@ -437,9 +443,9 @@ void PsyBoxProcessor::generateArpPattern()
 
 void PsyBoxProcessor::mutate()
 {
-    beginPatchChange();
     auto patch = generator.mutate (mutateAmount, (uint32_t) random.nextInt(), currentState(), locks);
     levelPatch (patch, category, locks);
+    const PatchChange change (*this);
     applyState (patch);
     if (! presetName.endsWith ("*"))
         presetName << "*";
@@ -472,7 +478,7 @@ void PsyBoxProcessor::pushHistory()
 void PsyBoxProcessor::undo()
 {
     if (! canUndo()) return;
-    beginPatchChange();
+    const PatchChange change (*this);
     // keep manual tweaks made since the last generator action reachable via redo
     history[(size_t) historyIndex].state = currentState();
     history[(size_t) historyIndex].macros = macroNames;
@@ -491,7 +497,7 @@ void PsyBoxProcessor::undo()
 void PsyBoxProcessor::redo()
 {
     if (! canRedo()) return;
-    beginPatchChange();
+    const PatchChange change (*this);
     ++historyIndex;
     const auto& h = history[(size_t) historyIndex];
     if (h.category != category) saveSlot();
@@ -682,7 +688,7 @@ void PsyBoxProcessor::setEnergyMode (EnergyMode m)
 
 void PsyBoxProcessor::initPatch()
 {
-    beginPatchChange();
+    const PatchChange change (*this);
     applyState (ParamState());
     resetMacroNames();
     presetName = "Init";
@@ -887,7 +893,7 @@ bool PsyBoxProcessor::loadPreset (const juce::File& file)
     if (! adoptStateTag (xml.get(), apvts.state.getType()))
         return false;
     const auto tree = juce::ValueTree::fromXml (*xml);
-    beginPatchChange();
+    const PatchChange change (*this);
     ParamState s;
     for (int i = 0; i < tree.getNumChildren(); ++i)
     {
