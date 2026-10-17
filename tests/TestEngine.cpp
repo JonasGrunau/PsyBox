@@ -2,10 +2,13 @@
 #include "engine/Engine.h"
 #include "generator/Generator.h"
 
+#include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 
 #include <algorithm>
+#include <limits>
+#include <numbers>
 #include <set>
 #include <string>
 #include <tuple>
@@ -18,6 +21,7 @@ namespace
     {
         std::vector<float> l, r;
         float peak = 0.f;
+        float preClip = 0.f;   // the loudest sample before the output's soft clip (the output itself never passes 0 dBFS)
         double rmsDb = -200.0;
     };
 
@@ -59,11 +63,13 @@ namespace
             }
             e.process (out.l.data() + pos, out.r.data() + pos, n, ev.data(), (int) ev.size(), 145.0);
         }
+        // The engine replaces a NaN or infinity with silence, so the samples
+        // can't show one: its own count can.
+        REQUIRE (e.diagnostics().nonFinite == 0);
+        out.preClip = e.diagnostics().preClipPeak;
         double s = 0.0;
         for (size_t i = 0; i < out.l.size(); ++i)
         {
-            REQUIRE (std::isfinite (out.l[i]));
-            REQUIRE (std::isfinite (out.r[i]));
             out.peak = std::max ({ out.peak, std::abs (out.l[i]), std::abs (out.r[i]) });
             s += (double) out.l[i] * out.l[i];
         }
@@ -93,11 +99,13 @@ namespace
             if (off >= pos && off < pos + n) ev.push_back ({ off - pos, MidiEvent::NoteOff, note, 0.f });
             e.process (out.l.data() + pos, out.r.data() + pos, n, ev.data(), (int) ev.size(), bpm);
         }
+        // The engine replaces a NaN or infinity with silence, so the samples
+        // can't show one: its own count can.
+        REQUIRE (e.diagnostics().nonFinite == 0);
+        out.preClip = e.diagnostics().preClipPeak;
         double s = 0.0;
         for (size_t i = 0; i < out.l.size(); ++i)
         {
-            REQUIRE (std::isfinite (out.l[i]));
-            REQUIRE (std::isfinite (out.r[i]));
             out.peak = std::max ({ out.peak, std::abs (out.l[i]), std::abs (out.r[i]) });
             s += (double) out.l[i] * out.l[i];
         }
@@ -146,21 +154,38 @@ TEST_CASE ("Every category generates playable, finite, non-silent patches", "[en
             const Render out = hasLength (cat) ? hold (p, std::min (6.0, length + 1.0))
                                                : play (p, sustained ? 6.0 : 3.0, 48000.0, 256, sustained ? 40.0 : 0.6);
             INFO (categoryInfo()[(size_t) c].name << " seed " << seed << ": peak " << out.peak << " rms " << out.rmsDb << " dB");
-            CHECK (out.peak <= 1.0f);
+            CHECK (out.preClip <= 1.0f);   // leveled patches stay under 0 dBFS before the soft clip too
             CHECK (out.rmsDb > -60.0);
         }
 }
 
 TEST_CASE ("All three quality settings render the same patch", "[engine]")
 {
+    // Level and tone match the 1x render: RMS within 0.5 dB, and the energy
+    // under 15 kHz (where all three qualities agree) within 1 dB.
     Generator g;
     ParamState p = g.generate (Category::Acid, 5, ParamState(), LockSet());
+    const auto bandDb = [] (const std::vector<float>& x) {
+        const size_t n = 1 << 15;
+        std::vector<float> w (x.begin() + 4800, x.begin() + 4800 + (std::ptrdiff_t) n);
+        const auto db = testutil::spectrumDb (w, n);
+        const size_t top = (size_t) (15000.0 / (44100.0 / (double) n));
+        double e = 0.0;
+        for (size_t i = 1; i < top; ++i) e += std::pow (10.0, db[i] / 10.0);
+        return 10.0 * std::log10 (e + 1.0e-20);
+    };
+    double refRms = 0.0, refBand = 0.0;
     for (int q = 0; q < 3; ++q)
     {
         p.set (P::Quality, (float) q);
         const Render out = play (p, 1.0, 44100.0, 128);
+        const double band = bandDb (out.l);
+        if (q == 0) { refRms = out.rmsDb; refBand = band; }
+        INFO ("quality " << q << ": rms " << out.rmsDb << " dB, band " << band << " dB");
         CHECK (out.rmsDb > -50.0);
-        CHECK (out.peak <= 1.f);
+        CHECK (out.preClip <= 1.f);
+        CHECK (std::abs (out.rmsDb - refRms) < 0.5);
+        CHECK (std::abs (band - refBand) < 1.0);
     }
 }
 
@@ -178,7 +203,8 @@ TEST_CASE ("Extreme parameter fuzzing never produces NaN or runaway output", "[e
         }
         p.set (P::Quality, (float) (trial % 3));
         const Render out = play (p, 1.0);
-        CHECK (out.peak <= 1.f);
+        INFO ("trial " << trial);
+        CHECK (out.preClip < 16.f);   // +24 dBFS: loud is allowed, a runaway is not
     }
 }
 
@@ -620,6 +646,12 @@ TEST_CASE ("Unison spreads an oscillator in stereo at the same loudness", "[engi
         p.set (P::OscARetrig, 0.f);
         return hold (p, 1.0);
     };
+    // loudness over both channels (the left alone says nothing about a spread)
+    const auto totalDb = [] (const Render& r) {
+        double s = 0.0;
+        for (size_t i = 0; i < r.l.size(); ++i) s += (double) r.l[i] * r.l[i] + (double) r.r[i] * r.r[i];
+        return 10.0 * std::log10 (s / (double) (2 * r.l.size()) + 1e-20);
+    };
     const auto sideDb = [] (const Render& r) {
         double side = 0.0, mid = 0.0;
         for (size_t i = 0; i < r.l.size(); ++i)
@@ -640,8 +672,9 @@ TEST_CASE ("Unison spreads an oscillator in stereo at the same loudness", "[engi
         CHECK (sideDb (one) < -100.0);       // one voice: mono
         CHECK (sideDb (narrow) < -100.0);    // no width: mono
         CHECK (sideDb (wide) > -15.0);       // spread: a real stereo image
-        CHECK (std::abs (wide.rmsDb - one.rmsDb) < 3.0);
-        CHECK (std::abs (narrow.rmsDb - one.rmsDb) < 3.0);
+        // measured: within 1.0 dB (analog), 1.8 dB (wavetable, FM: the detuned copies only add up in power)
+        CHECK (std::abs (totalDb (wide) - totalDb (one)) < 2.0);
+        CHECK (std::abs (totalDb (narrow) - totalDb (one)) < 2.0);
     }
 
     // the supersaw is its own unison: the count changes nothing
@@ -737,7 +770,7 @@ TEST_CASE ("Reverse Bass stays in its references' family and varies from patch t
         std::vector<std::complex<double>> a (1 << 14);
         const auto from = (size_t) (0.7 * beat * fs);
         for (size_t i = 0; i < a.size(); ++i)
-            a[i] = (from + i < out.l.size() ? out.l[from + i] : 0.f) * (0.5 - 0.5 * std::cos (2.0 * M_PI * (double) i / (double) a.size()));
+            a[i] = (from + i < out.l.size() ? out.l[from + i] : 0.f) * (0.5 - 0.5 * std::cos (2.0 * std::numbers::pi * (double) i / (double) a.size()));
         testutil::fft (a);
         double hi = 0.0, all = 0.0;
         for (size_t i = 1; i < a.size() / 2; ++i)
@@ -846,7 +879,7 @@ TEST_CASE ("Reverse Sub matches its reference shots: a swell from silence, a hel
         // the tone: a warm sine falling, a band-passed saw rising
         std::vector<std::complex<double>> a (1 << 16);
         const auto from = (size_t) (0.3 * beat * fs), n = (size_t) (0.2 * beat * fs);
-        for (size_t i = 0; i < n; ++i) a[i] = out.l[from + i] * (0.5 - 0.5 * std::cos (2.0 * M_PI * (double) i / (double) n));
+        for (size_t i = 0; i < n; ++i) a[i] = out.l[from + i] * (0.5 - 0.5 * std::cos (2.0 * std::numbers::pi * (double) i / (double) n));
         testutil::fft (a);
         const double f0 = held;
         const auto level = [&] (double f) {
@@ -916,7 +949,7 @@ TEST_CASE ("Jilax shots end at their length with the key held, wide and without 
         std::vector<std::complex<double>> a (1 << 14);
         const auto from = (size_t) (0.02 * fs);
         for (size_t i = 0; i < a.size(); ++i)
-            a[i] = (from + i < mid.size() ? mid[from + i] : 0.f) * (0.5 - 0.5 * std::cos (2.0 * M_PI * (double) i / (double) a.size()));
+            a[i] = (from + i < mid.size() ? mid[from + i] : 0.f) * (0.5 - 0.5 * std::cos (2.0 * std::numbers::pi * (double) i / (double) a.size()));
         testutil::fft (a);
         double low = 0.0, all = 0.0;
         for (size_t i = 1; i < a.size() / 2; ++i)
@@ -1069,4 +1102,793 @@ TEST_CASE ("A retriggered mono note starts as cleanly as a fresh voice", "[engin
     for (int b = 0; b < 4; ++b) e.process (l.data(), r.data(), 48, nullptr, 0, 145.0);
     CHECK (e.activeVoices() == 1);
     CHECK (tailPeak (p, { { on (48) }, { on (55) }, { on (48) }, {}, { off (48) }, { off (55) } }) < 1e-4f);
+}
+
+// ---------------------------------------------------------------------------
+// Review fixes: modulation that doesn't depend on the host's block size, clean
+// hand-overs, what the stress tests really measure
+// ---------------------------------------------------------------------------
+
+namespace psy
+{
+    // Lets a test reach into the engine to break something on purpose.
+    struct EngineTestAccess
+    {
+        static Voice& voice (Engine& e, size_t i) { return e.voices[i]; }
+        static void poisonLevel (Voice& v) { v.level1 = std::numeric_limits<float>::quiet_NaN(); }
+    };
+} // namespace psy
+
+namespace
+{
+    struct Stereo { std::vector<float> l, r; };
+
+    // Renders `total` samples in blocks of `block`. `events` carry absolute
+    // sample positions; `changes` give the patch from the block that holds
+    // that sample on.
+    Stereo renderBlocks (const ParamState& p, int total, int block, const std::vector<MidiEvent>& events,
+                         const std::vector<std::pair<int, ParamState>>& changes = {}, double fs = 48000.0, Engine* use = nullptr)
+    {
+        Engine local;
+        Engine& e = use != nullptr ? *use : local;
+        e.setParams (p);
+        e.prepare (fs, block);
+        Stereo out { std::vector<float> ((size_t) total), std::vector<float> ((size_t) total) };
+        for (int pos = 0; pos < total; pos += block)
+        {
+            const int n = std::min (block, total - pos);
+            for (const auto& [at, st] : changes)
+                if (at >= pos && at < pos + n)
+                    e.setParams (st);
+            std::vector<MidiEvent> ev;
+            for (auto m : events)
+                if (m.offset >= pos && m.offset < pos + n)
+                {
+                    m.offset -= pos;
+                    ev.push_back (m);
+                }
+            e.process (out.l.data() + pos, out.r.data() + pos, n, ev.data(), (int) ev.size(), 145.0);
+        }
+        return out;
+    }
+
+    MidiEvent noteAt (int sample, int note, float vel = 0.8f) { return { sample, MidiEvent::NoteOn, note, vel }; }
+    MidiEvent offAt (int sample, int note) { return { sample, MidiEvent::NoteOff, note, 0.f }; }
+
+    // How far `b` is from `a` in dB below `a`'s power (over the samples from `from`).
+    double diffDb (const std::vector<float>& a, const std::vector<float>& b, size_t from = 0)
+    {
+        double d = 0.0, s = 0.0;
+        for (size_t i = from; i < a.size(); ++i)
+        {
+            d += ((double) a[i] - b[i]) * ((double) a[i] - b[i]);
+            s += (double) a[i] * a[i];
+        }
+        return 10.0 * std::log10 ((d + 1.0e-30) / (s + 1.0e-30));
+    }
+
+    double powerDb (const std::vector<float>& x, size_t from, size_t to)
+    {
+        double s = 0.0;
+        for (size_t i = from; i < std::min (to, x.size()); ++i) s += (double) x[i] * x[i];
+        return 10.0 * std::log10 (s / (double) std::max<size_t> (1, to - from) + 1.0e-20);
+    }
+
+    float maxStepOf (const std::vector<float>& x, size_t from, size_t to)
+    {
+        float m = 0.f;
+        for (size_t i = std::max<size_t> (1, from); i < std::min (to, x.size()); ++i)
+            m = std::max (m, std::abs (x[i] - x[i - 1]));
+        return m;
+    }
+
+    // A clean sustained sine: nothing but the engine's own gain moves it.
+    ParamState sinePatch()
+    {
+        ParamState p;
+        p.set (P::OscAShape, 0.f);
+        p.set (P::F1Type, 0.f);
+        p.set (P::AenvA, 0.f);
+        p.set (P::AenvS, 1.f);
+        p.set (P::AenvR, 20.f);
+        p.set (P::MasterVol, -6.f);
+        return p;
+    }
+
+    ParamState phosBase()
+    {
+        ParamState p;
+        p.set (P::EngineMode, (float) EngineMode::Phoscyon);
+        p.set (P::MasterVol, 0.f);
+        p.set (P::PhosDistOn, 0.f);
+        p.set (P::PhosEqOn, 0.f);
+        p.set (P::PhosChoOn, 0.f);
+        p.set (P::PhosDlyOn, 0.f);
+        p.set (P::PhosRevOn, 0.f);
+        p.set (P::PhosLimOn, 0.f);
+        p.set (P::PhosCutoff, 0.35f);
+        p.set (P::PhosReso, 0.4f);
+        p.set (P::PhosEnvMod, 0.2f);
+        return p;
+    }
+} // namespace
+
+TEST_CASE ("Static patches render the same bits whatever the block size", "[engine][blocks]")
+{
+    ParamState p;
+    p.set (P::DistOn, 1.f);
+    p.set (P::ChorusOn, 1.f);
+    p.set (P::DelayOn, 1.f);
+    p.set (P::ReverbOn, 1.f);
+    p.set (P::OscAUnison, 5.f);
+    p.set (P::AenvR, 100.f);
+    const std::vector<MidiEvent> ev { noteAt (0, 48), offAt(18000, 48) };
+    const auto ref = renderBlocks (p, 36000, 4096, ev);
+    for (int block : { 1, 7, 64 })
+    {
+        const auto x = renderBlocks (p, 36000, block, ev);
+        INFO ("block " << block);
+        CHECK (x.l == ref.l);
+        CHECK (x.r == ref.r);
+    }
+}
+
+TEST_CASE ("The 303 follows an LFO sample by sample, not once per host block", "[engine][blocks][phoscyon]")
+{
+    // The global LFO buffer was read at index 0 of every chunk: blocks of
+    // 1024 updated the cutoff once per block (-2.9 dB against blocks of 16).
+    ParamState p = phosBase();
+    p.set (P::Lfo1Shape, 0.f);
+    p.set (P::Lfo1Rate, 9.f);
+    p.set (P::Lfo1Retrig, 0.f);
+    p.set (P::Mod1Src, (float) ModSrc::Lfo1);
+    p.set (P::Mod1Dst, (float) ModDst::PhosCutoff);
+    p.set (P::Mod1Amt, 0.9f);
+    const std::vector<MidiEvent> ev { noteAt (0, 45) };
+    const auto ref = renderBlocks (p, 48000, 16, ev);
+    for (int block : { 64, 1024 })
+    {
+        const auto x = renderBlocks (p, 48000, block, ev);
+        INFO ("block " << block << ": " << diffDb (ref.l, x.l) << " dB");
+        CHECK (diffDb (ref.l, x.l) < -60.0);
+    }
+    // chunks that start elsewhere sample the LFO elsewhere: close, not identical
+    CHECK (diffDb (ref.l, renderBlocks (p, 48000, 7, ev).l) < -35.0);
+}
+
+TEST_CASE ("Effects follow per-voice envelopes and LFOs the same at any block size", "[engine][blocks][fx]")
+{
+    // The effects read the newest voice's sources as they were at the end of
+    // the block: Env -> Drive in blocks of 1024 differed from blocks of 32
+    // by -3.3 dB. Now each 32-sample slice reads the value at its own samples.
+    ParamState p;
+    p.set (P::DistOn, 1.f);
+    p.set (P::DistDrive, def (P::DistDrive).toPlain (0.35f));
+    p.set (P::DistMix, def (P::DistMix).toPlain (0.7f));
+    p.set (P::AenvA, 5.f);
+    p.set (P::AenvD, 150.f);
+    p.set (P::AenvS, 0.3f);
+    p.set (P::AenvR, 100.f);
+    p.set (P::Lfo1Shape, 0.f);
+    p.set (P::Lfo1Rate, 7.f);
+    p.set (P::Lfo1Retrig, 0.f);
+    p.set (P::Mod1Src, (float) ModSrc::AmpEnv);
+    p.set (P::Mod1Dst, (float) ModDst::DistDrive);
+    p.set (P::Mod1Amt, 0.6f);
+    p.set (P::Mod2Src, (float) ModSrc::Lfo1);
+    p.set (P::Mod2Dst, (float) ModDst::DistMix);
+    p.set (P::Mod2Amt, 0.4f);
+    const std::vector<MidiEvent> ev { noteAt (0, 48), offAt (24000, 48) };
+    // the effects refresh every 32 samples counted across blocks, so every
+    // block layout sees the same values at the same samples
+    const auto ref = renderBlocks (p, 36000, 32, ev);
+    for (int block : { 1, 7, 16, 64, 1024, 4096 })
+    {
+        const auto x = renderBlocks (p, 36000, block, ev);
+        INFO ("block " << block << ": " << diffDb (ref.l, x.l) << " dB");
+        CHECK (diffDb (ref.l, x.l) < -60.0);
+    }
+
+    // the distortion later in the chain, and the 303's own envelopes into its effects
+    ParamState q = phosBase();
+    q.set (P::PhosDistOn, 1.f);
+    q.set (P::Mod1Src, (float) ModSrc::AmpEnv);
+    q.set (P::Mod1Dst, (float) ModDst::PhosDistDrive);
+    q.set (P::Mod1Amt, 0.7f);
+    const std::vector<MidiEvent> pev { noteAt (0, 45), offAt (12000, 45) };
+    const auto pref = renderBlocks (q, 24000, 32, pev);
+    for (int block : { 1, 7, 1024 })
+    {
+        INFO ("303, block " << block);
+        CHECK (diffDb (pref.l, renderBlocks (q, 24000, block, pev).l) < -60.0);
+    }
+}
+
+TEST_CASE ("A macro on a free-running LFO's rate changes it, and a voice's LFO rate ignores the block size", "[engine][blocks][lfo]")
+{
+    // Retrig off: one LFO for every voice, which ignored its Rate targets
+    // (the macros labelled "LFO 3 Rate" did nothing).
+    ParamState p;
+    p.set (P::F1Type, (float) FilterType::LP12);
+    p.set (P::F1Cutoff, 900.f);
+    p.set (P::AenvS, 1.f);
+    p.set (P::Lfo1Shape, 0.f);
+    p.set (P::Lfo1Rate, 2.f);
+    p.set (P::Lfo1Retrig, 0.f);
+    p.set (P::Mod1Src, (float) ModSrc::Lfo1);
+    p.set (P::Mod1Dst, (float) ModDst::F1Cutoff);
+    p.set (P::Mod1Amt, 0.8f);
+    p.set (P::Mod2Src, (float) ModSrc::Macro1);
+    p.set (P::Mod2Dst, (float) ModDst::Lfo1Rate);
+    p.set (P::Mod2Amt, 1.f);
+    const std::vector<MidiEvent> ev { noteAt (0, 40) };
+    p.set (P::Macro1, 0.f);
+    const auto slow = renderBlocks (p, 48000, 256, ev);
+    p.set (P::Macro1, 1.f);
+    const auto fast = renderBlocks (p, 48000, 256, ev);
+    CHECK (diffDb (slow.l, fast.l, 12000) > -15.0);
+
+    // the same LFO per voice (Retrig on): its rate offset carries over from
+    // chunk to chunk, so the chunking doesn't matter
+    p.set (P::Lfo1Retrig, 1.f);
+    p.set (P::Macro1, 0.5f);
+    const auto ref = renderBlocks (p, 24000, 1024, ev);
+    for (int block : { 1, 7, 100 })
+    {
+        const auto x = renderBlocks (p, 24000, block, ev);
+        INFO ("block " << block << ": " << diffDb (ref.l, x.l) << " dB");
+        CHECK (diffDb (ref.l, x.l) < -60.0);
+    }
+
+    // and in Phoscyon mode, where every LFO is a free one
+    ParamState q = phosBase();
+    q.set (P::Lfo1Shape, 0.f);
+    q.set (P::Lfo1Rate, 2.f);
+    q.set (P::Mod1Src, (float) ModSrc::Lfo1);
+    q.set (P::Mod1Dst, (float) ModDst::PhosCutoff);
+    q.set (P::Mod1Amt, 0.9f);
+    q.set (P::Mod2Src, (float) ModSrc::Macro1);
+    q.set (P::Mod2Dst, (float) ModDst::Lfo1Rate);
+    q.set (P::Mod2Amt, 1.f);
+    const std::vector<MidiEvent> pev { noteAt (0, 45) };
+    q.set (P::Macro1, 0.f);
+    const auto pslow = renderBlocks (q, 48000, 256, pev);
+    q.set (P::Macro1, 1.f);
+    const auto pfast = renderBlocks (q, 48000, 256, pev);
+    CHECK (diffDb (pslow.l, pfast.l, 12000) > -15.0);
+}
+
+TEST_CASE ("Volume and Level moves ramp across the block instead of stepping at its edge", "[engine][click]")
+{
+    // -6 -> -30 dB: the smoothed value at the end of a 1024-sample block
+    // was applied to the whole next block, a 14 dB step at the block edge.
+    ParamState p = sinePatch();
+    ParamState quiet = p;
+    quiet.set (P::MasterVol, -30.f);
+    const std::vector<MidiEvent> ev { noteAt (0, 36) };
+    const auto x = renderBlocks (p, 48000, 1024, ev, { { 24000, quiet } });
+    const float steady = maxStepOf (x.l, 12000, 23000);
+    REQUIRE (steady > 0.f);
+    CHECK (maxStepOf (x.l, 23000, 40000) < 1.5f * steady);
+}
+
+TEST_CASE ("A quality change mid-note fades the voices out instead of cutting them", "[engine][click]")
+{
+    ParamState p = sinePatch();
+    ParamState other = p;
+    other.set (P::Quality, 2.f);
+    const std::vector<MidiEvent> ev { noteAt (0, 36) };
+    for (int from : { 1, 2, 0 })
+    {
+        p.set (P::Quality, (float) from);
+        other.set (P::Quality, (float) (from == 2 ? 0 : 2));
+        const auto x = renderBlocks (p, 24000, 256, ev, { { 12000, other } });
+        const float steady = maxStepOf (x.l, 6000, 11000);
+        INFO ("quality " << from << " -> " << (from == 2 ? 0 : 2));
+        REQUIRE (steady > 0.f);
+        CHECK (maxStepOf (x.l, 11500, 14000) < 2.f * steady);
+    }
+    // nothing sounding: it switches at once
+    Engine e;
+    ParamState idle;
+    e.setParams (idle);
+    e.prepare (48000.0, 256);
+    const int before = e.latencySamples();
+    idle.set (P::Quality, 2.f);
+    e.setParams (idle);
+    std::vector<float> l (256), r (256);
+    e.process (l.data(), r.data(), 256, nullptr, 0, 120.0);
+    CHECK (e.latencySamples() != before);
+}
+
+TEST_CASE ("The 303's Amp modulation moves per sample", "[engine][click][phoscyon]")
+{
+    // The Amp target arrived per chunk after the voice's own smoothing: a
+    // level step landed in one sample.
+    ParamState p = phosBase();
+    p.set (P::PhosCutoff, 0.15f);
+    p.set (P::PhosReso, 0.f);
+    const auto s = PhosSettings::from (p);
+    PhosVoice v;
+    v.prepare (48000.f, 96000.f);
+    v.trigger (33, false, s);
+    std::vector<float> l (96000, 0.f);
+    PhosMods m;
+    const int chunks = 3000 / 16;
+    for (int c = 0; c < chunks; ++c)
+    {
+        m.level = c < chunks / 2 ? 1.f : 0.25f;
+        v.render (l.data(), nullptr, c * 16, 16, s, m);
+    }
+    const size_t mid = (size_t) (chunks / 2) * 32;
+    const float steady = maxStepOf (l, mid - 1500, mid - 10);
+    REQUIRE (steady > 0.f);
+    CHECK (maxStepOf (l, mid - 10, mid + 400) < 3.f * steady);
+}
+
+TEST_CASE ("A mono fallback and an arp hand-over keep the velocity of the held note", "[engine][notes]")
+{
+    // Both used a fixed velocity (0.8, and 1.0 or 0.8 for the arp).
+    ParamState p = sinePatch();
+    p.set (P::VelSens, 1.f);
+    p.set (P::VoiceMode, (float) VoiceMode::Mono);
+    p.set (P::MasterVol, 0.f);
+    const auto level = [] (const Stereo& x) { return powerDb (x.l, 36000, 42000); };
+    const double reference = level (renderBlocks (p, 48000, 256, { noteAt (0, 60, 0.25f) }));
+    const double fallback = level (renderBlocks (p, 48000, 256, { noteAt (0, 60, 0.25f), noteAt (9600, 64, 1.f), offAt (19200, 64) }));
+    INFO ("reference " << reference << " dB, fallback " << fallback << " dB");
+    CHECK (std::abs (fallback - reference) < 1.0);
+
+    ParamState arp = p;
+    arp.set (P::VoiceMode, (float) VoiceMode::Poly);
+    ParamState off = arp;
+    arp.set (P::ArpOn, 1.f);
+    const double handed = level (renderBlocks (arp, 48000, 256, { noteAt (0, 60, 0.25f) }, { { 24000, off } }));
+    INFO ("arp off: " << handed << " dB");
+    CHECK (std::abs (handed - reference) < 1.0);
+}
+
+TEST_CASE ("The first note after a reset starts on its pitch, and free LFOs start from their phase", "[engine][notes]")
+{
+    ParamState p;
+    p.set (P::OscAShape, 0.f);
+    p.set (P::F1Type, 0.f);
+    p.set (P::VoiceMode, (float) VoiceMode::Poly);
+    p.set (P::Glide, 400.f);
+    p.set (P::GlideMode, 0.f);   // glide always
+    p.set (P::AenvA, 0.f);
+    p.set (P::AenvS, 1.f);
+    p.set (P::AenvR, 10.f);
+    Engine e;
+    e.setParams (p);
+    e.prepare (48000.0, 256);
+    std::vector<float> l (4096), r (4096);
+    MidiEvent on { 0, MidiEvent::NoteOn, 36, 0.8f }, off { 0, MidiEvent::NoteOff, 36, 0.f };
+    e.process (l.data(), r.data(), 256, &on, 1, 120.0);
+    e.process (l.data(), r.data(), 256, nullptr, 0, 120.0);
+    e.process (l.data(), r.data(), 256, &off, 1, 120.0);
+    for (int b = 0; b < 20; ++b) e.process (l.data(), r.data(), 256, nullptr, 0, 120.0);
+    e.reset();
+    const MidiEvent high { 0, MidiEvent::NoteOn, 72, 0.8f };
+    e.process (l.data(), r.data(), 4096, &high, 1, 120.0);
+    const double hz = testutil::peakFrequency (l, 48000.0, 4096);
+    INFO (hz << " Hz");
+    CHECK (std::abs (hz - 523.25) < 0.03 * 523.25);   // it used to glide up from the note before the swap
+
+    ParamState q;
+    q.set (P::Lfo1Shape, 0.f);
+    q.set (P::Lfo1Rate, 2.f);
+    q.set (P::Lfo1Retrig, 0.f);
+    q.set (P::Lfo1Phase, 0.5f);
+    q.set (P::AenvS, 1.f);
+    Engine f;
+    f.setParams (q);
+    f.prepare (48000.0, 256);
+    const MidiEvent n60 { 0, MidiEvent::NoteOn, 60, 0.8f };
+    f.process (l.data(), r.data(), 256, &n60, 1, 120.0);
+    for (int b = 0; b < 206; ++b) f.process (l.data(), r.data(), 256, nullptr, 0, 120.0);   // 1.1 s: the LFO is well on
+    f.reset();
+    f.process (l.data(), r.data(), 16, &n60, 1, 120.0);
+    ModView view;
+    f.getModView (view);
+    REQUIRE (view.numVoices == 1);
+    CHECK (view.voices[0].lfo[0] == Catch::Approx (0.5f).margin (0.02f));
+}
+
+TEST_CASE ("A synced free LFO stays on the bar while the host plays", "[engine][lfo]")
+{
+    int quarter = -1;
+    for (int i = 0; i < 32; ++i)
+        if (syncDivBeats (i) == 1.f) { quarter = i; break; }
+    REQUIRE (quarter >= 0);
+    ParamState p;
+    p.set (P::Lfo1Shape, 0.f);
+    p.set (P::Lfo1Sync, 1.f);
+    p.set (P::Lfo1Div, (float) quarter);
+    p.set (P::Lfo1Retrig, 0.f);
+    p.set (P::Lfo1Phase, 0.25f);
+    p.set (P::AenvS, 1.f);
+    Engine e;
+    e.setParams (p);
+    e.prepare (48000.0, 512);
+    std::vector<float> l (512), r (512);
+    const double spb = 24000.0;   // 120 BPM
+    const MidiEvent on { 0, MidiEvent::NoteOn, 60, 0.8f };
+    double ppq = 0.0;
+    const auto phaseNow = [&] {
+        ModView v;
+        e.getModView (v);
+        return v.numVoices > 0 ? std::fmod (v.voices[0].lfo[0], 1.f) : -1.f;
+    };
+    const auto expectedNow = [&] {
+        const double c = ppq + 512.0 / spb + 0.25;   // a one-beat cycle
+        return (float) (c - std::floor (c));
+    };
+    const auto close = [] (float a, float b) {
+        float d = std::abs (a - b);
+        return std::min (d, 1.f - d) < 0.01f;
+    };
+    e.process (l.data(), r.data(), 512, &on, 1, Transport { 120.0, ppq, true });
+    CHECK (close (phaseNow(), expectedNow()));
+    // the host jumps: a seek lands the LFO where the bar says
+    for (double jump : { 100.3, 7.77, 0.4 })
+    {
+        ppq = jump;
+        e.process (l.data(), r.data(), 512, nullptr, 0, Transport { 120.0, ppq, true });
+        INFO ("seek to " << jump);
+        CHECK (close (phaseNow(), expectedNow()));
+        for (int b = 0; b < 20; ++b)
+        {
+            ppq += 512.0 / spb;
+            e.process (l.data(), r.data(), 512, nullptr, 0, Transport { 120.0, ppq, true });
+        }
+        CHECK (close (phaseNow(), expectedNow()));
+    }
+}
+
+TEST_CASE ("The mod wheel is smoothed instead of stepping a cutoff", "[engine][click]")
+{
+    ParamState p;
+    p.set (P::F1Type, (float) FilterType::LP12);
+    p.set (P::F1Cutoff, 500.f);
+    p.set (P::AenvS, 1.f);
+    p.set (P::Mod1Src, (float) ModSrc::ModWheel);
+    p.set (P::Mod1Dst, (float) ModDst::F1Cutoff);
+    p.set (P::Mod1Amt, 0.5f);   // 4 octaves at the top
+    Engine e;
+    e.setParams (p);
+    e.prepare (48000.0, 48);
+    std::vector<float> l (48), r (48);
+    const MidiEvent on { 0, MidiEvent::NoteOn, 48, 0.8f }, wheel { 0, MidiEvent::Controller, 1, 1.f };
+    e.process (l.data(), r.data(), 48, &on, 1, 120.0);
+    for (int b = 0; b < 10; ++b) e.process (l.data(), r.data(), 48, nullptr, 0, 120.0);
+    const auto octaves = [&] {
+        ModView v;
+        e.getModView (v);
+        return std::log2 (v.voices[0].filter[0].cutoff / 500.f);
+    };
+    CHECK (octaves() == Catch::Approx (0.0).margin (0.01));
+    e.process (l.data(), r.data(), 48, &wheel, 1, 120.0);   // 1 ms after the step
+    const double soon = octaves();
+    CHECK (soon < 1.2);       // a quarter of the way at most (it was all 4 octaves at once)
+    CHECK (soon > 0.05);
+    for (int b = 0; b < 40; ++b) e.process (l.data(), r.data(), 48, nullptr, 0, 120.0);   // 40 ms later
+    CHECK (octaves() > 3.8);
+}
+
+TEST_CASE ("A unison stack that stops spreading hands the right channel over smoothly", "[engine][click][unison]")
+{
+    // The right channel ran its own filters; with the spread gone it jumped
+    // to a copy of the left in one sample.
+    ParamState p;
+    p.set (P::OscAUnison, 5.f);
+    p.set (P::OscAUniWidth, 1.f);
+    p.set (P::OscAUniRange, 12.f);
+    p.set (P::F1Type, (float) FilterType::LP12);
+    p.set (P::F1Cutoff, 400.f);
+    p.set (P::F1Reso, 0.4f);
+    p.set (P::AenvS, 1.f);
+    p.set (P::MasterVol, 0.f);
+    ParamState mono = p;
+    mono.set (P::OscAUnison, 1.f);
+    const auto x = renderBlocks (p, 24000, 256, { noteAt (0, 40) }, { { 12032, mono } });
+    const float steady = maxStepOf (x.r, 6000, 11000);
+    REQUIRE (steady > 0.f);
+    INFO ("steady " << steady << ", across the switch " << maxStepOf (x.r, 12000, 12700));
+    CHECK (maxStepOf (x.r, 12000, 12700) < 2.f * steady);   // the old hand-over jumped 12x
+}
+
+TEST_CASE ("The Phoscyon limiter reports its lookahead and starts empty when it comes back on", "[engine][phoscyon]")
+{
+    ParamState p = phosBase();
+    p.set (P::AenvR, 5.f);
+    p.set (P::PhosLimThresh, 0.f);
+    p.set (P::PhosLimGain, 0.f);
+    p.set (P::PhosLimClip, 0.f);
+    const std::vector<MidiEvent> ev { noteAt (2000, 45), offAt (6000, 45) };
+    const auto firstSound = [] (const Stereo& x) {
+        for (size_t i = 0; i < x.l.size(); ++i)
+            if (std::abs (x.l[i]) > 0.003f) return (int) i;
+        return -1;
+    };
+    Engine offEngine, onEngine;
+    ParamState on = p;
+    on.set (P::PhosLimOn, 1.f);
+    const auto a = renderBlocks (p, 8000, 128, ev, {}, 48000.0, &offEngine);
+    const auto b = renderBlocks (on, 8000, 128, ev, {}, 48000.0, &onEngine);
+    const int lookahead = (int) std::lround (dsp::PhosLimiter::lookaheadMs * 0.001 * 48000.0);
+    REQUIRE (firstSound (a) > 0);
+    CHECK (onEngine.latencySamples() - offEngine.latencySamples() == lookahead);
+    CHECK (firstSound (b) - firstSound (a) == lookahead);
+
+    // off while a note sounds, back on in silence: no 3.3 ms of the old note
+    ParamState lim = p;
+    lim.set (P::PhosLimOn, 1.f);
+    const std::vector<MidiEvent> long_ { noteAt (0, 45), offAt (9000, 45) };
+    const auto y = renderBlocks (lim, 36000, 128, long_, { { 4800, p }, { 24000, lim } });
+    CHECK (powerDb (y.l, 24000, 25000) < -90.0);
+}
+
+// ---------------------------------------------------------------------------
+// Ids, event positions, sample rates and qualities
+// ---------------------------------------------------------------------------
+
+namespace
+{
+    // Every parameter id in table order. The ids are the save format: a renamed or
+    // moved one drops what presets and hosts stored under it, so this list is
+    // the contract (append new ids at the end of the table and of this list).
+    constexpr const char* kGoldenIds[] = {
+        "master_vol", "patch_gain", "voice_mode", "poly_voices", "glide", "glide_mode", "bend_range", "accent",
+        "octave", "vel_sens", "quality", "oscA_on", "oscA_type", "oscA_shape", "oscA_pw", "oscA_coarse", "oscA_fine",
+        "oscA_level", "oscA_detune", "oscA_wt", "oscA_wtpos", "oscA_fmratio", "oscA_fm", "oscA_fmfb", "oscA_retrig",
+        "oscA_unison", "oscA_blend", "oscA_uni_width", "oscA_uni_range", "oscA_uni_mode", "oscA_uni_stack",
+        "oscA_uni_spread", "oscB_on", "oscB_type", "oscB_shape", "oscB_pw", "oscB_coarse", "oscB_fine", "oscB_level",
+        "oscB_detune", "oscB_wt", "oscB_wtpos", "oscB_fmratio", "oscB_fm", "oscB_fmfb", "oscB_retrig", "oscB_sync",
+        "oscB_xmod", "oscB_unison", "oscB_blend", "oscB_uni_width", "oscB_uni_range", "oscB_uni_mode",
+        "oscB_uni_stack", "oscB_uni_spread", "sub_level", "sub_oct", "sub_shape", "noise_level", "noise_type",
+        "noise_direct", "ring_level", "penv_amt", "penv_attack", "penv_decay", "penv_curve", "penv_dest", "f1_type",
+        "f1_cutoff", "f1_reso", "f1_drive", "f1_env", "f1_key", "f1_vowel", "f2_type", "f2_cutoff", "f2_reso",
+        "f2_drive", "f2_env", "f2_key", "f_routing", "aenv_a", "aenv_d", "aenv_s", "aenv_r", "aenv_curve",
+        "aenv_start", "fenv_a", "fenv_d", "fenv_s", "fenv_r", "menv_a", "menv_d", "menv_s", "menv_r", "lfo1_shape",
+        "lfo1_rate", "lfo1_sync", "lfo1_div", "lfo1_retrig", "lfo1_phase", "lfo2_shape", "lfo2_rate", "lfo2_sync",
+        "lfo2_div", "lfo2_retrig", "lfo2_phase", "lfo3_shape", "lfo3_rate", "lfo3_sync", "lfo3_div", "lfo3_retrig",
+        "lfo3_phase", "mod1_src", "mod1_dst", "mod1_amt", "mod2_src", "mod2_dst", "mod2_amt", "mod3_src", "mod3_dst",
+        "mod3_amt", "mod4_src", "mod4_dst", "mod4_amt", "mod5_src", "mod5_dst", "mod5_amt", "mod6_src", "mod6_dst",
+        "mod6_amt", "mod7_src", "mod7_dst", "mod7_amt", "mod8_src", "mod8_dst", "mod8_amt", "mod9_src", "mod9_dst",
+        "mod9_amt", "mod10_src", "mod10_dst", "mod10_amt", "mod11_src", "mod11_dst", "mod11_amt", "mod12_src",
+        "mod12_dst", "mod12_amt", "mod13_src", "mod13_dst", "mod13_amt", "mod14_src", "mod14_dst", "mod14_amt",
+        "mod15_src", "mod15_dst", "mod15_amt", "mod16_src", "mod16_dst", "mod16_amt", "macro1", "macro2", "macro3",
+        "macro4", "dist_on", "dist_type", "dist_drive", "dist_tone", "dist_mix", "dist_lowcut", "dist_auto",
+        "crush_on", "crush_bits", "crush_rate", "crush_mix", "fshift_on", "fshift_hz", "fshift_fb", "fshift_spread",
+        "fshift_mix", "phaser_on", "phaser_rate", "phaser_depth", "phaser_fb", "phaser_center", "phaser_mix",
+        "chorus_on", "chorus_mode", "chorus_rate", "chorus_depth", "chorus_fb", "chorus_mix", "delay_on",
+        "delay_sync", "delay_div", "delay_ms", "delay_fb", "delay_ping", "delay_lowcut", "delay_highcut", "delay_mix",
+        "reverb_on", "reverb_size", "reverb_decay", "reverb_damp", "reverb_pre", "reverb_mix", "comp_on", "comp_mode",
+        "comp_thresh", "comp_ratio", "comp_knee", "comp_attack", "comp_release", "comp_mix", "comp_out", "comp_down",
+        "comp_up", "mb_xlow", "mb_xhigh", "mb_low_down", "mb_mid_down", "mb_high_down", "mb_low_up", "mb_mid_up",
+        "mb_high_up", "mb_low_gain", "mb_mid_gain", "mb_high_gain", "width_on", "width_amount", "width_stereo",
+        "width_time", "width_mono", "fx_order", "energy_mode", "energy_bars", "energy_sec", "energy_curve",
+        "energy_delay", "energy_fade", "energy_cut", "energy_oneshot", "arp_on", "arp_mode", "arp_div", "arp_oct",
+        "arp_gate", "arp_swing", "arp_hold", "arp_length", "arp_key", "arp_scale", "arp_step1", "arp_acc1",
+        "arp_slide1", "arp_note1", "arp_step2", "arp_acc2", "arp_slide2", "arp_note2", "arp_step3", "arp_acc3",
+        "arp_slide3", "arp_note3", "arp_step4", "arp_acc4", "arp_slide4", "arp_note4", "arp_step5", "arp_acc5",
+        "arp_slide5", "arp_note5", "arp_step6", "arp_acc6", "arp_slide6", "arp_note6", "arp_step7", "arp_acc7",
+        "arp_slide7", "arp_note7", "arp_step8", "arp_acc8", "arp_slide8", "arp_note8", "arp_step9", "arp_acc9",
+        "arp_slide9", "arp_note9", "arp_step10", "arp_acc10", "arp_slide10", "arp_note10", "arp_step11", "arp_acc11",
+        "arp_slide11", "arp_note11", "arp_step12", "arp_acc12", "arp_slide12", "arp_note12", "arp_step13",
+        "arp_acc13", "arp_slide13", "arp_note13", "arp_step14", "arp_acc14", "arp_slide14", "arp_note14",
+        "arp_step15", "arp_acc15", "arp_slide15", "arp_note15", "arp_step16", "arp_acc16", "arp_slide16",
+        "arp_note16", "engine_mode", "kick_tune", "kick_keytrack", "kick_start", "kick_snap", "kick_knee",
+        "kick_sweep", "kick_attack", "kick_hold", "kick_decay", "kick_punch", "kick_punch_len", "kick_click_type",
+        "kick_click_level", "kick_click_decay", "kick_click_tone", "kick_drive_type", "kick_drive", "kick_tone",
+        "phos_wave", "phos_tune", "phos_cutoff", "phos_reso", "phos_envmod", "phos_decay", "phos_accent",
+        "phos_slide", "phos_sweep", "phos_env_attack", "phos_acc_decay", "phos_acc_vol", "phos_vib_speed",
+        "phos_vib_depth", "phos_reso_couple", "phos_acc_couple", "phos_tm3", "phos_c21", "phos_acc_fenv",
+        "phos_acc_aenv", "phos_c13", "phos_tm5", "phos_pw_shift", "phos_clicks", "phos_noise", "phos_dist_on",
+        "phos_dist_model", "phos_dist_dyn", "phos_dist_order", "phos_dist_drive", "phos_dist_color",
+        "phos_eq_low_gain", "phos_eq_low_freq", "phos_eq_low_width", "phos_eq_midlow_gain", "phos_eq_midlow_freq",
+        "phos_eq_midlow_width", "phos_eq_midhigh_gain", "phos_eq_midhigh_freq", "phos_eq_midhigh_width",
+        "phos_eq_high_gain", "phos_eq_high_freq", "phos_eq_high_width", "phos_eq_on", "phos_dly_on", "phos_dly_fb",
+        "phos_dly_cut", "phos_dly_reso", "phos_dly_filter", "phos_dly_spread", "phos_dly_time", "phos_dly_sync",
+        "phos_dly_lscale", "phos_dly_lnum", "phos_dly_lden", "phos_dly_rscale", "phos_dly_rnum", "phos_dly_rden",
+        "phos_dly_mix", "phos_rev_on", "phos_rev_pre", "phos_rev_esize", "phos_rev_ediff", "phos_rev_lsize",
+        "phos_rev_ldiff", "phos_rev_fb", "phos_rev_blend", "phos_rev_mod", "phos_rev_ebright", "phos_rev_lbright",
+        "phos_rev_mix", "phos_cho_on", "phos_cho_offset", "phos_cho_depth", "phos_cho_rate", "phos_cho_spatial",
+        "phos_cho_fat", "phos_cho_hp", "phos_cho_out", "phos_cho_mix", "phos_lim_on", "phos_lim_knee",
+        "phos_lim_ratio", "phos_lim_attack", "phos_lim_release", "phos_lim_thresh", "phos_lim_gain", "phos_lim_clip",
+        "phos_eq_slot", "phos_lim_slot", "render_quality",
+    };
+} // namespace
+
+TEST_CASE ("Parameter ids are unique and match the saved list, in order", "[params]")
+{
+    // The ids are the save format: presets and host state store values by id,
+    // so a renamed id drops them and a moved one hands them to another
+    // parameter. Adding a parameter means appending it here as well.
+    const auto& defs = paramDefs();
+    std::set<std::string> seen;
+    for (const auto& d : defs)
+        CHECK (seen.insert (d.id).second);
+    REQUIRE (defs.size() >= std::size (kGoldenIds));
+    for (size_t i = 0; i < std::size (kGoldenIds); ++i)
+    {
+        INFO ("index " << i);
+        CHECK (std::string (defs[i].id) == kGoldenIds[i]);
+    }
+    // anything past the list is new: it has to be added to the list
+    CHECK (defs.size() == std::size (kGoldenIds));
+}
+
+TEST_CASE ("Events at the edges of a block land on the same sample as in any other block layout", "[engine][blocks]")
+{
+    ParamState p = sinePatch();
+    p.set (P::AenvR, 30.f);
+    const std::vector<MidiEvent> ev { noteAt (255, 48), offAt (700, 48), noteAt (1024, 55), offAt (1500, 55) };
+    // 1-sample blocks put every event exactly where it says
+    const auto one = renderBlocks (p, 3000, 1, ev);
+    for (int block : { 256, 512, 1000 })
+    {
+        const auto x = renderBlocks (p, 3000, block, ev);
+        INFO ("block " << block);
+        CHECK (x.l == one.l);
+        CHECK (x.r == one.r);
+    }
+    // note-on at the last sample of a block and at the first of the next: one sample apart
+    const auto last = renderBlocks (p, 1024, 256, { noteAt (255, 48) });
+    const auto first = renderBlocks (p, 1024, 256, { noteAt (256, 48) });
+    for (size_t i = 0; i < 255; ++i) REQUIRE (last.l[i] == 0.f);
+    CHECK (last.l[255] == 0.f);   // the onset ramp starts from silence
+    CHECK (std::abs (last.l[400]) > 0.f);
+    for (size_t i = 0; i < 256; ++i) REQUIRE (first.l[i] == 0.f);
+    CHECK (first.l[256 + 145] == last.l[255 + 145]);   // the same note, one sample later: bits differ only by that shift
+    // an offset equal to the block length happens at the start of the next block
+    {
+        Engine e;
+        e.setParams (p);
+        e.prepare (48000.0, 256);
+        std::vector<float> l (1024), r (1024);
+        const MidiEvent atEnd { 256, MidiEvent::NoteOn, 48, 0.8f };
+        e.process (l.data(), r.data(), 256, &atEnd, 1, 145.0);
+        e.process (l.data() + 256, r.data() + 256, 768, nullptr, 0, 145.0);
+        CHECK (l == first.l);
+        CHECK (r == first.r);
+    }
+    // a note-on and its note-off at the same sample: nothing sticks
+    const std::vector<MidiEvent> blip { noteAt (300, 60), offAt (300, 60), noteAt (800, 61), offAt (800, 61) };
+    Engine e;
+    const auto y = renderBlocks (p, 24000, 256, blip, {}, 48000.0, &e);
+    CHECK (e.activeVoices() == 0);
+    CHECK (powerDb (y.l, 20000, 24000) < -80.0);
+    CHECK (e.diagnostics().nonFinite == 0);
+}
+
+TEST_CASE ("Every category is silent at rest at every sample rate and quality", "[engine][rates]")
+{
+    Generator g;
+    for (double fs : { 44100.0, 48000.0, 96000.0 })
+        for (int q = 0; q < 3; ++q)
+            for (int c = 0; c < kNumCategories; ++c)
+            {
+                ParamState p = g.generate ((Category) c, 11u, ParamState(), LockSet());
+                p.set (P::Quality, (float) q);
+                Engine e;
+                e.setParams (p);
+                e.prepare (fs, 256);
+                std::vector<float> l (256), r (256);
+                float worst = 0.f;
+                for (int b = 0; b < 8; ++b)
+                {
+                    e.process (l.data(), r.data(), 256, nullptr, 0, 145.0);
+                    for (int i = 0; i < 256; ++i) worst = std::max ({ worst, std::abs (l[(size_t) i]), std::abs (r[(size_t) i]) });
+                }
+                INFO (categoryInfo()[(size_t) c].name << " at " << fs << " Hz, quality " << q);
+                REQUIRE (worst == 0.f);
+            }
+}
+
+TEST_CASE ("The 303 and the kick play in tune at every sample rate and quality", "[engine][rates]")
+{
+    const auto meanHz = [] (const std::vector<float>& x, double fs, double t0, double t1) {
+        double first = -1.0, last = -1.0;
+        int count = 0;
+        for (size_t i = (size_t) (t0 * fs); i + 1 < x.size() && (double) i < t1 * fs; ++i)
+            if (x[i] <= 0.f && x[i + 1] > 0.f)
+            {
+                const double t = (double) i + (double) (-x[i] / (x[i + 1] - x[i]));
+                if (first < 0.0) first = t;
+                last = t;
+                ++count;
+            }
+        return count > 1 ? (double) (count - 1) * fs / (last - first) : 0.0;
+    };
+    for (double fs : { 44100.0, 48000.0, 96000.0 })
+        for (int q = 0; q < 3; ++q)
+        {
+            // a plain 303 on A4
+            ParamState p = phosBase();
+            p.set (P::PhosCutoff, 0.f);
+            p.set (P::PhosReso, 0.f);
+            p.set (P::PhosEnvMod, 0.f);
+            p.set (P::Quality, (float) q);
+            const int total = (int) (0.6 * fs);
+            auto x = renderBlocks (p, total, 256, { noteAt (0, 69, 0.4f) }, {}, fs);
+            INFO ("303 at " << fs << " Hz, quality " << q);
+            CHECK (std::abs (meanHz (x.l, fs, 0.2, 0.4) - 440.0) < 1.5);
+
+            // a kick's body on its key, after the sweep has landed
+            ParamState k;
+            k.set (P::EngineMode, (float) EngineMode::Kick);
+            k.set (P::MasterVol, 0.f);
+            k.set (P::Quality, (float) q);
+            x = renderBlocks (k, total, 256, { noteAt (0, 29, 1.f) }, {}, fs);
+            const double want = kickBodyHz (KickSettings::from (k), 29);
+            INFO ("kick at " << fs << " Hz, quality " << q);
+            CHECK (std::abs (1200.0 * std::log2 (meanHz (x.l, fs, 0.1, 0.16) / want)) < 15.0);
+        }
+}
+
+// ---- needs Engine::diagnostics() (the lines below don't build against the old engine) ----
+
+TEST_CASE ("A NaN in a parameter, a velocity or a bend never reaches the sound", "[engine][stress]")
+{
+    // A NaN in the smoothed patch (F1Cutoff here) used to silence the engine
+    // for good, and the tests couldn't see it: the output is always finite.
+    const float nan = std::numeric_limits<float>::quiet_NaN(), inf = std::numeric_limits<float>::infinity();
+    ParamState p = sinePatch();
+    p.set (P::F1Type, (float) FilterType::LP12);
+    p.v[(size_t) P::F1Cutoff] = nan;
+    p.v[(size_t) P::OscALevel] = inf;
+    p.v[(size_t) P::DistDrive] = -inf;
+    p.v[(size_t) P::MasterVol] = nan;
+    Engine e;
+    e.setParams (p);
+    e.prepare (48000.0, 256);
+    std::vector<float> l (256), r (256);
+    const MidiEvent events[] = { { 0, MidiEvent::PitchBend, 0, nan }, { 0, MidiEvent::Controller, 1, inf }, { 0, MidiEvent::ChannelPressure, 0, nan },
+                                 { 0, MidiEvent::NoteOn, 200, 0.8f }, { 0, MidiEvent::NoteOn, -3, 0.8f }, { 0, MidiEvent::NoteOff, 999, 0.f },
+                                 { 0, MidiEvent::NoteOn, 48, nan } };
+    e.process (l.data(), r.data(), 256, events, 7, 120.0);
+    float pk = 0.f;
+    for (int b = 0; b < 20; ++b)
+    {
+        e.process (l.data(), r.data(), 256, nullptr, 0, 120.0);
+        for (float v : l) pk = std::max (pk, std::abs (v));
+    }
+    CHECK (pk > 0.02f);
+    CHECK (e.diagnostics().nonFinite == 0);
+    CHECK (e.diagnostics().preClipPeak < 16.f);
+}
+
+TEST_CASE ("A voice that goes NaN is replaced and the engine plays on", "[engine][stress]")
+{
+    ParamState p = sinePatch();
+    p.set (P::MasterVol, 0.f);
+    Engine e;
+    e.setParams (p);
+    e.prepare (48000.0, 256);
+    std::vector<float> l (256), r (256);
+    const MidiEvent on { 0, MidiEvent::NoteOn, 48, 0.8f }, off { 0, MidiEvent::NoteOff, 48, 0.f }, next { 0, MidiEvent::NoteOn, 55, 0.8f };
+    e.process (l.data(), r.data(), 256, &on, 1, 120.0);
+    for (int b = 0; b < 10; ++b) e.process (l.data(), r.data(), 256, nullptr, 0, 120.0);
+    CHECK (e.diagnostics().nonFinite == 0);
+
+    EngineTestAccess::poisonLevel (EngineTestAccess::voice (e, 0));   // a filter or envelope state turned to NaN
+    e.process (l.data(), r.data(), 256, nullptr, 0, 120.0);
+    CHECK (e.diagnostics().nonFinite > 0);   // seen, and replaced by silence
+    const auto seen = e.diagnostics().nonFinite;
+    for (int b = 0; b < 20; ++b) e.process (l.data(), r.data(), 256, nullptr, 0, 120.0);
+    CHECK (e.diagnostics().nonFinite == seen);   // that voice is gone, nothing more comes out of it
+    CHECK (e.activeVoices() == 0);
+
+    e.process (l.data(), r.data(), 256, &off, 1, 120.0);
+    e.process (l.data(), r.data(), 256, &next, 1, 120.0);
+    float pk = 0.f;
+    for (int b = 0; b < 20; ++b)
+    {
+        e.process (l.data(), r.data(), 256, nullptr, 0, 120.0);
+        for (float v : l) pk = std::max (pk, std::abs (v));
+    }
+    CHECK (pk > 0.05f);   // audio resumes with the next note
+    CHECK (e.diagnostics().nonFinite == seen);
 }

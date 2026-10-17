@@ -26,6 +26,11 @@ namespace
 
     struct Hit { int at; int note; float vel; bool on = true; };
 
+    // The loudest sample before the output's soft clip in the last render(): the
+    // engine turns a NaN into silence and clips what it plays, so the samples
+    // alone prove nothing about either.
+    float gLastPreClip = 0.f;
+
     // Renders the engine for `seconds` with the given note events (mono, left).
     std::vector<float> render (const ParamState& p, double seconds, std::vector<Hit> hits, Engine* use = nullptr, int block = 256)
     {
@@ -47,7 +52,8 @@ namespace
                     ev.push_back ({ h.at - pos, h.on ? MidiEvent::NoteOn : MidiEvent::NoteOff, h.note, h.on ? h.vel : 0.f });
             e.process (l.data() + pos, r.data() + pos, n, ev.data(), (int) ev.size(), 145.0);
         }
-        for (float v : l) REQUIRE (std::isfinite (v));
+        REQUIRE (e.diagnostics().nonFinite == 0);
+        gLastPreClip = e.diagnostics().preClipPeak;
         return l;
     }
 
@@ -313,10 +319,8 @@ TEST_CASE ("Random kick settings stay finite and always finish", "[kick][stress]
         p.set (P::KickDecay, rng.range (10.f, 400.f));
         Engine e;
         const auto x = render (p, 1.0, { { 0, rng.integer (0, 127), rng.range (0.1f, 1.f) }, { 9000, rng.integer (0, 127), 1.f } });
-        float pk = 0.f;
-        for (float v : x) pk = std::max (pk, std::abs (v));
         INFO ("trial " << trial);
-        CHECK (pk <= 1.f);
+        CHECK (gLastPreClip < 16.f);   // +24 dBFS
         CHECK (rms (x, kFs, 0.9, 1.0) < 1e-3);
     }
 }

@@ -37,8 +37,7 @@ void Voice::setRates (float baseRate, float osRate)
     kill();
 }
 
-void Voice::start (int n, float vel, bool acc, bool retrigger, bool stolen, float glideFrom, const VoiceContext& ctx,
-                   uint64_t seed)
+void Voice::start (int n, float vel, bool acc, bool stolen, float glideFrom, const VoiceContext& ctx, uint64_t seed)
 {
     const auto& p = *ctx.p;
     if (outFadeStep > 0.f && outFade <= 0.f)
@@ -54,50 +53,50 @@ void Voice::start (int n, float vel, bool acc, bool retrigger, bool stolen, floa
     pitchTarget = (float) n;
     gliding = glideFrom >= 0.f;
     pitchNow = gliding ? glideFrom : pitchTarget;
+    lfoRateMod.fill (0.f);
+    healthy = true;
 
-    if (retrigger)
+    sweepT = 0.0;
+    amp.noteOn();
+    fenv.noteOn();
+    menv.noteOn();
+    penv.trigger();
+    for (int i = 0; i < kNumLfos; ++i)
+        if (p.on (lfoParam (i, 4)))
+            lfos[(size_t) i].reset (p.get (lfoParam (i, 5)));
+    if (! stolen)
     {
-        sweepT = 0.0;
-        amp.noteOn();
-        fenv.noteOn();
-        menv.noteOn();
-        penv.trigger();
-        for (int i = 0; i < kNumLfos; ++i)
-            if (p.on (lfoParam (i, 4)))
-                lfos[(size_t) i].reset (p.get (lfoParam (i, 5)));
+        level1 = level2 = 0.f;
+        cutFresh = true;
+        stereoSnap = true;
+        for (auto& l : lfos) l.snap();
+    }
+
+    // Resetting phase on a voice that is still sounding would click.
+    const bool quiet = ! stolen || level2 < kQuiet;
+    if (quiet)
+    {
+        // the unison voices draw their phases from their own generator,
+        // so the first voice and everything after it start as before
+        Rng phases (seed ^ 0x756E69736F6EULL);
+        onset = 0.f;
+        if (p.on (P::OscARetrig)) syncPhase = 0.0;
+        resetOscs (0, p.on (P::OscARetrig), phases);
+        resetOscs (1, p.on (P::OscBRetrig), phases);
+        sub.reset();
+        ssA.reset (rng);
+        ssB.reset (rng);
         if (! stolen)
         {
-            level1 = level2 = 0.f;
-            cutFresh = true;
-            for (auto& l : lfos) l.snap();
+            f1.reset();
+            f2.reset();
+            f1R.reset();
+            f2R.reset();
         }
-
-        // Resetting phase on a voice that is still sounding would click.
-        const bool quiet = ! stolen || level2 < kQuiet;
-        if (quiet)
-        {
-            // the unison voices draw their phases from their own generator,
-            // so the first voice and everything after it start as before
-            Rng phases (seed ^ 0x756E69736F6EULL);
-            onset = 0.f;
-            if (p.on (P::OscARetrig)) syncPhase = 0.0;
-            resetOscs (0, p.on (P::OscARetrig), phases);
-            resetOscs (1, p.on (P::OscBRetrig), phases);
-            sub.reset();
-            ssA.reset (rng);
-            ssB.reset (rng);
-            if (! stolen)
-            {
-                f1.reset();
-                f2.reset();
-                f1R.reset();
-                f2R.reset();
-            }
-        }
-        noise.reset (seed * 7919u + 17u);
-        for (int i = 0; i < kNumLfos; ++i)
-            lfos[(size_t) i].seed (seed + (uint64_t) i * 101u);
     }
+    noise.reset (seed * 7919u + 17u);
+    for (int i = 0; i < kNumLfos; ++i)
+        lfos[(size_t) i].seed (seed + (uint64_t) i * 101u);
 }
 
 void Voice::resetOscs (int which, bool retrig, Rng& phases) noexcept
@@ -115,12 +114,12 @@ void Voice::resetOscs (int which, bool retrig, Rng& phases) noexcept
     }
 }
 
-bool Voice::Unison::update (int count, float det, float rng, int md, int stk, float bl, float wd, bool st) noexcept
+bool Voice::Unison::update (int count, float det, float rangeSemis, int md, int stk, float bl, float wd, bool st) noexcept
 {
-    if (count == n && det == detune && rng == range && md == mode && stk == stack && bl == blend && wd == width && st == stereo)
+    if (count == n && det == detune && rangeSemis == range && md == mode && stk == stack && bl == blend && wd == width && st == stereo)
         return false;
-    n = count; detune = det; range = rng; mode = md; stack = stk; blend = bl; width = wd; stereo = st;
-    layout.compute (count, det, rng, md, stk, bl, wd);
+    n = count; detune = det; range = rangeSemis; mode = md; stack = stk; blend = bl; width = wd; stereo = st;
+    layout.compute (count, det, rangeSemis, md, stk, bl, wd);
     for (int k = 0; k < layout.count; ++k)
     {
         const auto i = (size_t) k;
@@ -166,6 +165,9 @@ void Voice::kill()
     level1 = level2 = 0.f;
     outFade = 1.f;
     outFadeStep = 0.f;
+    lfoRateMod.fill (0.f);
+    stereoSnap = true;
+    healthy = true;
     f1.reset();
     f2.reset();
     f1R.reset();
@@ -201,7 +203,7 @@ float Voice::oscSample (int which, int k, int type, double inc, float shape, flo
     }
 }
 
-void Voice::render (float* outL, float* outR, int chunkOffsetBase, int nBase, const VoiceContext& ctx) noexcept
+void Voice::render (float* outL, float* outR, int chunkOffsetBase, int nBase, const VoiceContext& ctx, SourceArray* record) noexcept
 {
     const ParamState& p = *ctx.p;
     const int os = ctx.osFactor;
@@ -229,7 +231,15 @@ void Voice::render (float* outL, float* outR, int chunkOffsetBase, int nBase, co
     const int nB = tB == (int) OscType::Supersaw ? 1 : p.geti (P::OscBUnison);
     const bool wide = (onA && nA > 1 && p.get (P::OscAUniWidth) > 0.f) || (onB && nB > 1 && p.get (P::OscBUniWidth) > 0.f);
     if (wide && ! stereo) { f1R = f1; f2R = f2; }
-    stereo = wide;
+    if (stereoSnap)
+    {
+        stereoMix = wide ? 1.f : 0.f;
+        stereoSnap = false;
+    }
+    // the right-hand filters run on while the right channel fades back to the left
+    stereo = wide || stereoMix > 0.f;
+    const float mixStep = 1.f / (0.005f * ctx.baseRate);
+    const float mixTarget = wide ? 1.f : 0.f;
     f1R.setType (f1Type);
     f2R.setType (f2Type);
     const float spreadA = p.get (P::OscAUniSpread), spreadB = p.get (P::OscBUniSpread);
@@ -249,6 +259,10 @@ void Voice::render (float* outL, float* outR, int chunkOffsetBase, int nBase, co
 
     std::array<float, (size_t) ModSrc::Count> src {};
     std::array<float, (size_t) ModDst::Count> mod {};
+    // the centre pan gains, unless the matrix moves the pan
+    const float panL0 = std::cos ((0.f + 1.f) * kPi * 0.25f) * 1.41421356f;
+    const float panR0 = std::sin ((0.f + 1.f) * kPi * 0.25f) * 1.41421356f;
+    float lastOut = 0.f;
 
     for (int n = 0; n < nBase; ++n)
     {
@@ -267,8 +281,7 @@ void Voice::render (float* outL, float* outR, int chunkOffsetBase, int nBase, co
             if (p.on (lfoParam (i, 4)))
             {
                 float hz = ctx.lfoHz[(size_t) i];
-                const auto rateDst = (size_t) ModDst::Lfo1Rate + (size_t) i;
-                if (mod[rateDst] != 0.f) hz *= std::exp2 (mod[rateDst] * 4.f);
+                if (lfoRateMod[(size_t) i] != 0.f) hz *= std::exp2 (lfoRateMod[(size_t) i] * 4.f);
                 lfoOut[(size_t) i] = lfos[(size_t) i].process (p.geti (lfoParam (i, 0)), hz);
             }
             else
@@ -294,7 +307,7 @@ void Voice::render (float* outL, float* outR, int chunkOffsetBase, int nBase, co
         src[(size_t) ModSrc::Macro2] = p.get (P::Macro2);
         src[(size_t) ModSrc::Macro3] = p.get (P::Macro3);
         src[(size_t) ModSrc::Macro4] = p.get (P::Macro4);
-        const float sweep = sweepValue ((float) sweepT, ctx.sweepDelay, ctx.sweepExp);
+        const float sweep = ctx.sweepUsed ? sweepValue ((float) sweepT, ctx.sweepDelay, ctx.sweepExp) : 0.f;
         src[(size_t) ModSrc::Sweep] = sweep;
         if (sweepT < 1.0)
         {
@@ -313,6 +326,10 @@ void Voice::render (float* outL, float* outR, int chunkOffsetBase, int nBase, co
             mod[(size_t) sl.dst] += sl.amt * src[(size_t) sl.src];
         }
         const auto M = [&] (ModDst d) { return mod[(size_t) d]; };
+        for (int i = 0; i < kNumLfos; ++i)
+            lfoRateMod[(size_t) i] = mod[(size_t) ModDst::Lfo1Rate + (size_t) i];
+        if (record != nullptr)
+            record[chunkOffsetBase + n] = src;
 
         // glide
         if (gliding && glideCoef > 0.f)
@@ -353,10 +370,12 @@ void Voice::render (float* outL, float* outR, int chunkOffsetBase, int nBase, co
         const float lvlRing = clamp01 (p.get (P::RingLevel) + M (ModDst::RingLevel));
         const bool needA = lvlA > 0.f || lvlRing > 0.f || xmod > 0.f;
         const bool needB = lvlB > 0.f || lvlRing > 0.f;
-        if (nA > 1)
+        // the layout follows the detune once per chunk (it costs a table of
+        // exp2, cos and sin), not once per sample
+        if (nA > 1 && n == 0)
             uniA.update (nA, detA, p.get (P::OscAUniRange), p.geti (P::OscAUniMode), p.geti (P::OscAUniStack),
                          p.get (P::OscABlend), p.get (P::OscAUniWidth), stereo);
-        if (nB > 1)
+        if (nB > 1 && n == 0)
             uniB.update (nB, detB, p.get (P::OscBUniRange), p.geti (P::OscBUniMode), p.geti (P::OscBUniStack),
                          p.get (P::OscBBlend), p.get (P::OscBUniWidth), stereo);
 
@@ -407,8 +426,9 @@ void Voice::render (float* outL, float* outR, int chunkOffsetBase, int nBase, co
         level1 += std::clamp (gain - level1, -levelSlew, levelSlew);
         level2 += levelCoef * (level1 - level2);
         const float pan = std::clamp (M (ModDst::Pan), -1.f, 1.f);
-        const float gL = std::cos ((pan + 1.f) * kPi * 0.25f) * 1.41421356f * level2;
-        const float gR = std::sin ((pan + 1.f) * kPi * 0.25f) * 1.41421356f * level2;
+        const float gL = (pan == 0.f ? panL0 : std::cos ((pan + 1.f) * kPi * 0.25f) * 1.41421356f) * level2;
+        const float gR = (pan == 0.f ? panR0 : std::sin ((pan + 1.f) * kPi * 0.25f) * 1.41421356f) * level2;
+        stereoMix += std::clamp (mixTarget - stereoMix, -mixStep, mixStep);
         const float mixGain = 0.5f * onset;
         onset = std::min (1.f, onset + onsetInc);
 
@@ -499,11 +519,14 @@ void Voice::render (float* outL, float* outR, int chunkOffsetBase, int nBase, co
 
             y = flushDenormal (y);
             yR = flushDenormal (yR);
+            if (stereo && stereoMix < 1.f)
+                yR = y + (yR - y) * stereoMix;
             outL[base + j] += y * gL;
             outR[base + j] += yR * gR;
+            lastOut = y * gL + yR * gR;
         }
-        if (n == nBase - 1) srcNow = src;
     }
+    healthy = std::isfinite (lastOut);
 }
 
 } // namespace psy

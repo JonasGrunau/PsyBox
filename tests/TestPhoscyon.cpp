@@ -6,7 +6,9 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <cmath>
+#include <numbers>
 #include <vector>
 
 using namespace psy;
@@ -31,6 +33,10 @@ namespace
 
     struct Note { double on, off; int note; float vel; };
 
+    // The loudest sample before the output's soft clip in the last render()
+    // (the output itself is always finite and under 0 dBFS).
+    float gLastPreClip = 0.f;
+
     std::vector<float> render (const ParamState& p, double seconds, const std::vector<Note>& notes, double bpm = 140.0)
     {
         Engine e;
@@ -49,11 +55,15 @@ namespace
                 if (b >= pos && b < pos + n) ev.push_back ({ b - pos, MidiEvent::NoteOff, x.note, 0.f });
                 if (a >= pos && a < pos + n) ev.push_back ({ a - pos, MidiEvent::NoteOn, x.note, x.vel });
             }
-            std::sort (ev.begin(), ev.end(), [] (const MidiEvent& a, const MidiEvent& b) { return a.offset < b.offset; });
+            // by position; at one position a note ends before the next starts
+            std::stable_sort (ev.begin(), ev.end(), [] (const MidiEvent& a, const MidiEvent& b) {
+                return a.offset != b.offset ? a.offset < b.offset : a.type == MidiEvent::NoteOff && b.type != MidiEvent::NoteOff;
+            });
             e.process (l.data() + pos, r.data() + pos, n, ev.data(), (int) ev.size(), Transport { bpm, ppq, true });
             ppq += n / kFs * bpm / 60.0;
         }
-        for (float v : l) REQUIRE (std::isfinite (v));
+        REQUIRE (e.diagnostics().nonFinite == 0);
+        gLastPreClip = e.diagnostics().preClipPeak;
         return l;
     }
 
@@ -100,7 +110,7 @@ namespace
         size_t n = 1;
         while (n * 2 <= (size_t) ((t1 - t0) * kFs)) n *= 2;
         std::vector<std::complex<double>> s (n);
-        for (size_t i = 0; i < n; ++i) s[i] = x[a + i] * (0.5 - 0.5 * std::cos (2.0 * M_PI * (double) i / (double) n));
+        for (size_t i = 0; i < n; ++i) s[i] = x[a + i] * (0.5 - 0.5 * std::cos (2.0 * std::numbers::pi * (double) i / (double) n));
         testutil::fft (s);
         double num = 0.0, den = 0.0;
         for (size_t i = 1; i < n / 2; ++i)
@@ -195,7 +205,7 @@ TEST_CASE ("The Phoscyon distortion doesn't fold a driven high line back", "[pho
     const double f0 = 2625.0;   // an exact bin, so harmonics land on bins
     std::vector<float> l (n), r (n);
     for (size_t i = 0; i < n; ++i)
-        l[i] = r[i] = 0.5f * (float) std::sin (2.0 * M_PI * f0 * (double) i / kFs);
+        l[i] = r[i] = 0.5f * (float) std::sin (2.0 * std::numbers::pi * f0 * (double) i / kFs);
     d.process (l.data(), r.data(), (int) n, 18, 0.9f, 0.f, 0.f, false);
     const std::vector<float> tail (l.begin() + 4096, l.begin() + 4096 + 16384);
     const auto db = testutil::spectrumDb (tail, 16384);
@@ -335,8 +345,7 @@ TEST_CASE ("Fuzzed Phoscyon patches stay finite", "[phoscyon][stress]")
             p.set ((P) i, def ((P) i).toPlain (rng.uniform()));
         p.set (P::FxOrder, (float) rng.integer (0, 362879));
         const auto out = render (p, 0.5, { { 0.0, 0.2, 30 + run, 0.3f + 0.02f * (float) run }, { 0.1, 0.4, 50, 0.9f } });
-        float pk = 0.f;
-        for (float v : out) pk = std::max (pk, std::abs (v));
-        CHECK (pk <= 1.f);
+        INFO ("run " << run);
+        CHECK (gLastPreClip < 16.f);   // +24 dBFS
     }
 }

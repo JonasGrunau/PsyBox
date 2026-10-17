@@ -53,13 +53,18 @@ struct ModView
 class Engine
 {
 public:
+    friend struct EngineTestAccess;   // the tests reach in to poison a voice
+
     Engine();
 
     void prepare (double sampleRate, int maxBlockSize);
     void reset();
 
-    // Target parameter values; smoothed internally.
-    void setParams (const ParamState& p) noexcept { target = p; }
+    // Target parameter values; smoothed internally. A value that is NaN or
+    // infinite becomes the parameter's default and the rest are held to their
+    // range: one bad value (an automation glitch) would otherwise poison the
+    // smoothed state, and every filter and effect behind it, for good.
+    void setParams (const ParamState& p) noexcept;
 
     void process (float* left, float* right, int numSamples, const MidiEvent* events, int numEvents, const Transport& transport) noexcept;
     void process (float* left, float* right, int numSamples, const MidiEvent* events, int numEvents, double bpm) noexcept
@@ -70,12 +75,23 @@ public:
     // Offline (a host render, a bounce) plays at the Render quality instead
     // of the live one.
     void setOffline (bool isOffline) noexcept { offline = isOffline; }
-    int latencySamples() const noexcept { return decimL.latency (osFactor); }
+    // The decimator's, plus the Phoscyon limiter's lookahead while that mode plays it.
+    int latencySamples() const noexcept { return decimL.latency (osFactor) + limiterLatency(); }
     int activeVoices() const noexcept;
     int arpStep() const noexcept { return arpActive ? arp.currentStep() : -1; }   // pattern step playing, or -1
 
+    // Health since the last reset(): samples that came out of the voices or the
+    // effects as NaN or infinity (the engine replaces them and recovers), and
+    // the loudest sample before the output's soft clip. The stress tests read
+    // these, because the output itself is always finite and below 0 dBFS.
+    struct Diagnostics
+    {
+        uint32_t nonFinite = 0;
+        float preClipPeak = 0.f;
+    };
+    const Diagnostics& diagnostics() const noexcept { return diag; }
+
     // For the GUI (approximate, read without locking).
-    float lastPeak() const noexcept { return peak; }
     const dsp::CompMeter& compMeter() const noexcept { return comp.meter(); }
     void getModView (ModView&) const noexcept;
 
@@ -109,6 +125,7 @@ private:
     // mono / legato note stack
     std::array<int, 32> held {};
     std::array<bool, 32> heldAccent {};
+    std::array<float, 32> heldVel {};
     int numHeld = 0;
     std::array<bool, 128> sustained {};
     bool sustainPedal = false;
@@ -118,6 +135,9 @@ private:
     Arpeggiator arp;
     bool arpActive = false;
 
+    // Controllers as the host sent them; ctx holds them smoothed (7-bit steps
+    // would zipper a cutoff or an effect mix).
+    float rawBend = 0.f, rawWheel = 0.f, rawAftertouch = 0.f;
     std::array<dsp::Lfo, kNumLfos> globalLfos;
     std::array<std::vector<float>, kNumLfos> globalLfoBuf;
 
@@ -140,10 +160,26 @@ private:
     // (the smoothed patch plus those modulations).
     std::array<VoiceContext::Slot, kNumModSlots> fxSlots {};
     int numFxSlots = 0;
-    ParamState fxParams;
+    ParamState fxParams, fxParamsOs;   // after the decimator / on the oversampled signal (distortion first)
+    int fxCount = 0, fxCountOs = 0;    // samples into the current 32-sample slice of each
     int leadVoice = -1;   // the newest note; effect modulation follows its envelopes
+    // Every matrix source at every sample of the block, as the newest voice
+    // (or the 303) had it: the effects read the value that covers their own
+    // sample instead of the block's last. Only filled while a slot targets an effect.
+    std::vector<std::array<float, (size_t) ModSrc::Count>> fxSrc;
 
-    float peak = 0.f;
+    float outGain = 1.f;   // the output gain the last sample used (it ramps to the next block's)
+    bool outGainSet = false;
+    bool limOn = false;    // the Phoscyon limiter ran in the last block
+    bool qualityPending = false;   // voices are fading out before the oversampling changes
+    bool lastPlaying = false;       // the transport as the last process() left it, to see a start or a seek
+    double lastPpqEnd = 0.0;
+    int lfoLockIn = 0;              // samples until a synced free LFO is next checked against the bar
+    std::array<float, kNumLfos> freeLfoHz {};   // the free LFOs' rates, matrix offsets included
+    Diagnostics diag;
+    bool fxBad = false;
+
+    int limiterLatency() const noexcept;
 
     int wantedFactor() const noexcept;   // oversampling for the live or the render quality
     void applyQuality();
@@ -155,6 +191,11 @@ private:
     void keyOn (int note, float velocity) noexcept;
     void keyOff (int note) noexcept;
     void updateArp() noexcept;
+    void followQuality() noexcept;
+    void snapDiscrete() noexcept;
+    void smoothControllers (int n) noexcept;
+    void recoverFromNonFinite (int offset, int n) noexcept;
+    void resetEffects() noexcept;
     void fireArp() noexcept;
     void voiceNoteOn (int note, float velocity) noexcept;
     void voiceNoteOff (int note) noexcept;
@@ -167,8 +208,8 @@ private:
     void phosNoteOn (int note, float velocity) noexcept;
     // The matrix sources while the Phoscyon voice plays (its envelopes stand
     // in for the amp env and Env 1), and the knob offsets they add up to.
-    std::array<float, (size_t) ModSrc::Count> phosSources (int sampleInChunk) const noexcept;
-    PhosMods phosMods() const noexcept;
+    std::array<float, (size_t) ModSrc::Count> phosSources (int sampleInBlock) const noexcept;
+    PhosMods phosMods (int sampleInBlock) const noexcept;
     void followEngineMode() noexcept;
     Voice& allocateVoice (bool& stolen) noexcept;
     // A voice that still sounds would click if it restarted in place (its
@@ -176,7 +217,7 @@ private:
     // above `from` and fades out there, and slot i is free for a fresh start.
     // False when it is quiet enough to restart, or no slot is idle.
     bool handOff (size_t i, size_t from) noexcept;
-    void renderVoices (int offset, int n) noexcept;
+    void renderVoices (int offset, int n, bool record) noexcept;
     // The effects in the patch's order. Distortion first runs on the
     // oversampled signal before the decimator instead (see process).
     void processFx (float* l, float* r, int n, double bpm, const ParamState& p) noexcept;
@@ -187,7 +228,7 @@ private:
     }
     bool phosDistFirst (const ParamState& p) const noexcept { return phosChain (p)[0] == (int) Fx::Distortion; }
     void processFxSlot (int fx, bool first, float* l, float* r, int n, double bpm, const ParamState& p) noexcept;
-    void modulateFx (int sampleInBlock) noexcept;   // fills fxParams
+    void modulateFx (int sampleInBlock, ParamState& out) noexcept;   // the patch plus the effect slots at that sample
 };
 
 } // namespace psy

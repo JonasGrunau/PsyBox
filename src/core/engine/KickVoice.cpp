@@ -1,7 +1,5 @@
 #include "KickVoice.h"
 
-#include <vector>
-
 namespace psy
 {
 

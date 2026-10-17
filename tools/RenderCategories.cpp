@@ -1,5 +1,11 @@
 // Renders a few generated patches per category to WAV files for listening
 // checks:  psybox_render <out-dir> [seeds-per-category] [arp]
+//   out-dir             created when it doesn't exist
+//   seeds-per-category  how many patches of each category (default 3, at least 1)
+//   arp                 generate with the arp on and hold keys for four bars,
+//                       for the categories that have an arp (basses and kicks
+//                       keep their own pattern)
+// Exits 1 when an argument is wrong or a file can't be written.
 
 #include "engine/Engine.h"
 #include "generator/Generator.h"
@@ -9,6 +15,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
 #include <string>
 #include <vector>
 
@@ -16,25 +23,28 @@ using namespace psy;
 
 namespace
 {
-    void writeWav (const std::string& path, const std::vector<float>& l, const std::vector<float>& r, int fs)
+    // False when the file can't be opened or any write fails (a full disk shows up at fclose).
+    bool writeWav (const std::string& path, const std::vector<float>& l, const std::vector<float>& r, int fs)
     {
         FILE* f = std::fopen (path.c_str(), "wb");
-        if (! f) return;
+        if (! f) return false;
+        bool ok = true;
+        const auto put = [&] (const void* data, size_t size) { ok = ok && std::fwrite (data, size, 1, f) == 1; };
         const uint32_t n = (uint32_t) l.size();
         const uint32_t dataBytes = n * 2 * 2;
-        const auto w32 = [&] (uint32_t v) { std::fwrite (&v, 4, 1, f); };
-        const auto w16 = [&] (uint16_t v) { std::fwrite (&v, 2, 1, f); };
-        std::fwrite ("RIFF", 1, 4, f); w32 (36 + dataBytes); std::fwrite ("WAVE", 1, 4, f);
-        std::fwrite ("fmt ", 1, 4, f); w32 (16); w16 (1); w16 (2); w32 ((uint32_t) fs); w32 ((uint32_t) fs * 4); w16 (4); w16 (16);
-        std::fwrite ("data", 1, 4, f); w32 (dataBytes);
+        const auto w32 = [&] (uint32_t v) { put (&v, 4); };
+        const auto w16 = [&] (uint16_t v) { put (&v, 2); };
+        put ("RIFF", 4); w32 (36 + dataBytes); put ("WAVE", 4);
+        put ("fmt ", 4); w32 (16); w16 (1); w16 (2); w32 ((uint32_t) fs); w32 ((uint32_t) fs * 4); w16 (4); w16 (16);
+        put ("data", 4); w32 (dataBytes);
         for (uint32_t i = 0; i < n; ++i)
         {
             const auto s = [] (float x) { return (int16_t) std::lround (std::clamp (x, -1.f, 1.f) * 32767.f); };
             const int16_t a = s (l[i]), b = s (r[i]);
-            std::fwrite (&a, 2, 1, f);
-            std::fwrite (&b, 2, 1, f);
+            put (&a, 2);
+            put (&b, 2);
         }
-        std::fclose (f);
+        return std::fclose (f) == 0 && ok;
     }
 
     // Pattern per category: basses roll 16ths, beds get one long note, leads a
@@ -153,6 +163,18 @@ int main (int argc, char** argv)
     const std::string dir = argc > 1 ? argv[1] : ".";
     const int seeds = argc > 2 ? std::atoi (argv[2]) : 3;
     const bool withArp = argc > 3 && std::string (argv[3]) == "arp";   // generate with an arp, hold keys
+    if (seeds <= 0 || argc > 4 || (argc > 3 && ! withArp))
+    {
+        std::fprintf (stderr, "usage: psybox_render <out-dir> [seeds-per-category (1 or more)] [arp]\n");
+        return 1;
+    }
+    std::error_code ec;
+    std::filesystem::create_directories (dir, ec);
+    if (ec)
+    {
+        std::fprintf (stderr, "can't create %s: %s\n", dir.c_str(), ec.message().c_str());
+        return 1;
+    }
     const int fs = 48000;
     const double bpm = 145.0;
     const double spb = fs * 60.0 / bpm;
@@ -183,7 +205,10 @@ int main (int argc, char** argv)
                 all.push_back ({ (int) (n.beat * spb), MidiEvent::NoteOn, n.note, n.vel });
                 all.push_back ({ (int) ((n.beat + n.len) * spb), MidiEvent::NoteOff, n.note, 0.f });
             }
-            std::sort (all.begin(), all.end(), [] (auto& a, auto& b) { return a.offset < b.offset; });
+            // by position; where two meet, the note that ends goes before the one that starts
+            std::stable_sort (all.begin(), all.end(), [] (const MidiEvent& a, const MidiEvent& b) {
+                return a.offset != b.offset ? a.offset < b.offset : a.type == MidiEvent::NoteOff && b.type != MidiEvent::NoteOff;
+            });
             size_t ei = 0;
             for (int pos = 0; pos < total; pos += 256)
             {
@@ -200,7 +225,11 @@ int main (int argc, char** argv)
             std::string name = categoryInfo()[(size_t) c].name;
             for (auto& ch : name) if (ch == ' ') ch = '_';
             const std::string path = dir + "/" + name + (arp ? "_arp_" : "_") + std::to_string (s) + ".wav";
-            writeWav (path, l, r, fs);
+            if (! writeWav (path, l, r, fs))
+            {
+                std::fprintf (stderr, "can't write %s\n", path.c_str());
+                return 1;
+            }
             std::printf ("%s\n", path.c_str());
         }
     return 0;

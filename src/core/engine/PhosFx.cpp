@@ -5,6 +5,7 @@ namespace psy
 
 void PhosFx::prepare (float sampleRate, float osRate)
 {
+    fs = sampleRate;
     distOs.prepare (osRate);
     distLate.prepare (sampleRate);
     peq.prepare (sampleRate);

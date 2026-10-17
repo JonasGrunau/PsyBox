@@ -40,9 +40,9 @@ void Arpeggiator::reset() noexcept
     toStep = kIdle;
     toOff = -1.0;
     stepIndex = 0;
-    lastFired = INT64_MIN;
     seqPos = 0;
     current = -1;
+    tied = false;
     lastRandom = -1;
     lastStep = -1;
     releasePending = false;
@@ -70,6 +70,7 @@ void Arpeggiator::sync (double ppq, double newBpm, bool playing) noexcept
 {
     bpm = newBpm > 0.0 ? newBpm : 120.0;
     updateStepSamples();
+    const bool wasSynced = synced;
     synced = playing;
     if (! synced)
         return;
@@ -78,16 +79,27 @@ void Arpeggiator::sync (double ppq, double newBpm, bool playing) noexcept
     const double samplesPerBeat = 60.0 / bpm * fs;
     const auto fireBeat = [&] (int64_t s) { return ((double) s + swingOffset (s)) * beats; };
 
-    // First step whose (swung) time is not in the past.
-    int64_t k = (int64_t) std::floor (ppq / beats) - 1;
-    while (fireBeat (k) < ppq - 1.0e-9)
-        ++k;
-
-    if (lastFired != INT64_MIN && k <= lastFired)
+    // The host plays on from where the last block left it: the step the arp
+    // is waiting for stays, its distance is just re-measured against the
+    // host (a tempo change, rounding). Blocks end where they like, so that
+    // step may be up to a sample late without having fired (the engine fires
+    // within half a sample); it goes off at once instead of being skipped.
+    if (wasSynced && toStep < kIdle * 0.5)
     {
-        if (k < lastFired - 1) lastFired = INT64_MIN;   // the host jumped back (loop, relocate)
-        else k = lastFired + 1;                         // already fired at the block boundary
+        const double wait = (fireBeat (stepIndex) - ppq) * samplesPerBeat;
+        if (wait >= -1.5 && wait <= stepSamples * 1.5 + 2.0)
+        {
+            toStep = wait;
+            return;
+        }
     }
+
+    // Start, loop, seek, or a new division: the first step whose (swung)
+    // time is not more than a sample in the past.
+    const double slack = 1.0 / samplesPerBeat;
+    int64_t k = (int64_t) std::floor (ppq / beats) - 1;
+    while (fireBeat (k) < ppq - slack)
+        ++k;
     stepIndex = k;
     toStep = (fireBeat (k) - ppq) * samplesPerBeat;
 }
@@ -96,7 +108,10 @@ void Arpeggiator::keyOn (int note, float velocity) noexcept
 {
     // Hold: the first key after letting go of everything starts a new set.
     if (set.hold && numKeys > 0 && numPhysicalKeys() == 0)
+    {
         numKeys = 0;
+        tied = false;   // the new chord starts fresh, it doesn't slide out of the old one
+    }
 
     for (int i = 0; i < numKeys; ++i)
         if (keys[(size_t) i].note == note)
@@ -121,7 +136,6 @@ void Arpeggiator::keyOn (int note, float velocity) noexcept
             // free-running: the first key is step 0
             stepIndex = 0;
             toStep = 0.0;
-            lastFired = INT64_MIN;
         }
     }
 }
@@ -178,6 +192,14 @@ int Arpeggiator::physicalKey (int index) const noexcept
     return -1;
 }
 
+float Arpeggiator::physicalVelocity (int index) const noexcept
+{
+    for (int i = 0; i < numKeys; ++i)
+        if (keys[(size_t) i].down && index-- == 0)
+            return keys[(size_t) i].velocity;
+    return 0.8f;
+}
+
 int Arpeggiator::samplesToNextEvent() const noexcept
 {
     if (releasePending)
@@ -218,11 +240,7 @@ int Arpeggiator::nextNote (float& velocity) noexcept
                 notes[(size_t) len] = n;
                 vels[(size_t) len++] = k[(size_t) i].velocity;
             }
-    if (len == 0)
-    {
-        velocity = k[0].velocity;
-        return k[0].note;
-    }
+    // (a key is at most 127, so octave 0 always adds every key: len >= 1)
 
     int idx = 0;
     switch ((ArpMode) set.mode)

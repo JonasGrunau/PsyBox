@@ -25,13 +25,14 @@ public:
     void delay (float* l, float* r, int n, double bpm, const ParamState& p) noexcept;
     void reverb (float* l, float* r, int n, const ParamState& p) noexcept;
     void limiter (float* l, float* r, int n, const ParamState& p) noexcept;
-
-    float limiterReduction() const noexcept { return lim.reduction(); }
+    void resetLimiter() noexcept { lim.reset(); }   // its lookahead holds old audio while it is off
+    int limiterLookahead() const noexcept { return std::max (1, (int) std::lround (dsp::PhosLimiter::lookaheadMs * 0.001f * fs)); }
 
     // A synced delay time: steps / division of a whole note, dotted or triplet.
     static float delayMs (int steps, int division, int scale, double bpm) noexcept;
 
 private:
+    float fs = 48000.f;
     dsp::PhosDistortion distOs, distLate;
     dsp::PhosEq peq;
     dsp::PhosChorus cho;

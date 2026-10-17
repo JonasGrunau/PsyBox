@@ -417,3 +417,288 @@ TEST_CASE ("With a key set the arp plays every note in its scale", "[arp]")
     for (size_t i = 0; i < o.size(); ++i)
         CHECK (o[i].note == 55 + (int) i);
 }
+
+// ---------------------------------------------------------------------------
+// Host sync, swing against long gates, hold, the order of settings and sync
+// ---------------------------------------------------------------------------
+
+namespace
+{
+    // A host that plays `bpm` and cuts its blocks the way hosts do. `seg` lists
+    // where the transport jumps: { sample, ppq } from that sample on.
+    struct Seg { int64_t at; double ppq; };
+
+    std::vector<Ev> hostRun (Arpeggiator& a, int64_t total, double bpm, int maxBlock, bool randomBlocks, const std::vector<Seg>& seg = { { 0, 0.0 } })
+    {
+        std::vector<Ev> out;
+        const double spb = 60.0 / bpm * kFs;
+        uint32_t rs = 4242;
+        for (int64_t start = 0; start < total;)
+        {
+            int b = maxBlock;
+            if (randomBlocks)
+            {
+                rs = rs * 1664525u + 1013904223u;
+                b = 1 + (int) ((rs >> 8) % (uint32_t) maxBlock);
+            }
+            // a block never straddles a jump
+            int64_t end = std::min<int64_t> (total, start + b);
+            for (const auto& s : seg)
+                if (s.at > start)
+                    end = std::min (end, s.at);
+            const int n = (int) (end - start);
+            const Seg* cur = &seg[0];
+            for (const auto& s : seg)
+                if (s.at <= start)
+                    cur = &s;
+            a.sync (cur->ppq + (double) (start - cur->at) / spb, bpm, true);
+            int pos = 0;
+            while (pos < n)
+            {
+                a.fireDue ([&] (const ArpEvent& e) { out.push_back ({ start + pos, e.on, e.note }); });
+                const int step = std::min (n - pos, a.samplesToNextEvent());
+                a.advance (step);
+                pos += step;
+            }
+            start += n;
+        }
+        return out;
+    }
+
+    // Onsets in a percussive signal: the 2 ms peak rises through a quarter of
+    // the loudest peak after at least 3 ms under a twentieth of it.
+    int countOnsets (const std::vector<float>& x, int from, int to)
+    {
+        float top = 0.f;
+        for (int i = from; i < to; ++i) top = std::max (top, std::abs (x[(size_t) i]));
+        const float hi = 0.25f * top, lo = 0.05f * top;
+        int count = 0, quiet = 1000;
+        for (int i = from; i < to; ++i)
+        {
+            float m = 0.f;
+            for (int k = std::max (0, i - 96); k <= i; ++k) m = std::max (m, std::abs (x[(size_t) k]));
+            if (m < lo) ++quiet;
+            else
+            {
+                if (m > hi && quiet >= 144) ++count;
+                if (m > hi) quiet = 0;
+            }
+        }
+        return count;
+    }
+
+    ParamState percussive()
+    {
+        ParamState p;
+        p.set (P::ArpOn, 1.f);
+        p.set (P::ArpGate, 0.5f);
+        p.set (P::AenvA, 0.f);
+        p.set (P::AenvD, 30.f);
+        p.set (P::AenvS, 0.f);
+        p.set (P::AenvR, 20.f);
+        p.set (P::F1Type, 0.f);
+        return p;
+    }
+} // namespace
+
+TEST_CASE ("A host-synced arp fires every step exactly once, whatever the block size", "[arp][sync]")
+{
+    // 145 BPM: a 16th is 4965.517 samples, so steps fall between samples and
+    // a block boundary lands within a sample of one now and then. The old
+    // sync skipped a step that was a fraction of a sample behind the block
+    // start: block 1 played 300 of 580 steps.
+    const double bpm = 145.0;
+    const double step = 60.0 / bpm * kFs / 4.0;
+    const int64_t total = (int64_t) (kFs * 60.0);
+    const int expected = (int) std::floor (((double) total - 2.0) / step) + 1;
+    for (const auto& [block, random] : std::vector<std::pair<int, bool>> { { 1, false }, { 2, false }, { 37, false }, { 64, true }, { 441, false }, { 4096, false } })
+    {
+        ArpSettings s;
+        auto a = make (s);
+        a.keyOn (60, 0.8f);
+        const auto o = ons (hostRun (a, total, bpm, block, random));
+        INFO ("block " << block << (random ? " (random 1.." : " (fixed") << ")");
+        REQUIRE ((int) o.size() == expected);
+        for (size_t k = 0; k < o.size(); ++k)
+            REQUIRE (std::abs ((double) o[k].t - (double) k * step) <= 1.0);
+    }
+}
+
+TEST_CASE ("A host-synced arp follows a loop or a seek and keeps the grid", "[arp][sync]")
+{
+    const double bpm = 145.0;
+    const double spb = 60.0 / bpm * kFs;
+    // plays 2.1 beats, loops back to beat 1, plays on, then seeks 9.9 beats ahead (off the grid)
+    const std::vector<Seg> seg { { 0, 0.0 }, { (int64_t) (2.1 * spb), 1.0 }, { (int64_t) (5.0 * spb), 14.9 } };
+    const int64_t total = (int64_t) (9.0 * spb);
+    for (int block : { 1, 37, 4096 })
+    {
+        ArpSettings s;
+        auto a = make (s);
+        a.keyOn (60, 0.8f);
+        const auto o = ons (hostRun (a, total, bpm, block, false, seg));
+        std::vector<double> want;
+        for (size_t i = 0; i < seg.size(); ++i)
+        {
+            const int64_t from = seg[i].at, to = i + 1 < seg.size() ? seg[i + 1].at : total;
+            const double ppq0 = seg[i].ppq, ppq1 = ppq0 + (double) (to - from) / spb;
+            for (int q = (int) std::ceil (ppq0 * 4.0 - 1.0e-9); (double) q * 0.25 < ppq1 - 0.01; ++q)
+                want.push_back ((double) from + ((double) q * 0.25 - ppq0) * spb);
+        }
+        INFO ("block " << block);
+        REQUIRE (o.size() == want.size());
+        for (size_t k = 0; k < o.size(); ++k)
+            CHECK (std::abs ((double) o[k].t - want[k]) <= 1.0);
+    }
+}
+
+TEST_CASE ("Engine: a host-synced arp keeps every step with any block size", "[arp][sync][engine]")
+{
+    // A short percussive note per step: count the onsets in the audio.
+    const ParamState p = percussive();
+    const double bpm = 145.0, spb = 60.0 / bpm * kFs, step = spb / 4.0;
+    const int total = (int) (kFs * 6.0);
+    const int expected = (int) std::floor (((double) total - 6000.0) / step) + 1;
+    for (const auto& [block, random] : std::vector<std::pair<int, bool>> { { 1, false }, { 7, false }, { 64, true }, { 4096, false } })
+    {
+        Engine e;
+        e.setParams (p);
+        e.prepare (kFs, std::max (block, 16));
+        std::vector<float> l ((size_t) total), r ((size_t) total);
+        uint32_t rs = 777;
+        for (int pos = 0; pos < total;)
+        {
+            int b = block;
+            if (random)
+            {
+                rs = rs * 1664525u + 1013904223u;
+                b = 1 + (int) ((rs >> 8) % (uint32_t) block);
+            }
+            const int n = std::min (b, total - pos);
+            MidiEvent on { 0, MidiEvent::NoteOn, 60, 0.8f };
+            e.process (l.data() + pos, r.data() + pos, n, &on, pos == 0 ? 1 : 0, Transport { bpm, (double) pos / spb, true });
+            pos += n;
+        }
+        INFO ("block " << block << (random ? " random" : ""));
+        CHECK (countOnsets (l, 0, total - 6000) == expected);
+    }
+}
+
+TEST_CASE ("A long gate against a swung, shorter step ends the note before the next one starts", "[arp][swing]")
+{
+    // Swing pulls every second step closer; a 95 % gate outlasted it, the next
+    // step found the note open, took it for a tie and swallowed a same-pitch hit.
+    ArpSettings s;
+    s.gate = 0.95f;
+    s.swing = 0.5f;
+    auto a = make (s);
+    a.keyOn (60, 0.8f);
+    const auto ev = run (a, kSixteenth * 16, 256);
+    REQUIRE (ons (ev).size() == 16);
+    bool open = false;
+    for (const auto& e : ev)
+    {
+        CHECK (e.on != open);   // on, off, on, off...
+        open = e.on;
+    }
+    // the same through the settings a kick gets, where every step is a fresh hit
+    ParamState p;
+    p.set (P::EngineMode, (float) EngineMode::Kick);
+    p.set (P::ArpGate, 1.f);
+    p.set (P::ArpSwing, 0.4f);
+    auto k = make (ArpSettings::from (p));
+    k.keyOn (36, 0.8f);
+    const auto kev = run (k, kSixteenth * 32, 256);
+    CHECK (ons (kev).size() == 32);
+    open = false;
+    for (const auto& e : kev)
+    {
+        CHECK (e.on != open);
+        open = e.on;
+    }
+
+    // a real tie still ties: the same pitch just keeps sounding
+    ArpSettings t;
+    t.pattern = ArpPattern::parse ("sx--");
+    t.swing = 0.5f;
+    auto tied = make (t);
+    tied.keyOn (60, 0.8f);
+    const auto tev = run (tied, kSixteenth * 2, 256);
+    CHECK (ons (tev).size() == 1);
+}
+
+TEST_CASE ("A new chord in Hold mode doesn't slide out of the old one", "[arp][hold]")
+{
+    ArpSettings s;
+    s.hold = true;
+    s.gate = 1.f;   // every step is tied: the note is open when the chord changes
+    auto a = make (s);
+    a.keyOn (60, 0.8f);
+    run (a, kSixteenth * 2 + 100, 256);
+    a.keyOff (60);
+    std::vector<ArpEvent> ev;
+    a.keyOn (65, 0.8f);
+    a.sync (0.0, 120.0, false);
+    for (int t = 0; t < 4; ++t)
+    {
+        a.fireDue ([&] (const ArpEvent& e) { ev.push_back (e); });
+        a.advance (1);
+    }
+    REQUIRE (ev.size() >= 2);
+    CHECK_FALSE (ev[0].on);
+    CHECK (ev[0].note == 60);
+    CHECK (ev[1].on);
+    CHECK (ev[1].note == 65);
+    CHECK (ev[1].slideFrom < 0);
+}
+
+TEST_CASE ("Engine: a division change applies in the block it arrives in", "[arp][engine]")
+{
+    // sync() used to run before the block's settings were applied, so the
+    // first block after the change still played the old grid.
+    ParamState p = percussive();
+    int quarter = -1;
+    for (int i = 0; i < 32; ++i)
+        if (syncDivBeats (i) == 1.f) { quarter = i; break; }
+    REQUIRE (quarter >= 0);
+    Engine e;
+    e.setParams (p);
+    e.prepare (kFs, 4096);
+    const double spb = 24000.0;   // 120 BPM
+    std::vector<float> l (48000), r (48000);
+    MidiEvent on { 0, MidiEvent::NoteOn, 60, 0.8f };
+    e.process (l.data(), r.data(), 4096, &on, 1, Transport { 120.0, 0.0, true });
+    p.set (P::ArpDiv, (float) quarter);
+    e.setParams (p);
+    // two beats starting a 16th after a beat: the quarter grid has steps on the
+    // next two beats, the old 16th grid also fired one at once
+    const double startPpq = 8.25;
+    for (int pos = 0; pos < 48000; pos += 4096)
+    {
+        const int n = std::min (4096, 48000 - pos);
+        e.process (l.data() + pos, r.data() + pos, n, nullptr, 0, Transport { 120.0, startPpq + pos / spb, true });
+    }
+    CHECK (countOnsets (l, 0, 48000 - 100) == 2);
+}
+
+TEST_CASE ("Engine: keys the pedal holds when the arp turns on are let go with the pedal", "[arp][engine]")
+{
+    ParamState p;
+    Engine e;
+    e.setParams (p);
+    e.prepare (kFs, 256);
+    std::vector<float> l (256), r (256);
+    const MidiEvent pedalDown { 0, MidiEvent::Controller, 64, 1.f }, pedalUp { 0, MidiEvent::Controller, 64, 0.f };
+    const MidiEvent on { 0, MidiEvent::NoteOn, 60, 0.8f }, off { 0, MidiEvent::NoteOff, 60, 0.f };
+    e.process (l.data(), r.data(), 256, &pedalDown, 1, 120.0);
+    e.process (l.data(), r.data(), 256, &on, 1, 120.0);
+    e.process (l.data(), r.data(), 256, &off, 1, 120.0);   // the pedal holds it
+    p.set (P::ArpOn, 1.f);
+    e.setParams (p);
+    for (int b = 0; b < 40; ++b) e.process (l.data(), r.data(), 256, nullptr, 0, 120.0);
+    CHECK (e.arpStep() >= 0);   // arpeggiating the held note
+    e.process (l.data(), r.data(), 256, &pedalUp, 1, 120.0);
+    for (int b = 0; b < 40; ++b) e.process (l.data(), r.data(), 256, nullptr, 0, 120.0);
+    CHECK (e.arpStep() == -1);
+    CHECK (e.activeVoices() == 0);
+}

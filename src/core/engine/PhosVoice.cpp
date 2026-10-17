@@ -155,6 +155,7 @@ void PhosVoice::kill() noexcept
     meg = sweep = vca = 0.0;
     megAmp = accOn = ampNow = 0.0;
     fade = 1.f;
+    levelFresh = true;
     inHp.reset();
     ladder.reset();
     outHp.reset();
@@ -193,7 +194,7 @@ float PhosVoice::responseDb (float cutoffHz, float reso, float hz, const PhosMod
     return (float) (20.0 * std::log10 (std::max (std::abs (h), 1e-9)));
 }
 
-void PhosVoice::updateControl (const PhosSettings& s, const PhosMods& mods, int samples) noexcept
+void PhosVoice::updateControl (const PhosSettings& s, const PhosMods& mods) noexcept
 {
     const auto& M = *model;
     const double rate = osRate;
@@ -227,10 +228,10 @@ void PhosVoice::updateControl (const PhosSettings& s, const PhosMods& mods, int 
     vcaRel = perSample (M.vcaReleaseMs, rate);
     vcaTailRel = perSample (M.vcaTailMs, rate);
     accRel = perSample (M.accReleaseMs, rate);
-    (void) samples;
 }
 
-void PhosVoice::render (float* outL, float* outR, int chunkOffsetBase, int nBase, const PhosSettings& s, const PhosMods& mods) noexcept
+void PhosVoice::render (float* outL, float* outR, int chunkOffsetBase, int nBase, const PhosSettings& s, const PhosMods& mods,
+                        SourceArray* record) noexcept
 {
     if (! active)
         return;
@@ -242,7 +243,14 @@ void PhosVoice::render (float* outL, float* outR, int chunkOffsetBase, int nBase
     inHp.set (M.inHpHz, M.inHpQ, osRate);
     outHp.setG (prewarp (M.outHpHz, osRate));
     const double sagPerSample = perSample (M.sqSagMs, rate);
-    const float gain = dbToGain (M.gainDb) * mods.level;
+    const float baseGain = dbToGain (M.gainDb);
+    // Amp modulation arrives per chunk: a 1 ms pole keeps it from zippering
+    const float levelCoef = 1.f - std::exp (-1.f / (0.001f * osRate));
+    if (levelFresh)
+    {
+        levelNow = mods.level;
+        levelFresh = false;
+    }
     const float accVol = s.accVolumeCouple ? std::clamp (s.accent + mods.accent, 0.f, 1.f) : s.accVolume;
     const float accAmp = M.accAmp * accVol * s.accAmpEnvV / 1.0984f;
     const double vibInc = (M.vibHz0 + (M.vibHz1 - M.vibHz0) * s.vibSpeed) / rate;
@@ -256,7 +264,7 @@ void PhosVoice::render (float* outL, float* outR, int chunkOffsetBase, int nBase
     {
         if (--ctl <= 0)
         {
-            updateControl (s, mods, kControl);
+            updateControl (s, mods);
             ctl = kControl;
         }
 
@@ -314,7 +322,8 @@ void PhosVoice::render (float* outL, float* outR, int chunkOffsetBase, int nBase
         megAmp += (meg - megAmp) * megAmpUp;
         accOn += ((accented ? 1.0 : 0.0) - accOn) * (accented ? accUp : accDown);
         ampNow += (vca + accAmp * megAmp * accEnv * accOn - ampNow) * ampUp;
-        float out = outHp.hp (y * (float) ampNow) * gain;
+        levelNow += (mods.level - levelNow) * levelCoef;
+        float out = outHp.hp (y * (float) ampNow) * (baseGain * levelNow);
         if (s.noise > 0.f)
             out += rng.bipolar() * M.noiseLevel * s.noise * (float) vca;
         if (fading)
@@ -330,6 +339,12 @@ void PhosVoice::render (float* outL, float* outR, int chunkOffsetBase, int nBase
         outL[offset + i] += out;
         if (outR != nullptr)
             outR[offset + i] += out;
+        if (record != nullptr && (i + 1) % osFactor == 0)
+        {
+            auto& r = record[chunkOffsetBase + i / osFactor];
+            r[(size_t) ModSrc::AmpEnv] = (float) vca;
+            r[(size_t) ModSrc::FilterEnv] = (float) meg;
+        }
     }
 
     if (! gate && vca < kQuiet)

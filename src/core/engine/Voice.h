@@ -30,6 +30,7 @@ struct VoiceContext
     double sweepInc = 0.0;
     float sweepExp = 1.f, sweepFade = 0.f, sweepDelay = 0.f;
     bool sweepCut = false;
+    bool sweepUsed = true;   // the sweep source or the level fade reads it; otherwise its curve isn't computed
     // Active matrix slots, pre-filtered by the engine.
     struct Slot { int src, dst; float amt; };
     std::array<Slot, kNumModSlots> slots {};
@@ -39,12 +40,14 @@ struct VoiceContext
 class Voice
 {
 public:
+    friend struct EngineTestAccess;
+
     // maxOsRate sizes the comb buffers once; setRates never allocates.
     void prepare (float baseRate, float maxOsRate);
     void setRates (float baseRate, float osRate);
 
-    // retrigger=false keeps envelopes running (legato). glideFrom < 0: no glide.
-    void start (int note, float velocity, bool accent, bool retrigger, bool stolen, float glideFrom,
+    // glideFrom < 0: no glide.
+    void start (int note, float velocity, bool accent, bool stolen, float glideFrom,
                 const VoiceContext& ctx, uint64_t seed);
     void changeNote (int note, bool accent, bool doGlide);
     void release();
@@ -62,14 +65,16 @@ public:
     int getNote() const noexcept { return note; }
     uint64_t age = 0;
 
-    // Adds nBase * osFactor oversampled samples into outL/outR.
-    void render (float* outL, float* outR, int chunkOffsetBase, int nBase, const VoiceContext& ctx) noexcept;
+    // Adds nBase * osFactor oversampled samples into outL/outR. `record`
+    // (when given) gets every mod source at every base-rate sample, for the
+    // effects' modulation.
+    using SourceArray = std::array<float, (size_t) ModSrc::Count>;
+    void render (float* outL, float* outR, int chunkOffsetBase, int nBase, const VoiceContext& ctx,
+                 SourceArray* record = nullptr) noexcept;
+    // False when the last render ended on a NaN or infinity (a filter state gone bad): the engine kills such a voice.
+    bool isHealthy() const noexcept { return healthy; }
 
     float currentPitchSemis() const noexcept { return pitchNow; }
-    float ampLevel() const noexcept { return amp.value(); }
-    // Mod source values at the end of the last render (effect modulation
-    // follows the newest voice).
-    const std::array<float, (size_t) ModSrc::Count>& sources() const noexcept { return srcNow; }
     float sweepPhase() const noexcept { return (float) sweepT; }
     // For the editor's moving dots: amp, env 1 (filter), env 2 (mod).
     const dsp::Adsr& envelope (int i) const noexcept { return i == 0 ? amp : (i == 1 ? fenv : menv); }
@@ -93,6 +98,11 @@ private:
     // in stereo; otherwise the voice is mono up to the pan.
     dsp::FilterSlot f1, f2, f1R, f2R;
     bool stereo = false;
+    // How much of the right channel comes from the right-hand filters (1) and
+    // how much is the left channel (0); it moves over 5 ms when the unison
+    // stops or starts spreading, so the hand-over doesn't jump.
+    float stereoMix = 0.f;
+    bool stereoSnap = true;   // a fresh note takes the spread it has without the fade
     std::array<FilterNow, 2> filtNow {};
 
     struct Unison
@@ -103,7 +113,7 @@ private:
         float detune = -1.f, range = -1.f, blend = -1.f, width = -1.f;
         bool stereo = false;
         // Recomputes the voices when a setting moved; true when something changed.
-        bool update (int count, float det, float rng, int md, int stk, float bl, float wd, bool st) noexcept;
+        bool update (int count, float det, float rangeSemis, int md, int stk, float bl, float wd, bool st) noexcept;
     };
     Unison uniA, uniB;
     dsp::Adsr amp, fenv, menv;
@@ -111,7 +121,11 @@ private:
     std::array<dsp::Lfo, kNumLfos> lfos;
     dsp::Rng rng;
 
-    std::array<float, (size_t) ModSrc::Count> srcNow {};
+    // Rate offsets of the per-voice LFOs from the matrix, carried from sample
+    // to sample (and chunk to chunk): an LFO runs before the offsets of its
+    // own sample are summed.
+    std::array<float, kNumLfos> lfoRateMod {};
+    bool healthy = true;
     double syncPhase = 0.0;
     double sweepT = 0.0;   // energy sweep, 0..1 linear
     int note = 60;

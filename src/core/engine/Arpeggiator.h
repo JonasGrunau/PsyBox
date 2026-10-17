@@ -63,6 +63,7 @@ public:
             sink (ArpEvent { false, current, 0.f });
             current = -1;
             toOff = -1.0;
+            tied = false;
         }
         releasePending = false;
 
@@ -87,6 +88,7 @@ public:
 
     int numPhysicalKeys() const noexcept;
     int physicalKey (int i) const noexcept;   // i-th key that is physically down
+    float physicalVelocity (int i) const noexcept;
     bool isRunning() const noexcept { return numKeys > 0 || current >= 0; }
     int currentStep() const noexcept { return isRunning() ? lastStep : -1; }   // pattern position, for the UI
 
@@ -103,10 +105,11 @@ private:
 
     double stepSamples = 6000.0;
     double toStep = kIdle, toOff = -1.0;
-    int64_t stepIndex = 0, lastFired = INT64_MIN;
+    int64_t stepIndex = 0;
     uint64_t seqPos = 0;
     int current = -1, lastRandom = -1, lastStep = -1;
     bool releasePending = false;
+    bool tied = false;   // the sounding note was tied to the next step (slide flag, gate >= 100 %)
     dsp::Rng rng { 0xA59u };
 
     bool latched() const noexcept { return set.hold || sustain; }
@@ -120,7 +123,6 @@ private:
     template <typename Sink>
     void playStep (Sink& sink) noexcept
     {
-        lastFired = stepIndex;
         const int len = std::clamp (set.pattern.length, 1, kArpSteps);
         const int pos = (int) (((stepIndex % len) + len) % len);
         lastStep = pos;
@@ -132,6 +134,7 @@ private:
                 current = -1;
                 toOff = -1.0;
             }
+            tied = false;
             return;
         }
 
@@ -145,17 +148,25 @@ private:
         // others stay under the engine's accent threshold.
         vel = set.pattern.has (pos, ArpPattern::Accent) ? 1.f : std::min (vel, set.plainVelocity);
 
-        // Still sounding means the last step was tied (slide flag, or a gate of
-        // 100 % or more). The voice slides to the new note with its envelopes
-        // running (303 slides, risers and pads keep swelling); the same pitch
-        // just keeps sounding.
+        // Only a tied step (slide flag, or a gate of 100 % or more) leaves the
+        // note sounding on purpose: the voice slides to the new note with its
+        // envelopes running (303 slides, risers and pads keep swelling) and
+        // the same pitch just keeps sounding. A note still open for any other
+        // reason (a long gate against a swung, shorter step) ends first.
+        if (current >= 0 && ! tied)
+        {
+            sink (ArpEvent { false, current, 0.f });
+            current = -1;
+        }
         if (current < 0)
             sink (ArpEvent { true, note, vel });
         else if (note != current)
             sink (ArpEvent { true, note, vel, current });
         current = note;
-        const bool tie = set.gate >= 1.f || set.pattern.has (pos, ArpPattern::Slide);
-        toOff = tie ? -1.0 : std::max (1.0, (double) set.gate * stepSamples);
+        tied = set.gate >= 1.f || set.pattern.has (pos, ArpPattern::Slide);
+        // never past the next step, which swing may have pulled closer
+        const double next = stepSamples * (1.0 + swingOffset (stepIndex + 1) - swingOffset (stepIndex)) + std::min (toStep, 0.0);
+        toOff = tied ? -1.0 : std::clamp ((double) set.gate * stepSamples, 1.0, std::max (1.0, next - 1.0));
     }
 };
 

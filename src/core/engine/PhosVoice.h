@@ -109,7 +109,6 @@ class PhosVoice
 public:
     void prepare (float baseRate, float osRate);
     void setRates (float baseRate, float osRate);
-    void setModel (const PhosModel* m) noexcept { model = m != nullptr ? m : &PhosModel::standard(); }
 
     void trigger (int note, bool accent, const PhosSettings& s) noexcept;   // a new note: envelopes restart
     void slideTo (int note, bool accent) noexcept;                          // a tie: the pitch glides
@@ -120,9 +119,7 @@ public:
     bool isActive() const noexcept { return active; }
     bool isGateOn() const noexcept { return gate; }
     int getNote() const noexcept { return note; }
-    bool isAccented() const noexcept { return accented; }
     float level() const noexcept { return (float) vca * fade; }
-    float currentPitch() const noexcept { return (float) pitch; }
 
     // What the editor and the matrix see.
     float filterEnv() const noexcept { return (float) meg; }
@@ -130,7 +127,11 @@ public:
     float cutoffHz() const noexcept { return lastCutoffHz; }
 
     // Adds nBase * osFactor oversampled samples (outR may be null).
-    void render (float* outL, float* outR, int chunkOffsetBase, int nBase, const PhosSettings& s, const PhosMods& m) noexcept;
+    // `record` (when given) gets the amp and filter envelope at every base-rate
+    // sample, for the effects' modulation.
+    using SourceArray = std::array<float, (size_t) ModSrc::Count>;
+    void render (float* outL, float* outR, int chunkOffsetBase, int nBase, const PhosSettings& s, const PhosMods& m,
+                 SourceArray* record = nullptr) noexcept;
 
     // For the editor and the voice alike: the filter's cutoff (log2 Hz) for
     // the knobs, the envelope and the accent sweep; the envelope's decay;
@@ -173,8 +174,10 @@ private:
     double megAmp = 0.0, accOn = 0.0, ampNow = 0.0;
     bool wasGate = false;
     float accentAmt = 0.f;
+    float levelNow = 1.f;      // the Amp modulation's gain, smoothed per sample
+    bool levelFresh = true;
 
-    void updateControl (const PhosSettings& s, const PhosMods& m, int samples) noexcept;
+    void updateControl (const PhosSettings& s, const PhosMods& m) noexcept;
 };
 
 } // namespace psy

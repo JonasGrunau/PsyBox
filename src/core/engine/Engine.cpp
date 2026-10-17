@@ -1,6 +1,7 @@
 #include "Engine.h"
 
 #include <algorithm>
+#include <bit>
 #include <cstring>
 
 namespace psy
@@ -12,6 +13,17 @@ namespace
 
     int factorForQuality (int q) noexcept { return q == 0 ? 1 : (q == 1 ? 2 : 4); }
     float harmonicLimitFor (int factor) noexcept { return factor == 1 ? 0.45f : (factor == 2 ? 0.62f : 0.8f); }
+
+    constexpr float kControllerMs = 5.f;   // mod wheel, aftertouch and bend pass through a pole this long
+
+    // True when any sample is NaN or infinity. Bit test, so it holds under fast-math too.
+    bool anyNonFinite (const float* x, int n) noexcept
+    {
+        uint32_t bad = 0;
+        for (int i = 0; i < n; ++i)
+            bad |= (uint32_t) (((std::bit_cast<uint32_t> (x[i]) >> 23) & 0xFFu) == 0xFFu);
+        return bad != 0;
+    }
 } // namespace
 
 Engine::Engine()
@@ -30,6 +42,7 @@ void Engine::prepare (double sampleRate, int maxBlockSize)
     decimR.prepare (maxBlock);
     for (auto& b : globalLfoBuf)
         b.assign ((size_t) maxBlock, 0.f);
+    fxSrc.assign ((size_t) maxBlock, {});
 
     for (auto& v : voices)
         v.prepare ((float) fs, (float) fs * 4.f);
@@ -65,6 +78,17 @@ void Engine::prepare (double sampleRate, int maxBlockSize)
     firstBlock = false;
 }
 
+void Engine::setParams (const ParamState& p) noexcept
+{
+    target = p;
+    const auto& defs = paramDefs();
+    for (size_t i = 0; i < (size_t) kNumParams; ++i)
+    {
+        float& v = target.v[i];
+        v = std::isfinite (v) ? std::clamp (v, defs[i].min, defs[i].max) : defs[i].def;
+    }
+}
+
 int Engine::wantedFactor() const noexcept
 {
     return factorForQuality (target.geti (offline ? P::RenderQuality : P::Quality));
@@ -88,20 +112,9 @@ void Engine::applyQuality()
     decimR.reset();
 }
 
-void Engine::reset()
+void Engine::resetEffects() noexcept
 {
-    leadVoice = -1;
-    for (auto& v : voices) v.kill();
-    for (auto& k : kicks) k.kill();
-    phos.kill();
-    phosModEnv.kill();
     phosFx.reset();
-    engineMode = -1;
-    numHeld = 0;
-    sustained.fill (false);
-    sustainPedal = false;
-    arp.reset();
-    arpActive = false;
     dist.reset();
     distLate.reset();
     crush.reset();
@@ -115,6 +128,36 @@ void Engine::reset()
     for (auto& d : outDc) d.reset();
     decimL.reset();
     decimR.reset();
+    limOn = false;
+    outGainSet = false;
+    fxCount = fxCountOs = 0;
+}
+
+void Engine::reset()
+{
+    leadVoice = -1;
+    for (auto& v : voices) v.kill();
+    for (auto& k : kicks) k.kill();
+    phos.kill();
+    phosModEnv.kill();
+    engineMode = -1;
+    numHeld = 0;
+    sustained.fill (false);
+    sustainPedal = false;
+    arp.reset();
+    arpActive = false;
+    // the next patch's first note starts where its own pitch is, not on a glide from the old one
+    lastNote = -1;
+    lastPitch = -1.f;
+    // free LFOs start from their Phase, like a fresh patch
+    for (int i = 0; i < kNumLfos; ++i)
+        globalLfos[(size_t) i].reset (target.get (lfoParam (i, 5)));
+    resetEffects();
+    qualityPending = false;
+    lastPlaying = false;
+    lfoLockIn = 0;
+    diag = {};
+    fxBad = false;
     firstBlock = true;
 }
 
@@ -174,33 +217,51 @@ int Engine::activeVoices() const noexcept
     return n + (phos.isActive() ? 1 : 0);
 }
 
+// Discrete parameters (and so the arp's division, mode and on switch) take
+// their new value when a block starts, before the arp is synced to the grid.
+void Engine::snapDiscrete() noexcept
+{
+    const auto& defs = paramDefs();
+    for (size_t i = 0; i < (size_t) kNumParams; ++i)
+        if (defs[i].isDiscrete())
+            cur.v[i] = target.v[i];
+}
+
 void Engine::smoothParams (int numSamples) noexcept
 {
     const auto& defs = paramDefs();
-    if (firstBlock)
-    {
-        cur = target;
-        firstBlock = false;
-        return;
-    }
     const float a = 1.f - std::exp (-(float) numSamples / (0.012f * (float) fs));
     for (size_t i = 0; i < (size_t) kNumParams; ++i)
     {
+        const float t = target.v[i];
+        if (cur.v[i] == t)
+            continue;   // settled: nothing to move (most of the table, most of the time)
         if (defs[i].isDiscrete())
         {
-            cur.v[i] = target.v[i];
+            cur.v[i] = t;
         }
         else if (defs[i].mapping == Mapping::Exp)
         {
             // smooth frequencies in the log domain so sweeps sound even
-            const float lc = std::log (cur.v[i]), lt = std::log (target.v[i]);
-            cur.v[i] = std::exp (lc + (lt - lc) * a);
+            const float lc = std::log (cur.v[i]), lt = std::log (t);
+            const float next = std::exp (lc + (lt - lc) * a);
+            // the log-domain pole closes in on the target without always landing on it
+            cur.v[i] = std::abs (next - t) <= 1e-6f * t ? t : next;
         }
         else
         {
-            cur.v[i] += (target.v[i] - cur.v[i]) * a;
+            cur.v[i] += (t - cur.v[i]) * a;
         }
     }
+}
+
+// Mod wheel, aftertouch and bend arrive in 7-bit steps: a pole rounds them.
+void Engine::smoothControllers (int n) noexcept
+{
+    const float a = 1.f - std::exp (-(float) n / (kControllerMs * 0.001f * (float) fs));
+    ctx.modWheel += (rawWheel - ctx.modWheel) * a;
+    ctx.aftertouch += (rawAftertouch - ctx.aftertouch) * a;
+    ctx.pitchBend += (rawBend - ctx.pitchBend) * a;
 }
 
 void Engine::prepareContext (double bpm) noexcept
@@ -214,6 +275,7 @@ void Engine::prepareContext (double bpm) noexcept
     }
     ctx.numSlots = 0;
     numFxSlots = 0;
+    ctx.sweepUsed = cur.get (P::EnergyFade) != 0.f;
     for (int s = 0; s < kNumModSlots; ++s)
     {
         const int src = cur.geti (modSrcParam (s));
@@ -221,10 +283,31 @@ void Engine::prepareContext (double bpm) noexcept
         const float amt = cur.get (modAmtParam (s));
         if (src <= 0 || dst <= 0 || amt == 0.f || src >= (int) ModSrc::Count || dst >= (int) ModDst::Count)
             continue;
+        ctx.sweepUsed = ctx.sweepUsed || src == (int) ModSrc::Sweep;
         if (isFxTarget ((ModDst) dst))
             fxSlots[(size_t) numFxSlots++] = { src, dst, amt };
         else
             ctx.slots[(size_t) ctx.numSlots++] = { src, dst, amt };
+    }
+
+    // A free-running LFO is one oscillator for every voice, so only sources
+    // that are the same for every voice can move its rate: the macros, wheel,
+    // aftertouch and bend (a voice's own LFO takes any source, in Voice).
+    freeLfoHz = ctx.lfoHz;
+    for (int i = 0; i < ctx.numSlots; ++i)
+    {
+        const auto& sl = ctx.slots[(size_t) i];
+        const int lfo = sl.dst - (int) ModDst::Lfo1Rate;
+        if (lfo < 0 || lfo >= kNumLfos)
+            continue;
+        float v;
+        if (sl.src >= (int) ModSrc::Macro1 && sl.src <= (int) ModSrc::Macro4)
+            v = cur.get ((P) ((int) P::Macro1 + sl.src - (int) ModSrc::Macro1));
+        else if (sl.src == (int) ModSrc::ModWheel) v = ctx.modWheel;
+        else if (sl.src == (int) ModSrc::Aftertouch) v = ctx.aftertouch;
+        else if (sl.src == (int) ModSrc::PitchBend) v = ctx.pitchBend;
+        else continue;
+        freeLfoHz[(size_t) lfo] *= std::exp2 (sl.amt * v * 4.f);
     }
 
     // Energy sweep: the length in bars follows the tempo (4/4).
@@ -237,6 +320,8 @@ void Engine::prepareContext (double bpm) noexcept
     ctx.sweepDelay = cur.get (P::EnergyDelay);
     // a one-shot always ends at its length: letting go of the key doesn't
     ctx.sweepCut = cur.on (P::EnergyCut) || cur.on (P::EnergyOneShot);
+    for (int i = 0; i < numFxSlots; ++i)
+        ctx.sweepUsed = ctx.sweepUsed || fxSlots[(size_t) i].src == (int) ModSrc::Sweep;
 }
 
 // ---------------------------------------------------------------------------
@@ -314,29 +399,40 @@ void Engine::updateArp() noexcept
     if (want)
     {
         std::array<int, 32> keys {};
-        std::array<bool, 32> accents {};
+        std::array<float, 32> vels {};
+        std::array<bool, 32> pedal {};
         const int n = numHeld;
         std::copy (held.begin(), held.begin() + n, keys.begin());
-        std::copy (heldAccent.begin(), heldAccent.begin() + n, accents.begin());
+        std::copy (heldVel.begin(), heldVel.begin() + n, vels.begin());
+        for (int i = 0; i < n; ++i)
+            pedal[(size_t) i] = sustained[(size_t) keys[(size_t) i]];   // let go, but the pedal holds them
         allNotesOff();
         sustained.fill (false);
         arpActive = true;
         arp.setSustain (sustainPedal);
         for (int i = 0; i < n; ++i)
-            arp.keyOn (keys[(size_t) i], accents[(size_t) i] ? 1.f : 0.8f);
+        {
+            arp.keyOn (keys[(size_t) i], vels[(size_t) i]);
+            if (pedal[(size_t) i])
+                arp.keyOff (keys[(size_t) i]);   // latched by the pedal: gone when it comes up
+        }
     }
     else
     {
         std::array<int, Arpeggiator::kMaxKeys> keys {};
+        std::array<float, Arpeggiator::kMaxKeys> vels {};
         const int n = arp.numPhysicalKeys();
         for (int i = 0; i < n; ++i)
+        {
             keys[(size_t) i] = arp.physicalKey (i);
+            vels[(size_t) i] = arp.physicalVelocity (i);
+        }
         arp.allOff();
         fireArp();   // releases the arp's note
         arpActive = false;
         if (! kickMode())   // held keys would fire a kick off the grid
             for (int i = 0; i < n; ++i)
-                voiceNoteOn (keys[(size_t) i], 0.8f);
+                voiceNoteOn (keys[(size_t) i], vels[(size_t) i]);
     }
 }
 
@@ -367,6 +463,7 @@ void Engine::voiceSlide (int from, int to, float velocity) noexcept
             {
                 held[(size_t) i] = to;
                 heldAccent[(size_t) i] = accent;
+                heldVel[(size_t) i] = velocity;
                 break;
             }
         phos.slideTo (to, accent);
@@ -398,6 +495,7 @@ void Engine::voiceSlide (int from, int to, float velocity) noexcept
         {
             held[(size_t) i] = to;
             heldAccent[(size_t) i] = accent;
+            heldVel[(size_t) i] = velocity;
             break;
         }
     v->changeNote (to, accent, cur.get (P::Glide) > 0.5f);
@@ -421,9 +519,13 @@ void Engine::voiceNoteOn (int note, float velocity) noexcept
     {
         held[(size_t) numHeld] = note;
         heldAccent[(size_t) numHeld] = accent;
+        heldVel[(size_t) numHeld] = velocity;
         ++numHeld;
     }
     sustained[(size_t) note] = false;
+
+    if (qualityPending)
+        return;   // the voices are fading out for a quality change; the note is held but doesn't start
 
     if (kickMode())
     {
@@ -447,7 +549,7 @@ void Engine::voiceNoteOn (int note, float velocity) noexcept
         const auto slot = (size_t) (&v - voices.data());
         handOff (slot, (size_t) std::clamp (cur.geti (P::PolyVoices), 1, kMaxVoices));
         const float glideFrom = hasGlide && glideAlways && lastPitch >= 0.f ? lastPitch : -1.f;
-        v.start (note, velocity, accent, true, v.isActive(), glideFrom, ctx, seed);
+        v.start (note, velocity, accent, v.isActive(), glideFrom, ctx, seed);
         v.age = ++ageCounter;
         leadVoice = (int) (&v - voices.data());
     }
@@ -467,7 +569,7 @@ void Engine::voiceNoteOn (int note, float velocity) noexcept
         {
             const float from = doGlide && v.isActive() ? v.currentPitchSemis() : -1.f;
             handOff (0, 1);
-            v.start (note, velocity, accent, true, v.isActive(), from, ctx, seed);
+            v.start (note, velocity, accent, v.isActive(), from, ctx, seed);
         }
         v.age = ++ageCounter;
         leadVoice = 0;
@@ -487,6 +589,7 @@ void Engine::dropHeld (int note) noexcept
     {
         held[(size_t) i] = held[(size_t) i + 1];
         heldAccent[(size_t) i] = heldAccent[(size_t) i + 1];
+        heldVel[(size_t) i] = heldVel[(size_t) i + 1];
     }
     --numHeld;
 }
@@ -541,7 +644,7 @@ void Engine::voiceNoteOff (int note) noexcept
         {
             const float from = hasGlide ? v.currentPitchSemis() : -1.f;
             handOff (0, 1);
-            v.start (prev, 0.8f, heldAccent[(size_t) numHeld - 1], true, v.isActive(), from, ctx, ++noteSeed * 2654435761u);
+            v.start (prev, heldVel[(size_t) numHeld - 1], heldAccent[(size_t) numHeld - 1], v.isActive(), from, ctx, ++noteSeed * 2654435761u);
         }
         lastPitch = (float) prev;
     }
@@ -587,14 +690,14 @@ void Engine::phosNoteOn (int note, float velocity) noexcept
             globalLfos[(size_t) i].reset (cur.get (lfoParam (i, 5)));
 }
 
-std::array<float, (size_t) ModSrc::Count> Engine::phosSources (int sampleInChunk) const noexcept
+std::array<float, (size_t) ModSrc::Count> Engine::phosSources (int sampleInBlock) const noexcept
 {
     std::array<float, (size_t) ModSrc::Count> src {};
     src[(size_t) ModSrc::AmpEnv] = phos.ampEnv();
     src[(size_t) ModSrc::FilterEnv] = phos.filterEnv();
     src[(size_t) ModSrc::ModEnv] = phosModEnv.value();
     for (int i = 0; i < kNumLfos; ++i)
-        src[(size_t) ModSrc::Lfo1 + (size_t) i] = ctx.globalLfo[(size_t) i] != nullptr ? ctx.globalLfo[(size_t) i][sampleInChunk] : 0.f;
+        src[(size_t) ModSrc::Lfo1 + (size_t) i] = ctx.globalLfo[(size_t) i] != nullptr ? ctx.globalLfo[(size_t) i][sampleInBlock] : 0.f;
     src[(size_t) ModSrc::Velocity] = phosVelocity;
     src[(size_t) ModSrc::Note] = ((float) phos.getNote() - 60.f) / 60.f;
     src[(size_t) ModSrc::ModWheel] = ctx.modWheel;
@@ -606,14 +709,16 @@ std::array<float, (size_t) ModSrc::Count> Engine::phosSources (int sampleInChunk
     return src;
 }
 
-PhosMods Engine::phosMods() const noexcept
+// sampleInBlock: where the chunk starts in the block, which is where the
+// free LFOs' buffers are read.
+PhosMods Engine::phosMods (int sampleInBlock) const noexcept
 {
     PhosMods m;
     m.wheel = ctx.modWheel;
     m.pitch = ctx.pitchBend * (float) cur.geti (P::BendRange);
     if (ctx.numSlots == 0)
         return m;
-    const auto src = phosSources (0);
+    const auto src = phosSources (sampleInBlock);
     for (int s = 0; s < ctx.numSlots; ++s)
     {
         const auto& slot = ctx.slots[(size_t) s];
@@ -663,18 +768,25 @@ void Engine::allNotesOff() noexcept
 
 void Engine::handleEvent (const MidiEvent& e) noexcept
 {
+    // Values the host got wrong must not reach the voices: NaN in a velocity
+    // or a bend would poison them for good, and a note outside 0..127 indexes
+    // past the sustain table.
+    const bool finite = std::isfinite (e.value);
+    const bool isNote = e.type == MidiEvent::NoteOn || e.type == MidiEvent::NoteOff;
+    if (isNote && (e.number < 0 || e.number > 127))
+        return;
     switch (e.type)
     {
         case MidiEvent::NoteOn:
             if (e.value <= 0.f) keyOff (e.number);
-            else keyOn (e.number, e.value);
+            else keyOn (e.number, finite ? std::min (e.value, 1.f) : 0.8f);
             break;
         case MidiEvent::NoteOff: keyOff (e.number); break;
-        case MidiEvent::PitchBend: ctx.pitchBend = e.value; break;
-        case MidiEvent::ChannelPressure: ctx.aftertouch = e.value; break;
+        case MidiEvent::PitchBend: rawBend = finite ? std::clamp (e.value, -1.f, 1.f) : 0.f; break;
+        case MidiEvent::ChannelPressure: rawAftertouch = finite ? std::clamp (e.value, 0.f, 1.f) : 0.f; break;
         case MidiEvent::AllNotesOff: allNotesOff(); break;
         case MidiEvent::Controller:
-            if (e.number == 1) ctx.modWheel = e.value;
+            if (e.number == 1) rawWheel = finite ? std::clamp (e.value, 0.f, 1.f) : 0.f;
             else if (e.number == 64)
             {
                 sustainPedal = e.value >= 0.5f;
@@ -692,51 +804,121 @@ void Engine::handleEvent (const MidiEvent& e) noexcept
 // Rendering
 // ---------------------------------------------------------------------------
 
-void Engine::renderVoices (int offset, int n) noexcept
+void Engine::renderVoices (int offset, int n, bool record) noexcept
 {
-    for (auto& v : voices)
-        if (v.isActive())
-            v.render (osL.data(), osR.data(), offset, n, ctx);
+    for (size_t i = 0; i < voices.size(); ++i)
+        if (voices[i].isActive())
+            voices[i].render (osL.data(), osR.data(), offset, n, ctx, record && (int) i == leadVoice ? fxSrc.data() : nullptr);
     for (auto& k : kicks)
         if (k.isActive())
             k.render (osL.data(), osR.data(), offset, n, ctx);
     if (phos.isActive())
     {
-        const auto mods = phosMods();
-        phos.render (osL.data(), osR.data(), offset, n, PhosSettings::from (cur), mods);
+        const auto mods = phosMods (offset);
+        phos.render (osL.data(), osR.data(), offset, n, PhosSettings::from (cur), mods, record ? fxSrc.data() : nullptr);
         for (int i = 0; i < n; ++i)
+        {
             phosModEnv.process();
+            if (record)
+                fxSrc[(size_t) (offset + i)][(size_t) ModSrc::ModEnv] = phosModEnv.value();
+        }
     }
+}
+
+// A voice, kick or the 303 that put out NaN or infinity: the chunk loses
+// those samples, the voice that went bad (its filter state is poisoned for
+// good) is killed, and the engine plays on.
+void Engine::recoverFromNonFinite (int offset, int n) noexcept
+{
+    const int from = offset * osFactor, to = (offset + n) * osFactor;
+    for (float* buf : { osL.data(), osR.data() })
+        for (int i = from; i < to; ++i)
+            if (! std::isfinite (buf[i]))
+            {
+                buf[i] = 0.f;
+                ++diag.nonFinite;
+            }
+
+    bool found = false;
+    for (auto& v : voices)
+        if (v.isActive() && ! v.isHealthy())
+        {
+            v.kill();
+            found = true;
+        }
+    if (! found)
+    {
+        for (auto& k : kicks) k.kill();
+        phos.kill();
+        phosModEnv.kill();
+    }
+}
+
+// Quality changes the oversampling, which restarts every voice's filters and
+// the decimator: letting the sounding voices go first (3 ms) keeps that
+// click out. The switch happens at the first block with nothing sounding.
+void Engine::followQuality() noexcept
+{
+    const int want = wantedFactor();
+    if (want == osFactor)
+    {
+        qualityPending = false;
+        return;
+    }
+    if (activeVoices() > 0)
+    {
+        qualityPending = true;
+        for (auto& v : voices)
+            if (v.isActive()) v.fadeOut();
+        for (auto& k : kicks)
+            k.choke();
+        phos.fadeOut();
+        return;
+    }
+    osFactor = want;
+    applyQuality();
+    qualityPending = false;
+}
+
+int Engine::limiterLatency() const noexcept
+{
+    return phosMode() && cur.on (P::PhosLimOn) ? phosFx.limiterLookahead() : 0;
 }
 
 void Engine::process (float* left, float* right, int numSamples, const MidiEvent* events, int numEvents, const Transport& transport) noexcept
 {
     const double bpm = transport.bpm > 0.0 ? transport.bpm : 120.0;
-    arp.sync (transport.ppq, bpm, transport.playing);
 
     // After a reset (a patch swap) the first notes must play the new patch,
     // so the smoothed state jumps before any event is handled.
     if (firstBlock)
     {
         cur = target;
+        ctx.modWheel = rawWheel;
+        ctx.aftertouch = rawAftertouch;
+        ctx.pitchBend = rawBend;
         firstBlock = false;
     }
+    else
+        snapDiscrete();
 
-    const int wantFactor = wantedFactor();
-    if (wantFactor != osFactor)
-    {
-        osFactor = wantFactor;
-        applyQuality();
-    }
+    // The arp reads this block's division, swing and mode before it lines up
+    // with the host's grid.
+    arp.setSettings (ArpSettings::from (cur));
+    arp.sync (transport.ppq, bpm, transport.playing);
+
+    const double beatsPerSample = bpm / (60.0 * fs);
 
     int done = 0;
     int ev = 0;
     while (done < numSamples)
     {
         const int blockN = std::min (numSamples - done, maxBlock);
+        followQuality();
         std::fill (osL.begin(), osL.begin() + blockN * osFactor, 0.f);
         std::fill (osR.begin(), osR.begin() + blockN * osFactor, 0.f);
 
+        bool fxMod = false;
         int pos = 0;
         while (pos < blockN)
         {
@@ -755,37 +937,97 @@ void Engine::process (float* left, float* right, int numSamples, const MidiEvent
                 n = std::min (n, arp.samplesToNextEvent());
 
             smoothParams (n);
+            smoothControllers (n);
             prepareContext (bpm);
 
-            // free-running LFOs
+            // Free-running LFOs. A synced one is locked to the bar while the host
+            // plays: checked every 2048 samples, and at once after a start or a
+            // seek. (Between checks it runs on its own, so the checks' timing is
+            // all the host's block size can change.)
+            const bool lockNow = transport.playing && ((done == 0 && pos == 0 && (! lastPlaying || std::abs (transport.ppq - lastPpqEnd) > 0.002))
+                                                       || lfoLockIn <= 0);
+            if (lockNow)
+                lfoLockIn = 2048;
+            lfoLockIn -= n;
             for (int i = 0; i < kNumLfos; ++i)
             {
+                auto& lfo = globalLfos[(size_t) i];
                 auto& buf = globalLfoBuf[(size_t) i];
+                if (lockNow && cur.on (lfoParam (i, 2)) && ! cur.on (lfoParam (i, 4)))
+                {
+                    const double cycles = (transport.ppq + (double) (done + pos) * beatsPerSample) / syncDivBeats (cur.geti (lfoParam (i, 3)))
+                                          + (double) cur.get (lfoParam (i, 5));
+                    const float want = (float) (cycles - std::floor (cycles));
+                    float d = std::abs (want - lfo.phase());
+                    d = std::min (d, 1.f - d);
+                    if (d > 1.0e-4f)
+                        lfo.reset (want);
+                }
                 const int shape = cur.geti (lfoParam (i, 0));
                 for (int k = 0; k < n; ++k)
-                    buf[(size_t) (pos + k)] = globalLfos[(size_t) i].process (shape, ctx.lfoHz[(size_t) i]);
+                    buf[(size_t) (pos + k)] = lfo.process (shape, freeLfoHz[(size_t) i]);
                 ctx.globalLfo[(size_t) i] = buf.data();
             }
 
-            renderVoices (pos, n);
+            // what the effects' matrix slots will read for these samples
+            const bool record = numFxSlots > 0 && ! kickMode();
+            if (record)
+            {
+                fxMod = true;
+                std::array<float, (size_t) ModSrc::Count> base {};
+                if (phosMode())
+                    base = phosSources (pos);
+                else
+                {
+                    base[(size_t) ModSrc::ModWheel] = ctx.modWheel;
+                    base[(size_t) ModSrc::Aftertouch] = ctx.aftertouch;
+                    base[(size_t) ModSrc::PitchBend] = ctx.pitchBend;
+                    for (int m = 0; m < 4; ++m)
+                        base[(size_t) ModSrc::Macro1 + (size_t) m] = cur.get ((P) ((int) P::Macro1 + m));
+                }
+                std::fill (fxSrc.begin() + pos, fxSrc.begin() + pos + n, base);
+            }
+
+            renderVoices (pos, n, record);
+            if (anyNonFinite (osL.data() + pos * osFactor, n * osFactor) || anyNonFinite (osR.data() + pos * osFactor, n * osFactor))
+                recoverFromNonFinite (pos, n);
             if (arpActive)
                 arp.advance (n);
             pos += n;
         }
 
         // Effects see the patch plus their matrix modulation, refreshed every
-        // kFxChunk samples (the free LFOs are read where each chunk starts).
-        const bool fxMod = numFxSlots > 0 && ! kickMode();
-        if (fxMod) modulateFx (0);
-        const ParamState& fp = fxMod ? fxParams : cur;
-        if (phosMode())
+        // kFxChunk samples (the sources are the ones recorded for each sample).
+        // The slices count on from block to block, so they sit on the same
+        // samples whatever the host's block size.
+        constexpr int kFxChunk = 32;
+        const auto distFirstRun = [&] (const ParamState& fp, int from, int count) {
+            const int o = from * osFactor, m = count * osFactor;
+            if (phosMode())
+            {
+                if (fp.on (P::PhosDistOn) && phosDistFirst (fp))
+                    phosFx.distortionOs (osL.data() + o, osR.data() + o, m, fp);
+            }
+            else if (fp.on (P::DistOn) && distFirst (fp))
+                dist.process (osL.data() + o, osR.data() + o, m, fp.geti (P::DistType), fp.get (P::DistDrive),
+                              fp.get (P::DistTone), fp.get (P::DistMix), fp.get (P::DistLowCut), fp.on (P::DistAuto));
+        };
+        if (fxMod)
         {
-            if (fp.on (P::PhosDistOn) && phosDistFirst (fp))
-                phosFx.distortionOs (osL.data(), osR.data(), blockN * osFactor, fp);
+            for (int i = 0; i < blockN;)
+            {
+                if (fxCountOs == 0) modulateFx (i, fxParamsOs);
+                const int m = std::min (blockN - i, kFxChunk - fxCountOs);
+                distFirstRun (fxParamsOs, i, m);
+                fxCountOs = (fxCountOs + m) % kFxChunk;
+                i += m;
+            }
         }
-        else if (fp.on (P::DistOn) && distFirst (fp))
-            dist.process (osL.data(), osR.data(), blockN * osFactor, fp.geti (P::DistType), fp.get (P::DistDrive),
-                          fp.get (P::DistTone), fp.get (P::DistMix), fp.get (P::DistLowCut), fp.on (P::DistAuto));
+        else
+        {
+            fxCountOs = 0;
+            distFirstRun (cur, 0, blockN);
+        }
 
         float* l = left + done;
         float* r = right + done;
@@ -793,21 +1035,32 @@ void Engine::process (float* left, float* right, int numSamples, const MidiEvent
         decimR.process (osR.data(), r, blockN, osFactor);
         if (fxMod)
         {
-            constexpr int kFxChunk = 32;
-            for (int i = 0; i < blockN; i += kFxChunk)
+            for (int i = 0; i < blockN;)
             {
-                modulateFx (i);
-                processFx (l + i, r + i, std::min (kFxChunk, blockN - i), bpm, fxParams);
+                if (fxCount == 0) modulateFx (i, fxParams);
+                const int m = std::min (blockN - i, kFxChunk - fxCount);
+                processFx (l + i, r + i, m, bpm, fxParams);
+                fxCount = (fxCount + m) % kFxChunk;
+                i += m;
             }
         }
         else
         {
+            fxCount = 0;
             processFx (l, r, blockN, bpm, cur);
+        }
+        if (fxBad)
+        {
+            // an effect's state went to NaN: start the chain over rather than stay silent
+            resetEffects();
+            fxBad = false;
         }
         done += blockN;
     }
     while (ev < numEvents)
         handleEvent (events[ev++]);
+    lastPlaying = transport.playing;
+    lastPpqEnd = transport.ppq + (double) numSamples * beatsPerSample;
 }
 
 namespace
@@ -838,37 +1091,29 @@ namespace
     }
 } // namespace
 
-void Engine::modulateFx (int sampleInBlock) noexcept
+void Engine::modulateFx (int sampleInBlock, ParamState& out) noexcept
 {
-    // Per-voice sources come from the newest note while it sounds; macros,
-    // controllers and free-running LFOs are the same for every voice.
-    std::array<float, (size_t) ModSrc::Count> src {};
-    if (phosMode())
-        src = phosSources (sampleInBlock);
-    else if (leadVoice >= 0 && voices[(size_t) leadVoice].isActive())
-        src = voices[(size_t) leadVoice].sources();
+    // Per-voice sources are the newest note's (or the 303's) at this very
+    // sample, as the chunk loop recorded them; macros, controllers and
+    // free-running LFOs are the same for every voice.
+    auto src = fxSrc[(size_t) sampleInBlock];
     for (int i = 0; i < kNumLfos; ++i)
-        if (! cur.on (lfoParam (i, 4)))
+        if (phosMode() || ! cur.on (lfoParam (i, 4)))
             src[(size_t) ModSrc::Lfo1 + (size_t) i] = globalLfoBuf[(size_t) i][(size_t) sampleInBlock];
-    src[(size_t) ModSrc::ModWheel] = ctx.modWheel;
-    src[(size_t) ModSrc::Aftertouch] = ctx.aftertouch;
-    src[(size_t) ModSrc::PitchBend] = ctx.pitchBend;
-    for (int m = 0; m < 4; ++m)
-        src[(size_t) ModSrc::Macro1 + (size_t) m] = cur.get ((P) ((int) P::Macro1 + m));
 
     constexpr int kFirst = (int) ModDst::DistDrive, kNum = (int) ModDst::Count - kFirst;
     std::array<float, kNum> sum {};
     for (int s = 0; s < numFxSlots; ++s)
         sum[(size_t) (fxSlots[(size_t) s].dst - kFirst)] += fxSlots[(size_t) s].amt * src[(size_t) fxSlots[(size_t) s].src];
 
-    fxParams = cur;
+    out = cur;
     for (int i = 0; i < kNum; ++i)
     {
         if (sum[(size_t) i] == 0.f || ! isFxTarget ((ModDst) (kFirst + i))) continue;
         const P prm = modTargetParam ((ModDst) (kFirst + i));
         const auto& d = def (prm);
         const float n = std::clamp (d.toNorm (cur.get (prm)) + sum[(size_t) i], 0.f, 1.f);
-        fxParams.v[(size_t) prm] = d.toPlain (n);
+        out.v[(size_t) prm] = d.toPlain (n);
     }
 }
 
@@ -882,29 +1127,46 @@ void Engine::processFx (float* l, float* r, int n, double bpm, const ParamState&
     }
     else
     {
+        limOn = false;
         const auto chain = fxChain (p.geti (P::FxOrder));
         for (int fx : chain)
             processFxSlot (fx, fx == chain[0], l, r, n, bpm, p);
     }
 
     // the patch's own level (set when it is generated, so every patch plays
-    // about as loud), then the user's volume
+    // about as loud), then the user's volume. It ramps from the last sample's
+    // gain to this one's: a Volume or Level move reaches the end of a block
+    // as a step otherwise.
     const float g = dsp::dbToGain (p.get (P::MasterVol) + p.get (P::PatchGain));
-    float pk = 0.f;
+    if (! outGainSet)
+    {
+        outGain = g;
+        outGainSet = true;
+    }
+    const float gStep = (g - outGain) / (float) n;
+    const float g0 = outGain;
+    float pk = diag.preClipPeak;
     for (int i = 0; i < n; ++i)
     {
-        float a = outDc[0].process (l[i]) * g;
-        float b = outDc[1].process (r[i]) * g;
+        // NaN or infinity would poison the DC blocker for good: count it, drop it, and rebuild the chain after the block
+        float inA = l[i], inB = r[i];
+        if (! std::isfinite (inA)) { inA = 0.f; ++diag.nonFinite; fxBad = true; }
+        if (! std::isfinite (inB)) { inB = 0.f; ++diag.nonFinite; fxBad = true; }
+        const float gi = i == n - 1 ? g : g0 + gStep * (float) (i + 1);
+        float a = outDc[0].process (inA) * gi;
+        float b = outDc[1].process (inB) * gi;
+        if (std::isfinite (a)) pk = std::max (pk, std::abs (a));
+        if (std::isfinite (b)) pk = std::max (pk, std::abs (b));
         // transparent up to -0.9 dBFS, soft knee above so output never exceeds 0 dBFS
         if (std::abs (a) > 0.9f) a = std::copysign (0.9f + 0.1f * dsp::fastTanh ((std::abs (a) - 0.9f) * 10.f), a);
         if (std::abs (b) > 0.9f) b = std::copysign (0.9f + 0.1f * dsp::fastTanh ((std::abs (b) - 0.9f) * 10.f), b);
-        if (! std::isfinite (a)) a = 0.f;
-        if (! std::isfinite (b)) b = 0.f;
+        if (! std::isfinite (a)) { a = 0.f; ++diag.nonFinite; fxBad = true; }
+        if (! std::isfinite (b)) { b = 0.f; ++diag.nonFinite; fxBad = true; }
         l[i] = a;
         r[i] = b;
-        pk = std::max (pk, std::max (std::abs (a), std::abs (b)));
     }
-    peak = pk;
+    outGain = g;
+    diag.preClipPeak = pk;
 }
 
 // One effect of the chain. In Phoscyon mode the original's distortion,
@@ -931,7 +1193,13 @@ void Engine::processFxSlot (int fx, bool first, float* l, float* r, int n, doubl
                 if (p.on (P::PhosEqOn)) phosFx.eq (l, r, n, p);
                 return;
             case kPhosLimiter:
-                if (p.on (P::PhosLimOn)) phosFx.limiter (l, r, n, p);
+                // its lookahead holds the audio from before it was switched on: start it empty
+                if (p.on (P::PhosLimOn))
+                {
+                    if (! limOn) phosFx.resetLimiter();
+                    phosFx.limiter (l, r, n, p);
+                }
+                limOn = p.on (P::PhosLimOn);
                 return;
             default:
                 break;

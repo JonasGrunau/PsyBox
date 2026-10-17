@@ -2,6 +2,7 @@
 
 #include <cmath>
 #include <complex>
+#include <numbers>
 #include <vector>
 
 namespace testutil
@@ -19,7 +20,7 @@ inline void fft (std::vector<std::complex<double>>& a)
     }
     for (size_t len = 2; len <= n; len <<= 1)
     {
-        const double ang = -2.0 * M_PI / (double) len;
+        const double ang = -2.0 * std::numbers::pi / (double) len;
         const std::complex<double> wl (std::cos (ang), std::sin (ang));
         for (size_t i = 0; i < n; i += len)
         {
@@ -42,7 +43,7 @@ inline std::vector<double> spectrumDb (const std::vector<float>& x, size_t n)
     double wsum = 0.0;
     for (size_t i = 0; i < n; ++i)
     {
-        const double t = 2.0 * M_PI * (double) i / (double) (n - 1);
+        const double t = 2.0 * std::numbers::pi * (double) i / (double) (n - 1);
         const double w = 0.35875 - 0.48829 * std::cos (t) + 0.14128 * std::cos (2 * t) - 0.01168 * std::cos (3 * t);
         a[i] = x[i] * w;
         wsum += w;
