@@ -17,16 +17,28 @@ public:
     void reset() noexcept;
 
     // The distortion on the oversampled signal (first in the chain) or at
-    // the base rate (anywhere later).
-    void distortionOs (float* l, float* r, int n, const ParamState& p) noexcept;
-    void distortion (float* l, float* r, int n, const ParamState& p) noexcept;
-    void eq (float* l, float* r, int n, const ParamState& p) noexcept;
-    void chorus (float* l, float* r, int n, const ParamState& p) noexcept;
-    void delay (float* l, float* r, int n, double bpm, const ParamState& p) noexcept;
-    void reverb (float* l, float* r, int n, const ParamState& p) noexcept;
-    void limiter (float* l, float* r, int n, const ParamState& p) noexcept;
-    void resetLimiter() noexcept { lim.reset(); }   // its lookahead holds old audio while it is off
-    int limiterLookahead() const noexcept { return std::max (1, (int) std::lround (dsp::PhosLimiter::lookaheadMs * 0.001f * fs)); }
+    // the base rate (anywhere later). Each effect fades over 10 ms when `on`
+    // changes and starts clean after a full stop (dsp::FxSwitch): the engine
+    // calls it while its `...Active (on)` is true.
+    void distortionOs (float* l, float* r, int n, const ParamState& p, bool on) noexcept;
+    void distortion (float* l, float* r, int n, const ParamState& p, bool on) noexcept;
+    void eq (float* l, float* r, int n, const ParamState& p, bool on) noexcept;
+    void chorus (float* l, float* r, int n, const ParamState& p, bool on) noexcept;
+    void delay (float* l, float* r, int n, double bpm, const ParamState& p, bool on) noexcept;
+    void reverb (float* l, float* r, int n, const ParamState& p, bool on) noexcept;
+    void limiter (float* l, float* r, int n, const ParamState& p, bool on) noexcept;
+    bool distortionOsActive (bool on) noexcept { return distOs.isActive (on); }
+    bool distortionActive (bool on) noexcept { return distLate.isActive (on); }
+    bool eqActive (bool on) noexcept { return peq.isActive (on); }
+    bool chorusActive (bool on) noexcept { return cho.isActive (on); }
+    bool delayActive (bool on) noexcept { return dly.isActive (on); }
+    bool reverbActive (bool on) noexcept { return rev.isActive (on); }
+    bool limiterActive (bool on) noexcept { return lim.isActive (on); }
+
+    // How late each one plays the audio, in samples at the rate it runs at.
+    int distortionOsLatency() const noexcept { return distOs.latencySamples(); }
+    int distortionLatency() const noexcept { return distLate.latencySamples(); }
+    int limiterLatency() const noexcept { return lim.latencySamples(); }
 
     // A synced delay time: steps / division of a whole note, dotted or triplet.
     static float delayMs (int steps, int division, int scale, double bpm) noexcept;

@@ -67,6 +67,7 @@ public:
         // oversampled, it doesn't matter
         compensate = sr < 60000.f;
         sw.prepare (sr);
+        glideLen = std::max (1, (int) std::lround (0.0007f * sr));
         for (auto& d : dc) d.prepare (sr);
         reset();
     }
@@ -86,7 +87,7 @@ public:
     }
 
     // True while the distortion still has to run: on, or fading out.
-    bool isActive (bool on) const noexcept { return sw.isActive (on); }
+    bool isActive (bool on) noexcept { return sw.isActive (on); }
 
     // Samples the output lags the input while it runs: the top restoration
     // looks one sample ahead below 60 kHz (wet and dry come out one late).
@@ -112,17 +113,13 @@ public:
     // decays keeps its decay instead of being held up at the clip level.
     // Small signals pass at unity gain.
     //
-    // The drive, the make-up and the mix ramp across the call, so a control
-    // that moves between blocks doesn't step.
+    // The drive, the make-up and the mix glide (0.7 ms) to new values, so a
+    // control that moves between blocks doesn't step, at any block size.
     void process (float* l, float* r, int n, int type, float driveDb, float toneHz, float mix, float lowCutHz = 20.f,
                   bool autoLevel = false, bool on = true) noexcept
     {
-        if (sw.dormant())
-        {
-            if (! on) return;
-            reset();   // off for a while: start clean
-            sw.start();
-        }
+        if (! sw.wake (on, [this] { reset(); }))   // off for a while: start clean
+            return;
         const float g = dbToGain (driveDb);
         const float comp = 1.f / std::sqrt (g);
         for (auto& t : tone) t.setG (prewarp (toneHz, fs), 1.41421356f);
@@ -140,9 +137,9 @@ public:
         }
         wasCut = cut;
         const bool trim = cut && type != AdaaShaper::Rectify;
-        rGain.set (g, n);
-        rScale.set (type == AdaaShaper::Fold || type == AdaaShaper::Hard ? 0.8f : std::max (comp, 0.35f) * 1.2f, n);
-        rMix.set (mix, n);
+        rGain.set (g, glideLen);
+        rScale.set (type == AdaaShaper::Fold || type == AdaaShaper::Hard ? 0.8f : std::max (comp, 0.35f) * 1.2f, glideLen);
+        rMix.set (mix, glideLen);
         const float avg = 1.f - std::exp (-1.f / (0.015f * fs));
         const float up = 1.f - std::exp (-1.f / (0.005f * fs)), down = 1.f - std::exp (-1.f / (0.15f * fs));
         float* ch[2] = { l, r };
@@ -227,7 +224,8 @@ private:
     std::array<ClipResidual, 2> top;
     std::array<DcBlocker, 2> dc;
     FxSwitch sw;
-    Ramp rGain, rScale, rMix;
+    Glide rGain, rScale, rMix;
+    int glideLen = 34;   // samples: 0.7 ms
 };
 
 // ---------------------------------------------------------------------------
@@ -237,16 +235,12 @@ public:
     // Without it the fade assumes 48 kHz (10 ms = 480 samples).
     void prepare (float sampleRate) noexcept { sw.prepare (sampleRate); reset(); }
     void reset() noexcept { cnt = 0.f; hl = hr = 0.f; sw.reset(); }
-    bool isActive (bool on) const noexcept { return sw.isActive (on); }
+    bool isActive (bool on) noexcept { return sw.isActive (on); }
 
     void process (float* l, float* r, int n, float bits, float factor, float mix, bool on = true) noexcept
     {
-        if (sw.dormant())
-        {
-            if (! on) return;
-            reset();
-            sw.start();
-        }
+        if (! sw.wake (on, [this] { reset(); }))
+            return;
         const float q = std::exp2 (bits - 1.f);
         for (int i = 0; i < n; ++i)
         {
@@ -296,16 +290,12 @@ public:
         phaseL = phaseR = 0.0;
         sw.reset();
     }
-    bool isActive (bool on) const noexcept { return sw.isActive (on); }
+    bool isActive (bool on) noexcept { return sw.isActive (on); }
 
     void process (float* l, float* r, int n, float hz, float feedback, float spread, float mix, bool on = true) noexcept
     {
-        if (sw.dormant())
-        {
-            if (! on) return;
-            reset();
-            sw.start();
-        }
+        if (! sw.wake (on, [this] { reset(); }))
+            return;
         const double incL = hz / fs;
         const double incR = hz * (1.0 - 2.0 * spread) / fs;
         for (int i = 0; i < n; ++i)
@@ -410,16 +400,12 @@ class Phaser
 public:
     void prepare (float sr) { fs = sr; sw.prepare (sr); reset(); }
     void reset() noexcept { for (auto& c : st) c.fill (0.f); fb.fill (0.f); lfo = 0.0; sw.reset(); }
-    bool isActive (bool on) const noexcept { return sw.isActive (on); }
+    bool isActive (bool on) noexcept { return sw.isActive (on); }
 
     void process (float* l, float* r, int n, float rate, float depth, float feedback, float centre, float mix, bool on = true) noexcept
     {
-        if (sw.dormant())
-        {
-            if (! on) return;
-            reset();
-            sw.start();
-        }
+        if (! sw.wake (on, [this] { reset(); }))
+            return;
         float* ch[2] = { l, r };
         const double inc = (double) rate / (double) fs;
         const float span = depth * 2.5f;
@@ -486,16 +472,12 @@ public:
         sw.reset();
         primed = false;
     }
-    bool isActive (bool on) const noexcept { return sw.isActive (on); }
+    bool isActive (bool on) noexcept { return sw.isActive (on); }
 
     void process (float* l, float* r, int n, bool flanger, float rate, float depth, float feedback, float mix, bool on = true) noexcept
     {
-        if (sw.dormant())
-        {
-            if (! on) return;
-            reset();
-            sw.start();
-        }
+        if (! sw.wake (on, [this] { reset(); }))
+            return;
         const float baseTarget = flanger ? 1.2f : 11.f;
         const float modTarget = flanger ? 1.0f * depth : 6.f * depth;
         const float wetTarget = flanger ? 1.f : 0.7f;
@@ -564,17 +546,13 @@ public:
         smoothTime.reset (-1.f);
         sw.reset();
     }
-    bool isActive (bool on) const noexcept { return sw.isActive (on); }
+    bool isActive (bool on) noexcept { return sw.isActive (on); }
 
     void process (float* l, float* r, int n, float timeMs, float feedback, bool pingPong, float lowCut, float highCut, float mix,
                   bool on = true) noexcept
     {
-        if (sw.dormant())
-        {
-            if (! on) return;
-            reset();   // off for a while: the old echoes must not come back
-            sw.start();
-        }
+        if (! sw.wake (on, [this] { reset(); }))   // off for a while: the old echoes must not come back
+            return;
         const float target = std::clamp (timeMs * 0.001f * fs, 1.f, 2.f * fs);
         if (smoothTime.z < 0.f) smoothTime.reset (target);
         smoothTime.setTime (0.08f, fs);
@@ -655,16 +633,12 @@ public:
         sw.reset();
         primed = false;
     }
-    bool isActive (bool on) const noexcept { return sw.isActive (on); }
+    bool isActive (bool on) noexcept { return sw.isActive (on); }
 
     void process (float* l, float* r, int n, float size, float decaySec, float damping, float preMs, float mix, bool on = true) noexcept
     {
-        if (sw.dormant())
-        {
-            if (! on) return;
-            reset();   // off for a while: the old tail must not come back
-            sw.start();
-        }
+        if (! sw.wake (on, [this] { reset(); }))   // off for a while: the old tail must not come back
+            return;
         const float scale = fs / 48000.f * (0.35f + 1.65f * size);
         std::array<float, 8> lenTarget, gainTarget;
         for (size_t i = 0; i < 8; ++i)

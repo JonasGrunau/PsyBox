@@ -75,8 +75,8 @@ public:
     // Offline (a host render, a bounce) plays at the Render quality instead
     // of the live one.
     void setOffline (bool isOffline) noexcept { offline = isOffline; }
-    // The decimator's, plus the Phoscyon limiter's lookahead while that mode plays it.
-    int latencySamples() const noexcept { return decimL.latency (osFactor) + limiterLatency(); }
+    // The decimator's, plus what the effects switched on add (effectLatency).
+    int latencySamples() const noexcept { return decimL.latency (osFactor) + effectLatency(); }
     int activeVoices() const noexcept;
     int arpStep() const noexcept { return arpActive ? arp.currentStep() : -1; }   // pattern step playing, or -1
 
@@ -170,7 +170,6 @@ private:
 
     float outGain = 1.f;   // the output gain the last sample used (it ramps to the next block's)
     bool outGainSet = false;
-    bool limOn = false;    // the Phoscyon limiter ran in the last block
     bool qualityPending = false;   // voices are fading out before the oversampling changes
     bool lastPlaying = false;       // the transport as the last process() left it, to see a start or a seek
     double lastPpqEnd = 0.0;
@@ -179,7 +178,7 @@ private:
     Diagnostics diag;
     bool fxBad = false;
 
-    int limiterLatency() const noexcept;
+    int effectLatency() const noexcept;
 
     int wantedFactor() const noexcept;   // oversampling for the live or the render quality
     void applyQuality();

@@ -165,11 +165,46 @@ struct Ramp
     float next() noexcept { cur += step; return cur; }
 };
 
+// A block-rate value that moves to each new target in a fixed number of
+// samples, however the calls split the audio: the same at any block size
+// (Ramp spreads a change over its call, so a 1-sample call would step).
+struct Glide
+{
+    float cur = 0.f, target = 0.f, step = 0.f;
+    int left = 0;
+    bool init = false;
+
+    void set (float t, int samples) noexcept
+    {
+        if (! init)
+        {
+            cur = target = t;
+            init = true;
+            left = 0;
+            return;
+        }
+        if (! differs (t, target)) return;   // still on the way there
+        target = t;
+        left = std::max (samples, 1);
+        step = (target - cur) / (float) left;
+    }
+    void reset() noexcept { init = false; left = 0; }
+    float next() noexcept
+    {
+        if (left > 0)
+            cur = --left == 0 ? target : cur + step;
+        return cur;
+    }
+};
+
 // The on/off of an effect: the wet part fades over 10 ms, and an effect that
 // has been fully off starts from clean state when it is switched on again (so
-// no stale delay or reverb audio replays). The pattern of StereoWidth and the
+// no stale delay or reverb audio replays). An effect that is on when the
+// sound starts (after a reset: a new patch, a bounce, a render) plays fully
+// wet from the first sample, so a first note sounds like every other one; only
+// a switch while playing fades. The pattern of StereoWidth and the
 // Compressor, shared. An effect uses it as:
-//     if (sw.dormant()) { if (! on) return; reset(); sw.start(); }
+//     if (! sw.wake (on, [this] { reset(); })) return;
 //     per sample: const float f = sw.tick (on);  ...  out = FxSwitch::blend (dry, wet, f);
 //                 if (sw.done (on)) { sw.stop(); return; }   // the rest of the block passes
 // The engine skips the effect while `isActive (on)` is false.
@@ -177,12 +212,33 @@ struct FxSwitch
 {
     float fade = 0.f, step = 1.f / 480.f;
     bool running = false;
+    bool fresh = true;   // nothing played since reset(), and never seen off
 
     void prepare (float sampleRate) noexcept { step = 1.f / (0.01f * sampleRate); }
-    void reset() noexcept { fade = 0.f; running = false; }
-    bool isActive (bool on) const noexcept { return on || fade > 0.f; }
-    bool dormant() const noexcept { return ! running; }
-    void start() noexcept { running = true; }
+    void reset() noexcept { fade = 0.f; running = false; fresh = true; }
+    bool isActive (bool on) noexcept
+    {
+        if (! on) fresh = false;   // off while the sound plays: switching on later fades in
+        return on || fade > 0.f;
+    }
+    // At the top of process: false while the effect stays off (pass the block
+    // through); coming out of a full stop it clears the effect's state.
+    template <typename Clear>
+    bool wake (bool on, Clear&& clear) noexcept
+    {
+        if (running) return true;
+        if (! on)
+        {
+            fresh = false;
+            return false;
+        }
+        const bool wasFresh = fresh;
+        clear();   // the effect's reset(), which also resets this switch
+        running = true;
+        fade = wasFresh ? 1.f : 0.f;
+        fresh = false;
+        return true;
+    }
     void stop() noexcept { running = false; }
     float tick (bool on) noexcept
     {

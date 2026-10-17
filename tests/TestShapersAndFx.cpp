@@ -507,7 +507,7 @@ namespace
             phosChorus.prepare (fs); phosLimiter.prepare (fs);
         }
 
-        bool active (size_t i, bool on) const
+        bool active (size_t i, bool on)
         {
             switch (i)
             {
@@ -653,6 +653,47 @@ TEST_CASE ("An effect switched on after a while off starts clean: no old echoes"
         }
         INFO (AllFx::name (which) << ": peak " << peak);
         CHECK (peak == 0.f);
+    }
+}
+
+TEST_CASE ("An effect on from the start plays fully wet at once; only a switch fades", "[fx][switch]")
+{
+    // A from the first sample; B seen off for a block, then on with the same
+    // input one block later. After B's 10 ms fade the two are the same audio,
+    // so A never faded: a bounce or the first note of a patch sounds like the rest.
+    const float fs = 48000.f;
+    const int n = 64, blocks = 40;
+    const auto x = busyInput ((size_t) (n * blocks), fs);
+    for (size_t which = 0; which < AllFx::kCount; ++which)
+    {
+        AllFx a, b;
+        a.prepare (fs);
+        b.prepare (fs);
+        std::vector<float> outA, outB;
+        std::vector<float> zl ((size_t) n, 0.f), zr = zl;
+        if (b.active (which, false)) b.run (which, zl.data(), zr.data(), n, false);
+        for (int k = 0; k < blocks; ++k)
+        {
+            std::vector<float> l (x.begin() + k * n, x.begin() + (k + 1) * n), r = l;
+            auto l2 = l, r2 = r;
+            if (a.active (which, true)) a.run (which, l.data(), r.data(), n, true);
+            if (b.active (which, true)) b.run (which, l2.data(), r2.data(), n, true);
+            outA.insert (outA.end(), l.begin(), l.end());
+            outB.insert (outB.end(), l2.begin(), l2.end());
+        }
+        INFO (AllFx::name (which));
+        float early = 0.f, wet = 0.f;
+        for (size_t i = 0; i < 480; ++i)
+        {
+            early = std::max (early, std::abs (outA[i] - outB[i]));
+            wet = std::max (wet, std::abs (outA[i] - x[i]));
+        }
+        if (wet > 1e-3f)   // (a delay is still dry there: its first echo comes later)
+            CHECK (early > 1e-4f);   // B faded in, A didn't
+        bool same = true;
+        for (size_t i = 600; i < outA.size(); ++i)
+            same = same && outA[i] == outB[i];
+        CHECK (same);   // the same effect, the same input, both fully wet
     }
 }
 

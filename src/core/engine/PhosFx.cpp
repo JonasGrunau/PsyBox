@@ -33,17 +33,17 @@ void PhosFx::reset() noexcept
 
 namespace
 {
-    void runDistortion (dsp::PhosDistortion& d, float* l, float* r, int n, const ParamState& p) noexcept
+    void runDistortion (dsp::PhosDistortion& d, float* l, float* r, int n, const ParamState& p, bool on) noexcept
     {
         d.process (l, r, n, p.geti (P::PhosDistModel), p.get (P::PhosDistDrive), p.get (P::PhosDistColor),
-                   p.get (P::PhosDistDyn), p.geti (P::PhosDistOrder) == 1);
+                   p.get (P::PhosDistDyn), p.geti (P::PhosDistOrder) == 1, on);
     }
 } // namespace
 
-void PhosFx::distortionOs (float* l, float* r, int n, const ParamState& p) noexcept { runDistortion (distOs, l, r, n, p); }
-void PhosFx::distortion (float* l, float* r, int n, const ParamState& p) noexcept { runDistortion (distLate, l, r, n, p); }
+void PhosFx::distortionOs (float* l, float* r, int n, const ParamState& p, bool on) noexcept { runDistortion (distOs, l, r, n, p, on); }
+void PhosFx::distortion (float* l, float* r, int n, const ParamState& p, bool on) noexcept { runDistortion (distLate, l, r, n, p, on); }
 
-void PhosFx::eq (float* l, float* r, int n, const ParamState& p) noexcept
+void PhosFx::eq (float* l, float* r, int n, const ParamState& p, bool on) noexcept
 {
     std::array<dsp::PhosEq::Band, 4> b {};
     for (int i = 0; i < 4; ++i)
@@ -51,14 +51,14 @@ void PhosFx::eq (float* l, float* r, int n, const ParamState& p) noexcept
         const int base = (int) P::PhosEqLowGain + i * 3;
         b[(size_t) i] = { p.get ((P) base), p.get ((P) (base + 1)), p.get ((P) (base + 2)) };
     }
-    peq.process (l, r, n, b);
+    peq.process (l, r, n, b, on);
 }
 
-void PhosFx::chorus (float* l, float* r, int n, const ParamState& p) noexcept
+void PhosFx::chorus (float* l, float* r, int n, const ParamState& p, bool on) noexcept
 {
     cho.process (l, r, n, p.get (P::PhosChoOffset), p.get (P::PhosChoDepth), p.get (P::PhosChoRate),
                  p.get (P::PhosChoSpatial), p.get (P::PhosChoFat), p.get (P::PhosChoHp), p.get (P::PhosChoOut),
-                 p.get (P::PhosChoMix));
+                 p.get (P::PhosChoMix), on);
 }
 
 float PhosFx::delayMs (int steps, int division, int scale, double bpm) noexcept
@@ -68,7 +68,7 @@ float PhosFx::delayMs (int steps, int division, int scale, double bpm) noexcept
     return (float) (whole * steps / std::max (division, 1) * factor);
 }
 
-void PhosFx::delay (float* l, float* r, int n, double bpm, const ParamState& p) noexcept
+void PhosFx::delay (float* l, float* r, int n, double bpm, const ParamState& p, bool on) noexcept
 {
     float msL, msR;
     if (p.on (P::PhosDlySync))
@@ -79,10 +79,10 @@ void PhosFx::delay (float* l, float* r, int n, double bpm, const ParamState& p) 
     else
         msL = msR = p.get (P::PhosDlyTime) * 1000.f;
     dly.process (l, r, n, msL, msR, p.get (P::PhosDlyFb), p.geti (P::PhosDlyFilter), p.get (P::PhosDlyCut),
-                 p.get (P::PhosDlyReso), p.get (P::PhosDlySpread), p.get (P::PhosDlyMix));
+                 p.get (P::PhosDlyReso), p.get (P::PhosDlySpread), p.get (P::PhosDlyMix), on);
 }
 
-void PhosFx::reverb (float* l, float* r, int n, const ParamState& p) noexcept
+void PhosFx::reverb (float* l, float* r, int n, const ParamState& p, bool on) noexcept
 {
     dsp::PhosReverb::Settings s;
     s.preMs = p.get (P::PhosRevPre);
@@ -96,13 +96,13 @@ void PhosFx::reverb (float* l, float* r, int n, const ParamState& p) noexcept
     s.earlyBright = p.get (P::PhosRevEBright);
     s.lateBright = p.get (P::PhosRevLBright);
     s.mix = p.get (P::PhosRevMix);
-    rev.process (l, r, n, s);
+    rev.process (l, r, n, s, on);
 }
 
-void PhosFx::limiter (float* l, float* r, int n, const ParamState& p) noexcept
+void PhosFx::limiter (float* l, float* r, int n, const ParamState& p, bool on) noexcept
 {
     lim.process (l, r, n, p.get (P::PhosLimKnee), p.get (P::PhosLimRatio), p.get (P::PhosLimAttack), p.get (P::PhosLimRelease),
-                 p.get (P::PhosLimThresh), p.get (P::PhosLimGain), p.on (P::PhosLimClip));
+                 p.get (P::PhosLimThresh), p.get (P::PhosLimGain), p.on (P::PhosLimClip), on);
 }
 
 } // namespace psy

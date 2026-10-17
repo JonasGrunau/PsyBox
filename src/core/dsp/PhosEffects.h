@@ -215,7 +215,7 @@ public:
     // On / off as for the other effects (see Effects.h): the engine calls
     // process (.., on) until isActive (on) is false; the wet fades over 10 ms
     // and the state starts clean when it comes back.
-    bool isActive (bool on) const noexcept { return sw.isActive (on); }
+    bool isActive (bool on) noexcept { return sw.isActive (on); }
 
     // Samples the wet signal lags the input while the effect runs, to the
     // nearest: the clipper's half-bands up and down. Exactly 23.25 at 4x (up
@@ -251,12 +251,8 @@ public:
     void process (float* l, float* r, int n, int model, float drive, float color, float dynamics, bool post,
                   bool on = true) noexcept
     {
-        if (sw.dormant())
-        {
-            if (! on) return;
-            reset();   // off for a while: start clean
-            sw.start();
-        }
+        if (! sw.wake (on, [this] { reset(); }))   // off for a while: start clean
+            return;
         model = std::clamp (model, 0, kNumModels - 1);
         const auto& m = models()[(size_t) model];
         const auto& t = *tune;
@@ -424,16 +420,12 @@ public:
 
     void prepare (float sampleRate) noexcept { fs = sampleRate; dirty = true; sw.prepare (sampleRate); reset(); }
     void reset() noexcept { for (auto& c : bands) for (auto& b : c) b.reset(); sw.reset(); }
-    bool isActive (bool on) const noexcept { return sw.isActive (on); }
+    bool isActive (bool on) noexcept { return sw.isActive (on); }
 
     void process (float* l, float* r, int n, const std::array<Band, 4>& set, bool on = true) noexcept
     {
-        if (sw.dormant())
-        {
-            if (! on) return;
-            reset();
-            sw.start();
-        }
+        if (! sw.wake (on, [this] { reset(); }))
+            return;
         bool changed = dirty;
         for (size_t b = 0; b < 4; ++b)
             changed = changed || differs (set[b].db, last[b].db) || differs (set[b].hz, last[b].hz)
@@ -517,18 +509,14 @@ public:
         smooth = { -1.f, -1.f };
         sw.reset();
     }
-    bool isActive (bool on) const noexcept { return sw.isActive (on); }
+    bool isActive (bool on) noexcept { return sw.isActive (on); }
 
     // filterType: 0 off, 1 LP, 2 BP, 3 HP. spread -1..1. mix 0..1 (dry/wet).
     void process (float* l, float* r, int n, float msL, float msR, float feedback, int filterType, float cutoffHz,
                   float reso, float spread, float mix, bool on = true) noexcept
     {
-        if (sw.dormant())
-        {
-            if (! on) return;
-            reset();   // off for a while: the old echoes must not come back
-            sw.start();
-        }
+        if (! sw.wake (on, [this] { reset(); }))   // off for a while: the old echoes must not come back
+            return;
         const auto& t = *tune;
         if (spread > 0.f) msR *= 1.f + t.spreadShare * spread;
         else msL *= 1.f - t.spreadShare * spread;
@@ -647,16 +635,12 @@ public:
         rEarly.reset();
         rLate.reset();
     }
-    bool isActive (bool on) const noexcept { return sw.isActive (on); }
+    bool isActive (bool on) noexcept { return sw.isActive (on); }
 
     void process (float* l, float* r, int n, const Settings& s, bool on = true) noexcept
     {
-        if (sw.dormant())
-        {
-            if (! on) return;
-            reset();   // off for a while: the old tail must not come back
-            sw.start();
-        }
+        if (! sw.wake (on, [this] { reset(); }))   // off for a while: the old tail must not come back
+            return;
         // speed of sound: 343 m/s; reflections arrive within the room's crossing time
         const float eSpanWant = s.earlySize / 343.f * fs;
         const float lSpanWant = (0.012f + 0.6f * s.lateSize / 343.f) * fs;
@@ -679,10 +663,11 @@ public:
             primed = true;
         }
         const float glide = 1.f - std::exp (-1.f / (0.08f * fs));
-        rDry.set (std::min (1.f, 2.f * (1.f - s.mix)), n);
-        rWet.set (std::min (1.f, 2.f * s.mix), n);
-        rEarly.set (1.f - s.blend, n);
-        rLate.set (s.blend, n);
+        const int levelGlide = std::max (1, (int) std::lround (0.0007f * fs));   // the same at any block size
+        rDry.set (std::min (1.f, 2.f * (1.f - s.mix)), levelGlide);
+        rWet.set (std::min (1.f, 2.f * s.mix), levelGlide);
+        rEarly.set (1.f - s.blend, levelGlide);
+        rLate.set (s.blend, levelGlide);
         const double modInc = 0.7 / (double) fs;
         const float modDepth = s.modulation * 0.002f * fs;
         const float ad = 0.3f + 0.45f * s.lateDiff, ed = 0.25f + 0.5f * s.earlyDiff;
@@ -753,7 +738,7 @@ private:
     double phase = 0.0;
     float eSpan = 1.f, lSpan = 1.f, preSamples = 1.f;
     bool primed = false;
-    Ramp rDry, rWet, rEarly, rLate;
+    Glide rDry, rWet, rEarly, rLate;
     FxSwitch sw;
 
     static float allpass (DelayLine& d, float x, float len, float g) noexcept
@@ -795,19 +780,15 @@ public:
         rDry.reset();
         rWet.reset();
     }
-    bool isActive (bool on) const noexcept { return sw.isActive (on); }
+    bool isActive (bool on) noexcept { return sw.isActive (on); }
 
     static float rateHz (float rate) noexcept { return 9.7f * std::exp (6.56f * (std::clamp (rate, 0.f, 1.f) - 1.f)); }
 
     void process (float* l, float* r, int n, float offset, float depth, float rate, float spatial, float fatness,
                   float hpCut, float outDb, float mix, bool on = true) noexcept
     {
-        if (sw.dormant())
-        {
-            if (! on) return;
-            reset();
-            sw.start();
-        }
+        if (! sw.wake (on, [this] { reset(); }))
+            return;
         const float baseWant = 0.5f + 8.4f * offset;
         const float swingWant = 4.6f * depth;
         const float shiftWant = spatial * 0.25f;
@@ -825,8 +806,9 @@ public:
         const float hpHz = 20.f * std::pow (100.f, hpCut);
         for (auto& h : hp) h.setG (prewarp (hpHz, fs));
         const float outG = dbToGain (outDb);
-        rDry.set (std::min (1.f, 2.f * (1.f - mix)), n);
-        rWet.set (std::min (1.f, 2.f * mix) * outG, n);
+        const int levelGlide = std::max (1, (int) std::lround (0.0007f * fs));   // the same at any block size
+        rDry.set (std::min (1.f, 2.f * (1.f - mix)), levelGlide);
+        rWet.set (std::min (1.f, 2.f * mix) * outG, levelGlide);
         for (int i = 0; i < n; ++i)
         {
             baseMs += (baseWant - baseMs) * glide;
@@ -873,7 +855,7 @@ private:
     double phase = 0.0;
     float baseMs = 0.5f, swingMs = 0.f, shift = 0.f, fat = 0.f;
     bool primed = false;
-    Ramp rDry, rWet;
+    Glide rDry, rWet;
     FxSwitch sw;
 };
 
@@ -906,7 +888,7 @@ public:
         for (auto& b : buf) std::fill (b.begin(), b.end(), 0.f);
         sw.reset();
     }
-    bool isActive (bool on) const noexcept { return sw.isActive (on); }
+    bool isActive (bool on) noexcept { return sw.isActive (on); }
 
     // The lookahead, in samples: how late the limited audio comes out.
     int latencySamples() const noexcept { return look; }
@@ -915,12 +897,8 @@ public:
                   float gainDb, bool softClip, bool on = true) noexcept
     {
         if (buf[0].empty()) return;
-        if (sw.dormant())
-        {
-            if (! on) return;
-            reset();   // the lookahead buffer must not play old audio
-            sw.start();
-        }
+        if (! sw.wake (on, [this] { reset(); }))   // the lookahead buffer must not play old audio
+            return;
         const float att = std::exp (-1.f / (std::max (attackMs, 0.01f) * 0.001f * fs));
         const float rel = std::exp (-1.f / (std::max (releaseMs * releaseScale, 1.f) * 0.001f * fs));
         const float width = (1.f - knee) * kneeWidthDb;

@@ -62,6 +62,7 @@ void Engine::prepare (double sampleRate, int maxBlockSize)
 
     const float f = (float) fs;
     distLate.prepare (f);
+    crush.prepare (f);
     fshift.prepare (f);
     phaser.prepare (f);
     chorus.prepare (f);
@@ -128,7 +129,6 @@ void Engine::resetEffects() noexcept
     for (auto& d : outDc) d.reset();
     decimL.reset();
     decimR.reset();
-    limOn = false;
     outGainSet = false;
     fxCount = fxCountOs = 0;
 }
@@ -880,9 +880,22 @@ void Engine::followQuality() noexcept
     qualityPending = false;
 }
 
-int Engine::limiterLatency() const noexcept
+// What the effects switched on in the patch delay the audio by, at the base
+// rate: the Phoscyon limiter's lookahead (3.3 ms), the Phoscyon distortion's
+// oversampling filters (~0.5 ms), our distortion's top restoration below
+// 60 kHz (one sample). It changes when one of them is switched.
+int Engine::effectLatency() const noexcept
 {
-    return phosMode() && cur.on (P::PhosLimOn) ? phosFx.limiterLookahead() : 0;
+    const auto atBase = [this] (int osSamples) { return (int) std::lround ((double) osSamples / osFactor); };
+    if (phosMode())
+    {
+        int lat = cur.on (P::PhosLimOn) ? phosFx.limiterLatency() : 0;
+        if (cur.on (P::PhosDistOn))
+            lat += phosDistFirst (cur) ? atBase (phosFx.distortionOsLatency()) : phosFx.distortionLatency();
+        return lat;
+    }
+    if (! cur.on (P::DistOn)) return 0;
+    return distFirst (cur) ? atBase (dist.latencySamples()) : distLate.latencySamples();
 }
 
 void Engine::process (float* left, float* right, int numSamples, const MidiEvent* events, int numEvents, const Transport& transport) noexcept
@@ -1005,12 +1018,17 @@ void Engine::process (float* left, float* right, int numSamples, const MidiEvent
             const int o = from * osFactor, m = count * osFactor;
             if (phosMode())
             {
-                if (fp.on (P::PhosDistOn) && phosDistFirst (fp))
-                    phosFx.distortionOs (osL.data() + o, osR.data() + o, m, fp);
+                const bool on = fp.on (P::PhosDistOn) && phosDistFirst (fp);
+                if (phosFx.distortionOsActive (on))
+                    phosFx.distortionOs (osL.data() + o, osR.data() + o, m, fp, on);
             }
-            else if (fp.on (P::DistOn) && distFirst (fp))
-                dist.process (osL.data() + o, osR.data() + o, m, fp.geti (P::DistType), fp.get (P::DistDrive),
-                              fp.get (P::DistTone), fp.get (P::DistMix), fp.get (P::DistLowCut), fp.on (P::DistAuto));
+            else
+            {
+                const bool on = fp.on (P::DistOn) && distFirst (fp);
+                if (dist.isActive (on))
+                    dist.process (osL.data() + o, osR.data() + o, m, fp.geti (P::DistType), fp.get (P::DistDrive),
+                                  fp.get (P::DistTone), fp.get (P::DistMix), fp.get (P::DistLowCut), fp.on (P::DistAuto), on);
+            }
         };
         if (fxMod)
         {
@@ -1127,7 +1145,6 @@ void Engine::processFx (float* l, float* r, int n, double bpm, const ParamState&
     }
     else
     {
-        limOn = false;
         const auto chain = fxChain (p.geti (P::FxOrder));
         for (int fx : chain)
             processFxSlot (fx, fx == chain[0], l, r, n, bpm, p);
@@ -1171,77 +1188,78 @@ void Engine::processFx (float* l, float* r, int n, double bpm, const ParamState&
 
 // One effect of the chain. In Phoscyon mode the original's distortion,
 // chorus, delay and reverb take our effects' places, and its EQ and limiter
-// sit in their own slots.
+// sit in their own slots. Every effect runs while it is on or fading out
+// (`isActive`): a switch fades over 10 ms and a restart begins clean, so no
+// old echo or lookahead audio comes back.
 void Engine::processFxSlot (int fx, bool first, float* l, float* r, int n, double bpm, const ParamState& p) noexcept
 {
     if (phosMode())
+    {
         switch (fx)
         {
             case (int) Fx::Distortion:
-                if (p.on (P::PhosDistOn) && ! first) phosFx.distortion (l, r, n, p);
+            {
+                const bool on = p.on (P::PhosDistOn) && ! first;
+                if (phosFx.distortionActive (on)) phosFx.distortion (l, r, n, p, on);
                 return;
+            }
             case (int) Fx::Chorus:
-                if (p.on (P::PhosChoOn)) phosFx.chorus (l, r, n, p);
+                if (const bool on = p.on (P::PhosChoOn); phosFx.chorusActive (on)) phosFx.chorus (l, r, n, p, on);
                 return;
             case (int) Fx::Delay:
-                if (p.on (P::PhosDlyOn)) phosFx.delay (l, r, n, bpm, p);
+                if (const bool on = p.on (P::PhosDlyOn); phosFx.delayActive (on)) phosFx.delay (l, r, n, bpm, p, on);
                 return;
             case (int) Fx::Reverb:
-                if (p.on (P::PhosRevOn)) phosFx.reverb (l, r, n, p);
+                if (const bool on = p.on (P::PhosRevOn); phosFx.reverbActive (on)) phosFx.reverb (l, r, n, p, on);
                 return;
             case kPhosEq:
-                if (p.on (P::PhosEqOn)) phosFx.eq (l, r, n, p);
+                if (const bool on = p.on (P::PhosEqOn); phosFx.eqActive (on)) phosFx.eq (l, r, n, p, on);
                 return;
             case kPhosLimiter:
-                // its lookahead holds the audio from before it was switched on: start it empty
-                if (p.on (P::PhosLimOn))
-                {
-                    if (! limOn) phosFx.resetLimiter();
-                    phosFx.limiter (l, r, n, p);
-                }
-                limOn = p.on (P::PhosLimOn);
+                if (const bool on = p.on (P::PhosLimOn); phosFx.limiterActive (on)) phosFx.limiter (l, r, n, p, on);
                 return;
             default:
                 break;
         }
+    }
 
     switch ((Fx) fx)
     {
         case Fx::Distortion:
-            if (p.on (P::DistOn) && ! first)
+            if (const bool on = p.on (P::DistOn) && ! first; distLate.isActive (on))
                 distLate.process (l, r, n, p.geti (P::DistType), p.get (P::DistDrive), p.get (P::DistTone), p.get (P::DistMix),
-                                  p.get (P::DistLowCut), p.on (P::DistAuto));
+                                  p.get (P::DistLowCut), p.on (P::DistAuto), on);
             break;
         case Fx::Crush:
-            if (p.on (P::CrushOn))
-                crush.process (l, r, n, p.get (P::CrushBits), p.get (P::CrushRate), p.get (P::CrushMix));
+            if (const bool on = p.on (P::CrushOn); crush.isActive (on))
+                crush.process (l, r, n, p.get (P::CrushBits), p.get (P::CrushRate), p.get (P::CrushMix), on);
             break;
         case Fx::Shift:
-            if (p.on (P::FshiftOn))
-                fshift.process (l, r, n, p.get (P::FshiftHz), p.get (P::FshiftFb), p.get (P::FshiftSpread), p.get (P::FshiftMix));
+            if (const bool on = p.on (P::FshiftOn); fshift.isActive (on))
+                fshift.process (l, r, n, p.get (P::FshiftHz), p.get (P::FshiftFb), p.get (P::FshiftSpread), p.get (P::FshiftMix), on);
             break;
         case Fx::Phaser:
-            if (p.on (P::PhaserOn))
-                phaser.process (l, r, n, p.get (P::PhaserRate), p.get (P::PhaserDepth), p.get (P::PhaserFb), p.get (P::PhaserCenter), p.get (P::PhaserMix));
+            if (const bool on = p.on (P::PhaserOn); phaser.isActive (on))
+                phaser.process (l, r, n, p.get (P::PhaserRate), p.get (P::PhaserDepth), p.get (P::PhaserFb), p.get (P::PhaserCenter), p.get (P::PhaserMix), on);
             break;
         case Fx::Chorus:
-            if (p.on (P::ChorusOn))
-                chorus.process (l, r, n, p.geti (P::ChorusMode) == 1, p.get (P::ChorusRate), p.get (P::ChorusDepth), p.get (P::ChorusFb), p.get (P::ChorusMix));
+            if (const bool on = p.on (P::ChorusOn); chorus.isActive (on))
+                chorus.process (l, r, n, p.geti (P::ChorusMode) == 1, p.get (P::ChorusRate), p.get (P::ChorusDepth), p.get (P::ChorusFb), p.get (P::ChorusMix), on);
             break;
         case Fx::Compressor:
             if (comp.isActive (p.on (P::CompOn)))
                 comp.process (l, r, n, compSettings (p));
             break;
         case Fx::Delay:
-            if (p.on (P::DelayOn))
+            if (const bool on = p.on (P::DelayOn); delay.isActive (on))
             {
                 const float ms = p.on (P::DelaySync) ? (float) (60000.0 / bpm) * syncDivBeats (p.geti (P::DelayDiv)) : p.get (P::DelayMs);
-                delay.process (l, r, n, std::min (ms, 2000.f), p.get (P::DelayFb), p.on (P::DelayPing), p.get (P::DelayLowCut), p.get (P::DelayHighCut), p.get (P::DelayMix));
+                delay.process (l, r, n, std::min (ms, 2000.f), p.get (P::DelayFb), p.on (P::DelayPing), p.get (P::DelayLowCut), p.get (P::DelayHighCut), p.get (P::DelayMix), on);
             }
             break;
         case Fx::Reverb:
-            if (p.on (P::ReverbOn))
-                reverb.process (l, r, n, p.get (P::ReverbSize), p.get (P::ReverbDecay), p.get (P::ReverbDamp), p.get (P::ReverbPre), p.get (P::ReverbMix));
+            if (const bool on = p.on (P::ReverbOn); reverb.isActive (on))
+                reverb.process (l, r, n, p.get (P::ReverbSize), p.get (P::ReverbDecay), p.get (P::ReverbDamp), p.get (P::ReverbPre), p.get (P::ReverbMix), on);
             break;
         case Fx::Width:   // last by default, so Low Mono also cleans the delay and reverb lows
             if (width.isActive (p.on (P::WidthOn)))
