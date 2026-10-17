@@ -1717,8 +1717,9 @@ Recipe recipeFor (Category c) noexcept
         case Category::KickDarkForest:
         case Category::KickHiTech:
         case Category::KickProgressive: return kickRecipeFor (c);
-        default:                    return acid;
+        case Category::Count:       break;   // no default: -Wswitch flags a category without a recipe
     }
+    return acid;
 }
 
 } // namespace psy

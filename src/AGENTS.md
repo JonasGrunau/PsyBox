@@ -4,7 +4,7 @@
 **Generated:** 2026-09-27 · **Updated:** 2026-09-27
 
 ## Purpose
-All product source, in three layers with one-way dependencies: `core` → `plugin` → `ui`. `core` knows nothing about JUCE. `plugin` owns the JUCE `AudioProcessor` and bridges parameters/MIDI into the core engine. `ui` holds the editor components, which talk only to the processor.
+All product source, in three layers. `core` knows nothing about JUCE and depends on nothing above it. `plugin` owns the JUCE `AudioProcessor` and bridges parameters/MIDI into the core engine. `ui` holds the editor components, which talk to the processor. `plugin` and `ui` depend on each other (`PluginEditor.h` includes `ui/FxPage.h`; the widgets and displays include `PluginProcessor.h`), so they build together.
 
 ## Subdirectories
 | Directory | Purpose |
@@ -17,7 +17,7 @@ All product source, in three layers with one-way dependencies: `core` → `plugi
 
 ### Working In This Directory
 - Include paths differ by target. `psybox_core` exposes `src/core`, so core code includes `"engine/Params.h"` or `"dsp/Filters.h"`. Plugin/UI targets add `src`, so they include `"ui/Panels.h"` and also reach core headers via `src/core`.
-- Dependency direction is strict: `ui` → `plugin` → `core`. Nothing in `core` includes from `plugin` or `ui`.
+- Nothing in `core` includes from `plugin` or `ui`. `plugin` and `ui` include each other and the core headers; displays use core DSP directly (`dsp/*`, `KickVoice.h`, `PhosVoice.h`, `PhosFx.h`) to draw curves.
 
 ### Common Patterns
 - Data flow: `ParamDef` table (core) → APVTS layout (plugin) → widget attachments (ui). The audio thread copies raw APVTS atomics into a `ParamState` each block.

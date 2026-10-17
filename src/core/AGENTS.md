@@ -18,7 +18,7 @@ The `psybox_core` static library: plain C++20, no JUCE. It contains the DSP buil
 ### Working In This Directory
 - **No JUCE, no GUI types.** Standard library only.
 - Compiled with `-Wall -Wextra -Wno-unused-parameter`. Keep it warning-free.
-- Layering inside core: `dsp` depends on nothing, `engine` depends on `dsp`, and `generator` depends on `engine/Params.h` + `dsp/Common.h`.
+- Layering inside core: `dsp` depends on nothing, `engine` depends on `dsp`, and `generator` depends on `engine/Params.h` + `dsp/Common.h`, plus `engine/Engine.h` (`Loudness.cpp` renders to level a patch) and `engine/PhosVoice.h` (`PhosRecipes.cpp`).
 - Everything on the audio path must be real-time safe. No allocation, locks or I/O in `process`/`render`. Buffers get sized in `prepare`.
 
 ### Testing Requirements

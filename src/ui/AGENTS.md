@@ -47,6 +47,7 @@ The editor's visual layer, laid out like Serum: view tabs in the top bar (OSC / 
 ### Internal
 - `plugin/PluginProcessor.h`: parameter access, generator actions, GUI feeds
 - `core/engine/Params.h`, `core/generator/Category.h`: ids, formatting, category colours
+- `core/dsp/*`, `core/engine/KickVoice.h`, `PhosVoice.h`, `PhosFx.h`: the displays draw curves and render kicks with the engine's own DSP
 - `resources/fonts/` via `BinaryData` (`psybox_assets`)
 
 ### External
