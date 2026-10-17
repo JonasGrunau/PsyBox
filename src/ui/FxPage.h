@@ -89,7 +89,19 @@ public:
         int columns() const;
         int gridX() const;
         void hoverChanged();
+        void refresh();   // conditional controls and the greyed-out state; FxPage runs it once the strip is built
         void timerCallback() override;
+
+        // Hover over a child counts as hovering the strip. A listener of its own, so the
+        // strip's mouseWheelMove (which scrolls the rack) isn't also called for the
+        // wheel events the children get.
+        struct HoverListener : juce::MouseListener
+        {
+            explicit HoverListener (Strip& s) : strip (s) {}
+            void mouseEnter (const juce::MouseEvent&) override { strip.hoverChanged(); }
+            void mouseExit (const juce::MouseEvent&) override { strip.hoverChanged(); }
+            Strip& strip;
+        } hoverListener { *this };
         friend class FxPage;
     };
 
@@ -154,6 +166,7 @@ private:
     juce::Viewport rack;
     RackContent rackContent;
     int lastHovered = -1;
+    bool reordering = false;   // the chain is being written: orderChanged waits for the last parameter
     Order currentOrder() const;
     void orderChanged();
 };

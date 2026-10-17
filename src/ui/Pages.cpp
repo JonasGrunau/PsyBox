@@ -142,10 +142,16 @@ MatrixPage::Panel::Panel (PsyBoxProcessor& p) : Section ("Mod Matrix"), proc (p)
             addAndMakeVisible (c);
     }
     shown.fill (-9.f);
+    refresh();
     startTimerHz (10);
 }
 
 void MatrixPage::Panel::timerCallback()
+{
+    if (isShowing()) refresh();
+}
+
+void MatrixPage::Panel::refresh()
 {
     for (int i = 0; i < psy::kNumModSlots; ++i)
     {
@@ -317,6 +323,13 @@ ArpPage::Panel::Panel (PsyBoxProcessor& p)
     startTimerHz (30);   // the playing step
 }
 
+void ArpPage::Panel::timerCallback()
+{
+    if (! grid.isShowing()) return;
+    grid.refresh();
+    templates.refresh();
+}
+
 void ArpPage::Panel::rotate (int by)
 {
     const auto pt = proc.getArpPattern();
@@ -370,7 +383,8 @@ void ArpPage::Panel::resized()
     hintArea = juce::Rectangle<int> (used + sp::xl, b.getY(), b.getRight() - used - sp::xl, kKnobD);
     b.removeFromTop (kCellH + sp::xl);
     // the templates along the bottom, the steps fill the space between
-    templates.setBounds (b.removeFromBottom (Templates::heightFor (2)));
+    const int templateRows = ((int) psy::arpTemplates().size() + Templates::kCols - 1) / Templates::kCols;
+    templates.setBounds (b.removeFromBottom (Templates::heightFor (templateRows)));
     b.removeFromBottom (sp::xl);
     grid.setBounds (b);
 }
@@ -513,11 +527,32 @@ ArpPage::Panel::Grid::Hit ArpPage::Panel::Grid::locate (juce::Point<int> pt) con
     for (auto row : { Row::Ruler, Row::On, Row::Note, Row::Accent, Row::Slide })
     {
         if (! rowArea (row).expanded (0, kLaneGap / 2).contains (pt)) continue;
+        // the nearest step: the gaps between cells (4 px inside a beat, 12 between beats) go to
+        // whichever neighbour is closer, and the ends reach half a beat gap past the first and last
+        int best = -1, bestDist = kBeatGap / 2 + 1;
         for (int i = 0; i < psy::kArpSteps; ++i)
-            if (cellArea (row, i).expanded (kBeatGap / 2, kLaneGap / 2).contains (pt))
-                return { row, i };
+        {
+            const auto c = cellArea (row, i);
+            const int dist = std::max ({ 0, c.getX() - pt.x, pt.x - (c.getRight() - 1) });
+            if (dist < bestDist) { best = i; bestDist = dist; }
+        }
+        if (best >= 0) return { row, best };
     }
     return {};
+}
+
+// Repaints only when what the grid shows changed: the playing step, the pattern, the arp switch, the accent.
+void ArpPage::Panel::Grid::refresh()
+{
+    const auto pt = proc.getArpPattern();
+    const int step = proc.getArpStep();
+    const bool on = proc.plain (P::ArpOn) > 0.5f;
+    if (step == shownStep && on == shownOn && accent() == shownAccent && pt == shown) return;
+    shown = pt;
+    shownStep = step;
+    shownOn = on;
+    shownAccent = accent();
+    repaint();
 }
 
 void ArpPage::Panel::Grid::apply (Hit h)

@@ -41,9 +41,9 @@ namespace
 uint64_t UnisonSettings::print() const
 {
     const auto id = uniIds (isB);
-    uint64_t h = 1469598103934665603ULL;
+    uint64_t h = kFnvSeed;
     for (auto prm : { id.count, id.detune, id.blend, id.width, id.range, id.mode, id.stack })
-        h = (h ^ (uint64_t) std::lround (proc.plain (prm) * 1000.f)) * 1099511628211ULL;
+        h = fnvMix (h, (uint64_t) std::lround (proc.plain (prm) * 1000.f));
     return h ^ (uint64_t) accent().getARGB();
 }
 
@@ -164,10 +164,16 @@ OscPanel::OscPanel (PsyBoxProcessor& p, bool b)
         sync->setTooltip ("Hard-sync B to A: sweep B's pitch for the classic sync scream");
         addAndMakeVisible (*sync);
     }
+    refresh();
     startTimerHz (15);
 }
 
 void OscPanel::timerCallback()
+{
+    if (isShowing()) refresh();
+}
+
+void OscPanel::refresh()
 {
     const bool on = proc.plain (isB ? P::OscBOn : P::OscAOn) > 0.5f;
     const int t = (int) proc.plain (isB ? P::OscBType : P::OscAType);
@@ -187,6 +193,14 @@ void OscPanel::timerCallback()
         unison.setOverride (supersaw ? "7" : juce::String());
         settings.setEnabled (on && ! supersaw);
         settings.setType (t);
+        if (showSettings && ! (on && ! supersaw))
+        {
+            // the gear is dead for this type: close the settings it opened
+            showSettings = false;
+            unison.setGearOn (false);
+            settings.setVisible (false);
+            wave.setVisible (true);
+        }
         resized();
     }
 }
@@ -300,10 +314,16 @@ FilterPanel::FilterPanel (PsyBoxProcessor& p, int s)
         routing->setTooltip ("Filter 2 after filter 1 (serial) or beside it (parallel)");
         addAndMakeVisible (*routing);
     }
+    refresh();
     startTimerHz (15);
 }
 
 void FilterPanel::timerCallback()
+{
+    if (isShowing()) refresh();
+}
+
+void FilterPanel::refresh()
 {
     const int t = (int) proc.plain (slot == 0 ? P::F1Type : P::F2Type);
     if (t != lastType)
@@ -477,7 +497,7 @@ void ModPanel::show (int page)
 
 void ModPanel::timerCallback()
 {
-    if (current < Lfo1) return;
+    if (current < Lfo1 || ! isShowing()) return;
     const int l = current - Lfo1;
     if ((proc.plain (psy::lfoParam (l, 2)) > 0.5f) != lastSync[(size_t) l])
         show (current);
@@ -572,7 +592,7 @@ MacroPanel::MacroPanel (PsyBoxProcessor& p) : Section ("Macros"), proc (p)
         addAndMakeVisible (*h);
         handles.push_back (std::move (h));
     }
-    timerCallback();
+    refresh();
     startTimerHz (8);
 }
 
@@ -589,18 +609,41 @@ juce::Rectangle<int> MacroPanel::nameArea (int i) const
     return { r.getX() + 60, r.getY() + 12, r.getWidth() - 60, 20 };
 }
 
+juce::Rectangle<int> MacroPanel::valueArea (int i) const
+{
+    return nameArea (i).translated (0, 24).withHeight (16);
+}
+
 void MacroPanel::timerCallback()
 {
+    if (isShowing()) refresh();
+}
+
+// One snapshot of the parameters for all four labels (getMacroName and
+// macroDrivesAnything would each take their own).
+void MacroPanel::refresh()
+{
+    psy::ParamState state;
+    for (int i = 0; i < psy::kNumParams; ++i)
+        state.v[(size_t) i] = proc.plain ((P) i);
     bool changed = false;
     for (int i = 0; i < 4; ++i)
     {
-        const auto n = proc.getMacroName (i);
-        const bool d = proc.macroDrivesAnything (i);
+        const auto label = psy::macroLabel (state, i);
+        const bool d = ! label.empty();
+        const auto n = proc.isMacroNameTyped (i) ? proc.getMacroName (i)
+                                                 : (d ? juce::String (label) : "Macro " + juce::String (i + 1));
         if (n != names[(size_t) i] || d != drives[(size_t) i])
         {
             names[(size_t) i] = n;
             drives[(size_t) i] = d;
             changed = true;
+        }
+        const int pct = juce::roundToInt (state.v[(size_t) ((int) P::Macro1 + i)] * 100.f);
+        if (pct != values[(size_t) i])
+        {
+            values[(size_t) i] = pct;
+            repaint (valueArea (i));   // just the readout
         }
     }
     if (changed) repaint();
@@ -623,9 +666,7 @@ void MacroPanel::paint (juce::Graphics& g)
         // value, right of the handle
         g.setColour (col::textFaint);
         g.setFont (mono (10.f));
-        const auto line = nameArea (i).translated (0, 24).withHeight (16);
-        g.drawText (juce::String (juce::roundToInt (proc.plain ((P) ((int) P::Macro1 + i)) * 100.f)) + "%", line,
-                    juce::Justification::centredRight, false);
+        g.drawText (juce::String (values[(size_t) i]) + "%", valueArea (i), juce::Justification::centredRight, false);
     }
 }
 
@@ -635,8 +676,7 @@ void MacroPanel::resized()
     {
         const auto r = rowArea (i);
         ks.knobs[(size_t) i]->setBounds (r.getX(), r.getY() + 10, 46, 46);
-        const auto line = nameArea (i).translated (0, 24).withHeight (16);
-        handles[(size_t) i]->setBounds (line.withWidth (handles[(size_t) i]->idealWidth()));
+        handles[(size_t) i]->setBounds (valueArea (i).withWidth (handles[(size_t) i]->idealWidth()));
     }
 }
 
@@ -662,7 +702,7 @@ void MacroPanel::mouseDoubleClick (const juce::MouseEvent& e)
                     if (safe != nullptr) safe->editor.reset();
                 });
                 if (keep) proc.setMacroName (i, text);
-                timerCallback();
+                refresh();
             };
             editor->onReturnKey = [commit] { commit (true); };
             editor->onEscapeKey = [commit] { commit (false); };
@@ -834,6 +874,7 @@ LengthPanel::LengthPanel (PsyBoxProcessor& p)
 
 void LengthPanel::timerCallback()
 {
+    if (! isShowing()) return;
     const bool t = proc.plain (P::EnergyMode) > 0.5f;
     if (t == lastTime) return;
     lastTime = t;

@@ -39,6 +39,7 @@ KickPitchPanel::KickPitchPanel (PsyBoxProcessor& p)
 
 void KickPitchPanel::timerCallback()
 {
+    if (! isShowing()) return;
     const auto s = psy::KickSettings::from ([this] {
         psy::ParamState st;
         for (int i = (int) P::KickTune; i <= (int) P::KickTone; ++i) st.v[(size_t) i] = proc.plain ((P) i);
@@ -153,6 +154,7 @@ KickWavePanel::KickWavePanel (PsyBoxProcessor& p) : Section ("Kick"), display (p
 
 void KickWavePanel::timerCallback()
 {
+    if (! isShowing()) return;   // lengthMs() renders a whole kick whenever the patch or key changed
     if (std::abs (display.lengthMs() - shownLength) > 0.5f)
     {
         shownLength = display.lengthMs();

@@ -18,23 +18,6 @@ namespace
     constexpr int kDisplayW = 220, kDisplayGap = sp::lg;
     constexpr int kTallExtra = 66;   // the compressor strip is this much taller than the others
 
-    void strokePath (juce::Graphics& g, const juce::Path& p, juce::Colour c, float w = 1.5f)
-    {
-        g.setColour (c);
-        g.strokePath (p, juce::PathStrokeType (w, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
-    }
-
-    // Fills under a curve with the accent fading downwards, like the other displays.
-    void fillUnder (juce::Graphics& g, const juce::Path& curve, juce::Rectangle<float> a, float alpha = 0.16f)
-    {
-        juce::Path f (curve);
-        f.lineTo (a.getRight(), a.getBottom());
-        f.lineTo (a.getX(), a.getBottom());
-        f.closeSubPath();
-        g.setGradientFill (juce::ColourGradient (accent().withAlpha (alpha), 0.f, a.getY(), accent().withAlpha (0.f), 0.f, a.getBottom(), false));
-        g.fillPath (f);
-    }
-
     float logX (juce::Rectangle<float> a, float hz, float lo = 20.f, float hi = 20000.f)
     {
         return a.getX() + a.getWidth() * std::log (juce::jlimit (lo, hi, hz) / lo) / std::log (hi / lo);
@@ -124,8 +107,8 @@ namespace
             drawGrid (g, r, 4, 2);
             const auto a = r.reduced (sp::sm, sp::sm);
             const int model = (int) std::lround (v (P::PhosDistModel));
-            strokePath (g, phosDriveWave (a, model, 0.f, true), col::lineStrong, 1.f);
-            strokePath (g, phosDriveWave (a, model, v (P::PhosDistDrive), false), accent());
+            strokeLine (g, phosDriveWave (a, model, 0.f, true), col::lineStrong, 1.f);
+            strokeLine (g, phosDriveWave (a, model, v (P::PhosDistDrive), false), accent());
         }
 
         // the four bands' summed response, +-24 dB, a dot on each band
@@ -168,7 +151,7 @@ namespace
             fill.closeSubPath();
             g.setColour (accent().withAlpha (0.12f));
             g.fillPath (fill);
-            strokePath (g, p, accent());
+            strokeLine (g, p, accent());
             for (int b = 0; b < 4; ++b)
             {
                 const int base = (int) P::PhosEqLowGain + b * 3;
@@ -200,7 +183,7 @@ namespace
                     else p.lineTo (pt);
                 }
                 if (c == 0) fillUnder (g, p, a, 0.12f);
-                strokePath (g, p, c == 0 ? accent() : accent().withAlpha (0.45f));
+                strokeLine (g, p, c == 0 ? accent() : accent().withAlpha (0.45f));
             }
         }
 
@@ -269,7 +252,7 @@ namespace
                 if (! started) { env.startNewSubPath (pt); started = true; }
                 else env.lineTo (pt);
             }
-            strokePath (g, env, accent(), 1.2f);
+            strokeLine (g, env, accent(), 1.2f);
         }
 
         // output over input in dB (-48..0): threshold, knee, ratio, gain, soft clip
@@ -294,7 +277,7 @@ namespace
             }
             g.setColour (col::grid);
             g.fillRect (px (thr), a.getY(), 1.f, a.getHeight());
-            strokePath (g, p, accent());
+            strokeLine (g, p, accent());
         }
 
         // input -1..1 across, output up; the dry diagonal underneath
@@ -319,7 +302,7 @@ namespace
                 if (i == 0) p.startNewSubPath (pt);
                 else p.lineTo (pt);
             }
-            strokePath (g, p, accent());
+            strokeLine (g, p, accent());
         }
 
         // two cycles of a 250 Hz sine at 48 kHz through the crusher, the
@@ -350,8 +333,8 @@ namespace
                 }
                 lastY = yw;
             }
-            strokePath (g, dry, col::lineStrong, 1.f);
-            strokePath (g, wet, accent());
+            strokeLine (g, dry, col::lineStrong, 1.f);
+            strokeLine (g, wet, accent());
         }
 
         // a few partials (faint where they were), shifted copies in the accent;
@@ -413,7 +396,7 @@ namespace
                 else p.lineTo (pt);
             }
             fillUnder (g, p, a);
-            strokePath (g, p, accent());
+            strokeLine (g, p, accent());
         }
 
         // two seconds of the delay time each side sweeps through
@@ -438,7 +421,7 @@ namespace
                     else p.lineTo (pt);
                 }
                 if (c == 0) fillUnder (g, p, a, 0.12f);
-                strokePath (g, p, c == 0 ? accent() : accent().withAlpha (0.45f));
+                strokeLine (g, p, c == 0 ? accent() : accent().withAlpha (0.45f));
             }
         }
 
@@ -502,7 +485,7 @@ namespace
                 if (! started) { env.startNewSubPath (pt); started = true; }
                 else env.lineTo (pt);
             }
-            strokePath (g, env, accent(), 1.2f);
+            strokeLine (g, env, accent(), 1.2f);
         }
 
         // a stereo fan: the wedge opens with width and stereoize, the lows
@@ -522,7 +505,7 @@ namespace
                 guide.startNewSubPath (c);
                 guide.lineTo (c.x + rad * std::sin (ang), c.y - rad * std::cos (ang));
             }
-            strokePath (g, guide, col::lineStrong, 1.f);
+            strokeLine (g, guide, col::lineStrong, 1.f);
 
             const float spread = juce::jlimit (0.f, 1.f, 0.5f * v (P::WidthAmount) + 0.35f * v (P::WidthStereo));
             const float ang = juce::jmax (0.02f, spread * halfPi * 0.95f);
@@ -530,7 +513,7 @@ namespace
             wedge.addPieSegment (disc, -ang, ang, 0.f);
             g.setColour (accent().withAlpha (0.16f));
             g.fillPath (wedge);
-            strokePath (g, wedge, accent());
+            strokeLine (g, wedge, accent());
 
             const float lowMono = juce::jlimit (0.f, 1.f, std::log (v (P::WidthMonoHz) / 20.f) / std::log (25.f));
             const float lr = rad * 0.55f * lowMono;
@@ -573,7 +556,7 @@ namespace
         switch (glyph)
         {
             case G::Distortion:
-                strokePath (g, curve ([&] (float u) { return juce::jlimit (-0.7f, 0.7f, 1.8f * std::sin (twoPi * 2.f * u)); }), c);
+                strokeLine (g, curve ([&] (float u) { return juce::jlimit (-0.7f, 0.7f, 1.8f * std::sin (twoPi * 2.f * u)); }), c);
                 break;
             case G::Crush:
             {
@@ -600,27 +583,27 @@ namespace
                 }
                 break;
             case G::Phaser:
-                strokePath (g, curve ([] (float u) {
+                strokeLine (g, curve ([] (float u) {
                     float d = 0.f;
                     for (float n : { 0.22f, 0.5f, 0.78f }) d += std::exp (-std::pow ((u - n) / 0.06f, 2.f));
                     return 0.65f - 1.5f * d;
                 }), c);
                 break;
             case G::Chorus:
-                strokePath (g, curve ([&] (float u) { return 0.65f * std::sin (twoPi * 1.5f * u + 1.2f); }), c.withAlpha (c.getFloatAlpha() * 0.45f));
-                strokePath (g, curve ([&] (float u) { return 0.65f * std::sin (twoPi * 1.5f * u); }), c);
+                strokeLine (g, curve ([&] (float u) { return 0.65f * std::sin (twoPi * 1.5f * u + 1.2f); }), c.withAlpha (c.getFloatAlpha() * 0.45f));
+                strokeLine (g, curve ([&] (float u) { return 0.65f * std::sin (twoPi * 1.5f * u); }), c);
                 break;
             case G::Compressor:
             {
                 juce::Path one;
                 one.startNewSubPath (X (0.2f), Y (-0.9f));
                 one.lineTo (X (0.8f), Y (0.9f));
-                strokePath (g, one, c.withAlpha (c.getFloatAlpha() * 0.35f), 1.f);
+                strokeLine (g, one, c.withAlpha (c.getFloatAlpha() * 0.35f), 1.f);
                 juce::Path p;
                 p.startNewSubPath (X (0.2f), Y (-0.9f));
                 p.lineTo (X (0.46f), Y (0.15f));
                 p.quadraticTo (X (0.54f), Y (0.42f), X (0.8f), Y (0.55f));
-                strokePath (g, p, c);
+                strokeLine (g, p, c);
                 break;
             }
             case G::Delay:
@@ -642,7 +625,7 @@ namespace
                 break;
             }
             case G::Eq:
-                strokePath (g, curve ([] (float u) {
+                strokeLine (g, curve ([] (float u) {
                     return 0.15f + 0.55f * std::exp (-std::pow ((u - 0.3f) / 0.12f, 2.f)) - 0.6f * std::exp (-std::pow ((u - 0.68f) / 0.1f, 2.f));
                 }), c);
                 break;
@@ -651,16 +634,16 @@ namespace
                 juce::Path one;
                 one.startNewSubPath (X (0.2f), Y (-0.9f));
                 one.lineTo (X (0.8f), Y (0.9f));
-                strokePath (g, one, c.withAlpha (c.getFloatAlpha() * 0.35f), 1.f);
+                strokeLine (g, one, c.withAlpha (c.getFloatAlpha() * 0.35f), 1.f);
                 juce::Path p;
                 p.startNewSubPath (X (0.2f), Y (-0.9f));
                 p.lineTo (X (0.5f), Y (0.3f));
                 p.lineTo (X (0.8f), Y (0.3f));
-                strokePath (g, p, c);
+                strokeLine (g, p, c);
                 juce::Path ceilingLine;
                 ceilingLine.startNewSubPath (X (0.12f), Y (0.3f));
                 ceilingLine.lineTo (X (0.88f), Y (0.3f));
-                strokePath (g, ceilingLine, c.withAlpha (c.getFloatAlpha() * 0.35f), 1.f);
+                strokeLine (g, ceilingLine, c.withAlpha (c.getFloatAlpha() * 0.35f), 1.f);
                 break;
             }
             case G::Width:
@@ -675,7 +658,7 @@ namespace
                     p.addCentredArc (cx, cy, rad, rad, 0.f, juce::MathConstants<float>::pi * 0.3f, juce::MathConstants<float>::pi * 0.7f, true);
                     p.addCentredArc (cx, cy, rad, rad, 0.f, -juce::MathConstants<float>::pi * 0.3f, -juce::MathConstants<float>::pi * 0.7f, true);
                 }
-                strokePath (g, p, c);
+                strokeLine (g, p, c);
                 break;
             }
         }
@@ -701,7 +684,7 @@ void FxPage::Power::drawIcon (juce::Graphics& g, juce::Rectangle<float> b, juce:
     p.addCentredArc (b.getCentreX(), b.getCentreY() + rad * 0.08f, rad * 0.82f, rad * 0.82f, 0.f, 0.7f, juce::MathConstants<float>::twoPi - 0.7f, true);
     p.startNewSubPath (b.getCentreX(), b.getY());
     p.lineTo (b.getCentreX(), b.getCentreY());
-    strokePath (g, p, c, 1.4f);
+    strokeLine (g, p, c, 1.4f);
 }
 
 void FxPage::Power::paint (juce::Graphics& g)
@@ -735,7 +718,7 @@ FxPage::Strip::Strip (PsyBoxProcessor& p, int i, const juce::String& n, Glyph gl
     : proc (p), index (i), name (n), glyph (gl), onParam (onSwitch), power (p, onSwitch)
 {
     addAndMakeVisible (power);
-    addMouseListener (this, true);   // hover over any control counts as hovering the strip
+    addMouseListener (&hoverListener, true);   // hover over any control counts as hovering the strip
     startTimerHz (8);
 }
 
@@ -834,6 +817,11 @@ int FxPage::Strip::gridX() const
 
 void FxPage::Strip::timerCallback()
 {
+    if (isShowing()) refresh();
+}
+
+void FxPage::Strip::refresh()
+{
     for (auto& [c, visible] : conditional)
         if (const bool vis = visible(); vis != c->isVisible()) c->setVisible (vis);
 
@@ -847,7 +835,11 @@ void FxPage::Strip::timerCallback()
         if (dynamic_cast<ParamKnob*> (it.c) == nullptr) it.c->setAlpha (active ? 1.f : 0.4f);
     }
     for (auto* k : mixKnobs) k->setEnabled (active);
-    if (select) select->setAlpha (active ? 1.f : 0.4f);
+    if (select)
+    {
+        select->setEnabled (active);
+        select->setAlpha (active ? 1.f : 0.4f);
+    }
     if (side) side->setAlpha (active ? 1.f : 0.4f);
     repaint();   // badge and captions
 }
@@ -1346,7 +1338,7 @@ FxPage::FxPage (PsyBoxProcessor& p, bool phoscyon)
     {
         // EQ: low and low-mid bands on top, high-mid and high under them
         auto* eq = add ("Phoscyon EQ", Glyph::Eq, P::PhosEqOn);
-        const char* bands[] = { "Low", "Lo-Mid", "Hi-Mid", "High" };
+        const char* bands[] = { "Low", "Mid-Low", "Mid-High", "High" };
         for (int b = 0; b < 4; ++b)
         {
             const int base = (int) P::PhosEqLowGain + b * 3, col = (b % 2) * 3, row = b / 2;
@@ -1414,10 +1406,20 @@ FxPage::FxPage (PsyBoxProcessor& p, bool phoscyon)
         std::copy (moved.begin(), moved.end(), c.begin());
         int code = 0, eq = 1, lim = 10;
         psy::phosFxSlots (c, code, eq, lim);
-        orderAttachment.setValueAsCompleteGesture ((float) code);
-        eqSlot->setValueAsCompleteGesture ((float) eq);
-        limSlot->setValueAsCompleteGesture ((float) lim);
+        // one gesture for the three parameters, and the page only follows once all are written
+        reordering = true;
+        for (auto* a : { &orderAttachment, eqSlot.get(), limSlot.get() })
+            a->beginGesture();
+        orderAttachment.setValueAsPartOfGesture ((float) code);
+        eqSlot->setValueAsPartOfGesture ((float) eq);
+        limSlot->setValueAsPartOfGesture ((float) lim);
+        for (auto* a : { &orderAttachment, eqSlot.get(), limSlot.get() })
+            a->endGesture();
+        reordering = false;
+        orderChanged();
     };
+    for (auto& s : strips)
+        s->refresh();   // disabled controls and conditional knobs from the start, not after the first tick
     orderChanged();
 }
 
@@ -1442,6 +1444,7 @@ FxPage::Order FxPage::currentOrder() const
 // The chain and the rack follow the order (also on undo or a preset).
 void FxPage::orderChanged()
 {
+    if (reordering) return;
     order = currentOrder();
     if (chain == nullptr) return;
     chain->setOrder (order);

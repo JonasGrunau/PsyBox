@@ -29,6 +29,7 @@ void DisplayBase::paint (juce::Graphics& g)
 
 void DisplayBase::timerCallback()
 {
+    if (! isShowing()) return;
     const uint64_t fp = fingerprint() ^ (uint64_t) theme::accent().getARGB();
     if (fp != lastPrint)
     {
@@ -39,14 +40,9 @@ void DisplayBase::timerCallback()
 
 uint64_t DisplayBase::hashParams (std::initializer_list<P> ps) const
 {
-    uint64_t h = 1469598103934665603ULL;
+    uint64_t h = kFnvSeed;
     for (auto p : ps)
-    {
-        float v = proc.plain (p);
-        uint32_t bits;
-        std::memcpy (&bits, &v, 4);
-        h = (h ^ bits) * 1099511628211ULL;
-    }
+        h = fnvMixFloat (h, proc.plain (p));
     return h;
 }
 
@@ -96,7 +92,7 @@ void LiveDisplay::paint (juce::Graphics& g)
 
 uint64_t LiveDisplay::mixPos (uint64_t h, float pos)
 {
-    return (h ^ (uint64_t) std::lround (pos * 4096.f)) * 1099511628211ULL;
+    return fnvMix (h, (uint64_t) std::lround (pos * 4096.f));
 }
 
 void LiveDisplay::drawDot (juce::Graphics& g, juce::Point<float> pt, bool newest, juce::Rectangle<float> area) const
@@ -342,7 +338,7 @@ void WaveDisplay::paintContent (juce::Graphics& g, juce::Rectangle<float> r)
 
     // two periods across the display; each voice at its own pitch and
     // drifting phase
-    const int n = std::max (64, (int) r.getWidth() * 2);
+    const int n = std::max (64, (int) r.getWidth() + 1);   // a point per pixel column
     const float mid = r.getCentreY(), amp = r.getHeight() * 0.38f;
     const auto pathFor = [&] (int k) {
         const float semis = v.semis[(size_t) k];
@@ -350,6 +346,7 @@ void WaveDisplay::paintContent (juce::Graphics& g, juce::Rectangle<float> r)
         const double drift = (double) driftRate (semis) * t;
         const float* cyc = cycle.data() + std::min (k, periods - 1) * kCycleLen;
         juce::Path p;
+        p.preallocateSpace (3 * n + 6);
         for (int i = 0; i < n; ++i)
         {
             double ph = 2.0 * (double) i / (double) (n - 1) * (double) ratio + drift;
@@ -381,13 +378,13 @@ void WaveDisplay::paintContent (juce::Graphics& g, juce::Rectangle<float> r)
         const float rel = maxGain > 0.f ? v.gain[(size_t) k] / maxGain : 0.f;
         if (rel < 0.01f) continue;
         g.setColour (acc.withAlpha (0.12f + 0.4f * rel));
-        g.strokePath (pathFor (k), juce::PathStrokeType (1.1f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+        g.strokePath (pathFor (k), juce::PathStrokeType (1.1f, juce::PathStrokeType::mitered, juce::PathStrokeType::butt));
     }
     const auto centre = pathFor (0);
     g.setColour (acc.withAlpha (0.12f));
-    g.strokePath (centre, juce::PathStrokeType (5.f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+    g.strokePath (centre, juce::PathStrokeType (5.f, juce::PathStrokeType::mitered, juce::PathStrokeType::butt));
     g.setColour (acc);
-    g.strokePath (centre, juce::PathStrokeType (1.5f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+    g.strokePath (centre, juce::PathStrokeType (1.5f, juce::PathStrokeType::mitered, juce::PathStrokeType::butt));
 
     // the voices as lines across the detune range (Serum 2's unison view)
     const float a = linesAlpha();
@@ -505,6 +502,18 @@ void FilterDisplay::paintContent (juce::Graphics& g, juce::Rectangle<float> r)
     const float reso = proc.plain (slot == 0 ? P::F1Reso : P::F2Reso);
     const float vowel = proc.plain (P::F1Vowel);
 
+    // The curves cost an impulse response and an FFT each, so they are only
+    // rebuilt when what they show changed (the live one at the `moved` steps).
+    uint64_t knobKey = fnvMix (kFnvSeed, (uint64_t) type);
+    for (float v : { cutoff, reso, vowel, r.getX(), r.getY(), r.getWidth(), r.getHeight() })
+        knobKey = fnvMixFloat (knobKey, v);
+    if (knobKey != knobPrint)
+    {
+        knobPrint = knobKey;
+        recompute (type, cutoff, reso, vowel);
+        knobPath = responsePath (r, top, bottom);
+    }
+
     // the newest note's filter, where its envelopes, LFOs and macros have it
     psy::Voice::FilterNow now;
     const bool moved = live (now)
@@ -513,18 +522,21 @@ void FilterDisplay::paintContent (juce::Graphics& g, juce::Rectangle<float> r)
     const float shownCutoff = juce::jlimit (16.f, 22000.f, moved ? now.cutoff : cutoff);
     if (moved)
     {
-        recompute (type, cutoff, reso, vowel);
         g.setColour (col::textFaint);
-        g.strokePath (responsePath (r, top, bottom), juce::PathStrokeType (1.f));
+        g.strokePath (knobPath, juce::PathStrokeType (1.f));
         g.setColour (col::textFaint.withAlpha (0.6f));
         g.fillRect (xOf (cutoff), r.getY(), 1.f, r.getHeight());
-        recompute (type, now.cutoff, now.reso, now.vowel);
+        uint64_t liveKey = fnvMix (knobKey, (uint64_t) std::lround (std::log2 (std::max (now.cutoff, 1.f)) / 0.01f));
+        liveKey = fnvMix (liveKey, (uint64_t) std::lround (now.reso / 0.005f));
+        liveKey = fnvMix (liveKey, (uint64_t) std::lround (now.vowel / 0.005f));
+        if (liveKey != livePrint)
+        {
+            livePrint = liveKey;
+            recompute (type, now.cutoff, now.reso, now.vowel);
+            livePath = responsePath (r, top, bottom);
+        }
     }
-    else
-    {
-        recompute (type, cutoff, reso, vowel);
-    }
-    strokeCurve (g, responsePath (r, top, bottom), r, true);
+    strokeCurve (g, moved ? livePath : knobPath, r, true);
 
     // cutoff marker
     g.setColour (accent().withAlpha (0.35f));
@@ -657,7 +669,7 @@ void PitchEnvDisplay::paintContent (juce::Graphics& g, juce::Rectangle<float> r)
 // ---------------------------------------------------------------------------
 uint64_t LfoDisplay::fingerprint() const
 {
-    uint64_t h = hashParams ({ psy::lfoParam (lfo, 0), psy::lfoParam (lfo, 5) }) + (uint64_t) lfo * 31u;
+    uint64_t h = hashParams ({ psy::lfoParam (lfo, 0), psy::lfoParam (lfo, 4), psy::lfoParam (lfo, 5) }) + (uint64_t) lfo * 31u;
     for (int k = 0; k < view.numVoices; ++k)
         h = mixPos (h, view.voices[(size_t) k].lfo[(size_t) lfo]);
     return h;
@@ -737,6 +749,8 @@ Scope::Scope (PsyBoxProcessor& p) : DisplayBase (p)
 
 void Scope::timerCallback()
 {
+    if (! isShowing()) return;
+    bool quiet = true;   // nothing in, meters and held peaks at the floor, no clip lamp
     for (int c = 0; c < 2; ++c)
     {
         const auto lv = proc.takeOutLevel (c);
@@ -749,8 +763,11 @@ void Scope::timerCallback()
         else m.holdDb -= kMeterFallDb;
         if (lv.peak >= 1.f) m.clipFrames = kClipFrames;
         else if (m.clipFrames > 0) --m.clipFrames;
+        quiet = quiet && lv.peak < 1.0e-5f && m.peakDb <= kMeterFloorDb && m.holdDb <= kMeterFloorDb && m.clipFrames == 0;
     }
-    repaint();
+    // A few quiet frames still repaint, so the last of the signal leaves the wave.
+    quietFrames = quiet ? quietFrames + 1 : 0;
+    if (quietFrames <= 3) repaint();
 }
 
 void Scope::mouseDrag (const juce::MouseEvent& e)
@@ -762,7 +779,11 @@ void Scope::mouseDrag (const juce::MouseEvent& e)
     const auto file = proc.bounceToFile();
     if (file.existsAsFile())
         juce::DragAndDropContainer::performExternalDragDropOfFiles ({ file.getFullPathName() }, false, this,
-                                                                     [this] { dragging = false; repaint(); });
+                                                                     [safe = juce::Component::SafePointer<Scope> (this)] {
+                                                                         if (safe == nullptr) return;
+                                                                         safe->dragging = false;
+                                                                         safe->repaint();
+                                                                     });
     else
         dragging = false;
 }
@@ -870,14 +891,11 @@ psy::ParamState KickDisplay::patch() const
 
 uint64_t KickDisplay::fingerprint() const
 {
-    uint64_t h = hashParams ({ P::VelSens }) ^ ((uint64_t) note() * 0x9E3779B97F4A7C15ULL);
+    // the played key only matters while the body tracks it (kickBodyHz ignores it otherwise)
+    const uint64_t key = proc.plain (P::KickKeyTrack) > 0.5f ? (uint64_t) note() : 0;
+    uint64_t h = hashParams ({ P::VelSens }) ^ (key * 0x9E3779B97F4A7C15ULL);
     for (int i = (int) P::KickTune; i <= (int) P::KickTone; ++i)
-    {
-        float v = proc.plain ((P) i);
-        uint32_t bits;
-        std::memcpy (&bits, &v, 4);
-        h = (h ^ bits) * 1099511628211ULL;
-    }
+        h = fnvMixFloat (h, proc.plain ((P) i));
     return h;
 }
 
@@ -959,24 +977,33 @@ void KickPitchDisplay::paintContent (juce::Graphics& g, juce::Rectangle<float> r
 
 void KickEnvDisplay::paintContent (juce::Graphics& g, juce::Rectangle<float> r)
 {
+    const uint64_t fp = fingerprint();   // before the patch is read: a change in between re-renders next time
     const auto st = patch();
     const auto s = psy::KickSettings::from (st);
     const float totalMs = juce::jlimit (60.f, 1500.f, (s.attackMs + s.holdMs + s.decayMs) * 1.1f + 10.f);
     constexpr float fs = 8000.f;   // plenty for an envelope
     const int count = (int) (totalMs * 0.001f * fs);
-    if (fingerprint() != cached || (int) env.size() != count)
-    {
-        env.assign ((size_t) count, 0.f);
-        psy::KickVoice::renderOffline (st, note(), 1.f, fs, count, nullptr, env.data());
-        cached = fingerprint();
-    }
     drawGrid (g, r, 6, 2);
     auto area = r.reduced (4.f, 8.f);
+    // about two points per pixel column, kept with the render
+    const int stride = juce::jmax (2, count / (2 * juce::jmax (1, (int) area.getWidth())));
+    if (fp != cached || (int) env.size() != count || stride != envStride)
+    {
+        if (fp != cached || (int) env.size() != count)
+        {
+            env.assign ((size_t) count, 0.f);
+            psy::KickVoice::renderOffline (st, note(), 1.f, fs, count, nullptr, env.data());
+            cached = fp;
+        }
+        envStride = stride;
+        envPoints.clear();
+        for (int i = 0; i < count; i += stride) envPoints.push_back (env[(size_t) i]);
+    }
     const auto X = [&] (int i) { return area.getX() + area.getWidth() * (float) i / (float) juce::jmax (1, count - 1); };
     const auto Y = [&] (float v) { return area.getBottom() - area.getHeight() * v; };
     juce::Path p;
     p.startNewSubPath (X (0), Y (0.f));
-    for (int i = 0; i < count; i += 2) p.lineTo (X (i), Y (env[(size_t) i]));
+    for (size_t i = 0; i < envPoints.size(); ++i) p.lineTo (X ((int) i * stride), Y (envPoints[i]));
     p.lineTo (X (count - 1), Y (0.f));
     strokeCurve (g, p, area, true);
 
@@ -988,11 +1015,12 @@ void KickEnvDisplay::paintContent (juce::Graphics& g, juce::Rectangle<float> r)
 
 void KickClickDisplay::paintContent (juce::Graphics& g, juce::Rectangle<float> r)
 {
+    const uint64_t fp = fingerprint();   // before the patch is read: a change in between re-renders next time
     auto st = patch();
     const auto s = psy::KickSettings::from (st);
     const float ms = juce::jlimit (3.f, 40.f, s.clickMs * 1.2f);
     const int count = (int) (ms * 0.001f * kKickFs);
-    if (fingerprint() != cached || (int) click.size() != count)
+    if (fp != cached || (int) click.size() != count)
     {
         // the click alone: the hit with it minus the hit without it
         std::vector<float> without ((size_t) count);
@@ -1001,7 +1029,7 @@ void KickClickDisplay::paintContent (juce::Graphics& g, juce::Rectangle<float> r
         st.set (P::KickClickLevel, 0.f);
         psy::KickVoice::renderOffline (st, note(), 1.f, kKickFs, count, without.data());
         for (int i = 0; i < count; ++i) click[(size_t) i] -= without[(size_t) i];
-        cached = fingerprint();
+        cached = fp;
     }
     drawGrid (g, r, 4, 2);
     if (s.clickLevel <= 0.f)
@@ -1041,7 +1069,8 @@ void KickDriveDisplay::paintContent (juce::Graphics& g, juce::Rectangle<float> r
 
 void KickWaveDisplay::ensure() const
 {
-    if (fingerprint() == cached && ! wave.empty()) return;
+    const uint64_t fp = fingerprint();   // before the patch is read: a change in between re-renders next time
+    if (fp == cached && ! wave.empty()) return;
     const auto st = patch();
     const auto s = psy::KickSettings::from (st);
     totalMs = juce::jlimit (150.f, 1200.f, (s.attackMs + s.holdMs + s.decayMs) * 1.15f + 20.f);
@@ -1053,7 +1082,7 @@ void KickWaveDisplay::ensure() const
     for (int i = 0; i < count; ++i)
         if (std::abs (wave[(size_t) i]) > 0.0005f) last = i;   // -60 dB below the 0.5 body peak
     length = (float) last * 1000.f / kKickFs;
-    cached = fingerprint();
+    cached = fp;
 }
 
 void KickWaveDisplay::paintContent (juce::Graphics& g, juce::Rectangle<float> r)
@@ -1253,8 +1282,24 @@ void CompDisplay::mouseDoubleClick (const juce::MouseEvent& e)
 
 void CompDisplay::timerCallback()
 {
-    if (proc.plain (P::CompOn) > 0.5f) repaint();   // live meters
-    else DisplayBase::timerCallback();
+    if (! isShowing()) return;
+    if (proc.plain (P::CompOn) > 0.5f)
+    {
+        // live meters: repaint when a reading moved by a tenth of a dB
+        uint64_t h = kFnvSeed;
+        for (int b = 0; b < (multi() ? 3 : 1); ++b)
+        {
+            const auto m = proc.getCompReading (b);
+            for (float db : { m.inDb, m.gainDb, m.totalDb })
+                h = fnvMix (h, (uint64_t) juce::roundToInt (juce::jlimit (-200.f, 200.f, db) * 10.f));
+        }
+        if (h != readingPrint)
+        {
+            readingPrint = h;
+            repaint();
+        }
+    }
+    DisplayBase::timerCallback();
 }
 
 uint64_t CompDisplay::fingerprint() const

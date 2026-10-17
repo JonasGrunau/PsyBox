@@ -2,6 +2,12 @@
 
 using namespace theme;
 
+namespace
+{
+    // Looked up on every paint, so built once instead of from a literal each time.
+    const juce::Identifier bipolarId { "bipolar" }, lockedId { "locked" }, primaryId { "primary" };
+}
+
 PsyLookAndFeel::PsyLookAndFeel()
 {
     setColour (juce::ResizableWindow::backgroundColourId, col::bg);
@@ -34,8 +40,8 @@ void PsyLookAndFeel::drawRotarySlider (juce::Graphics& g, int x, int y, int w, i
     const auto c = bounds.getCentre();
     const float r = d * 0.5f - 2.f;
     const bool hot = s.isMouseOverOrDragging();
-    const bool bipolar = (bool) s.getProperties().getWithDefault ("bipolar", false);
-    const bool locked = (bool) s.getProperties().getWithDefault ("locked", false);
+    const bool bipolar = (bool) s.getProperties().getWithDefault (bipolarId, false);
+    const bool locked = (bool) s.getProperties().getWithDefault (lockedId, false);
     const float angle = start + pos * (end - start);
     const float stroke = d > 44.f ? 2.5f : 2.f;
     const juce::Colour acc = accent();
@@ -82,17 +88,17 @@ void PsyLookAndFeel::drawRotarySlider (juce::Graphics& g, int x, int y, int w, i
 }
 
 // Horizontal slider used for mod-matrix amounts: hairline track, bipolar fill.
-void PsyLookAndFeel::drawLinearSlider (juce::Graphics& g, int x, int y, int w, int h, float pos, float, float,
+void PsyLookAndFeel::drawLinearSlider (juce::Graphics& g, int x, int y, int w, int h, float pos, float minPos, float maxPos,
                                        juce::Slider::SliderStyle style, juce::Slider& s)
 {
     if (style != juce::Slider::LinearHorizontal && style != juce::Slider::LinearBar)
     {
-        LookAndFeel_V4::drawLinearSlider (g, x, y, w, h, pos, 0, 0, style, s);
+        LookAndFeel_V4::drawLinearSlider (g, x, y, w, h, pos, minPos, maxPos, style, s);
         return;
     }
     const auto b = juce::Rectangle<float> ((float) x, (float) y, (float) w, (float) h);
     const float cy = b.getCentreY();
-    const bool bipolar = (bool) s.getProperties().getWithDefault ("bipolar", false);
+    const bool bipolar = (bool) s.getProperties().getWithDefault (bipolarId, false);
     g.setColour (col::lineStrong);
     g.fillRoundedRectangle (b.getX(), cy - 1.f, b.getWidth(), 2.f, 1.f);
     const float from = bipolar ? b.getCentreX() : b.getX();
@@ -208,7 +214,7 @@ void PsyLookAndFeel::getIdealPopupMenuItemSize (const juce::String& text, bool i
 void PsyLookAndFeel::drawButtonBackground (juce::Graphics& g, juce::Button& b, const juce::Colour&, bool over, bool down)
 {
     const auto r = b.getLocalBounds().toFloat().reduced (0.5f);
-    const bool primary = (bool) b.getProperties().getWithDefault ("primary", false);
+    const bool primary = (bool) b.getProperties().getWithDefault (primaryId, false);
     if (primary)
     {
         auto c = accent();
@@ -234,7 +240,7 @@ void PsyLookAndFeel::drawButtonBackground (juce::Graphics& g, juce::Button& b, c
 
 void PsyLookAndFeel::drawButtonText (juce::Graphics& g, juce::TextButton& b, bool over, bool)
 {
-    const bool primary = (bool) b.getProperties().getWithDefault ("primary", false);
+    const bool primary = (bool) b.getProperties().getWithDefault (primaryId, false);
     g.setFont (getTextButtonFont (b, b.getHeight()));
     g.setColour (primary ? juce::Colour (0xff0a0a0b) : (b.getToggleState() ? accent() : (over ? col::text : col::textDim.brighter (0.2f))));
     g.drawText (b.getButtonText().toUpperCase(), b.getLocalBounds(), juce::Justification::centred, false);
@@ -242,7 +248,7 @@ void PsyLookAndFeel::drawButtonText (juce::Graphics& g, juce::TextButton& b, boo
 
 juce::Font PsyLookAndFeel::getTextButtonFont (juce::TextButton& b, int)
 {
-    const bool primary = (bool) b.getProperties().getWithDefault ("primary", false);
+    const bool primary = (bool) b.getProperties().getWithDefault (primaryId, false);
     return primary ? heading (12.5f) : heading (10.5f);
 }
 

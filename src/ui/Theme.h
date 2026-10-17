@@ -2,6 +2,9 @@
 
 #include <juce_gui_basics/juce_gui_basics.h>
 
+#include <cstdint>
+#include <cstring>
+
 // Design tokens. Monochrome base; the only colour on screen is the accent of
 // the selected sound category, used for values, active states and graphs.
 namespace theme
@@ -20,6 +23,22 @@ namespace theme
         inline const juce::Colour textFaint   { 0xff55555c };
         inline const juce::Colour grid        { 0xff17171b };
     }
+
+    // FNV-1a style mixing for the change fingerprints displays and panels poll
+    // (a repaint is skipped while the hash stays the same).
+    constexpr uint64_t kFnvSeed = 1469598103934665603ULL;
+    constexpr uint64_t fnvMix (uint64_t h, uint64_t v) noexcept { return (h ^ v) * 1099511628211ULL; }
+    inline uint64_t fnvMixFloat (uint64_t h, float v) noexcept
+    {
+        uint32_t bits;
+        std::memcpy (&bits, &v, 4);
+        return fnvMix (h, bits);
+    }
+
+    // A curve stroked the way the displays draw theirs (round joins and caps).
+    void strokeLine (juce::Graphics& g, const juce::Path& p, juce::Colour c, float width = 1.5f);
+    // Fills under a curve with the accent fading downwards, like the other displays.
+    void fillUnder (juce::Graphics& g, const juce::Path& curve, juce::Rectangle<float> area, float alpha = 0.16f);
 
     // Current accent (message thread only). Set when the category changes.
     juce::Colour accent();

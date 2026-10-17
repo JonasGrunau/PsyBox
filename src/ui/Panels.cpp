@@ -644,12 +644,45 @@ void TopBar::savePresetDialog()
     saveWindow->addTextEditor ("name", proc.getPresetName().trimCharactersAtEnd ("*"));
     saveWindow->addButton ("Save", 1, juce::KeyPress (juce::KeyPress::returnKey));
     saveWindow->addButton ("Cancel", 0, juce::KeyPress (juce::KeyPress::escapeKey));
-    saveWindow->enterModalState (true, juce::ModalCallbackFunction::create ([this] (int result) {
-        if (result == 1 && saveWindow != nullptr)
+    // The editor can close with the dialog open: JUCE then still calls this with 0, after ~TopBar.
+    saveWindow->enterModalState (true, juce::ModalCallbackFunction::create ([safe = juce::Component::SafePointer<TopBar> (this)] (int result) {
+        if (safe == nullptr) return;
+        if (result == 1 && safe->saveWindow != nullptr)
         {
-            const auto name = saveWindow->getTextEditorContents ("name").trim();
-            if (name.isNotEmpty()) proc.savePreset (name);
+            const auto name = safe->saveWindow->getTextEditorContents ("name").trim();
+            if (name.isNotEmpty()) safe->saveNamed (name);
         }
-        saveWindow.reset();
+        safe->saveWindow.reset();
     }), false);
+}
+
+// Asks before replacing a preset of the same name, and says so when the write fails.
+void TopBar::saveNamed (const juce::String& name)
+{
+    const auto file = PsyBoxProcessor::presetFolder().getChildFile (psy::categoryInfo()[(size_t) proc.getCategory()].name)
+                                                     .getChildFile (juce::File::createLegalFileName (name) + ".psyp");
+    if (! file.existsAsFile())
+    {
+        writePreset (name);
+        return;
+    }
+    juce::AlertWindow::showAsync (juce::MessageBoxOptions::makeOptionsOkCancel (
+                                      juce::MessageBoxIconType::QuestionIcon, "Replace preset?",
+                                      "A preset called \"" + file.getFileNameWithoutExtension() + "\" already exists in "
+                                          + file.getParentDirectory().getFileName() + ".",
+                                      "Replace", "Cancel", this),
+                                  [safe = juce::Component::SafePointer<TopBar> (this), name] (int result) {
+                                      if (safe != nullptr && result == 1) safe->writePreset (name);
+                                  });
+}
+
+void TopBar::writePreset (const juce::String& name)
+{
+    if (proc.savePreset (name)) return;
+    juce::AlertWindow::showAsync (juce::MessageBoxOptions::makeOptionsOk (
+                                      juce::MessageBoxIconType::WarningIcon, "Preset not saved",
+                                      "\"" + name + "\" could not be written to\n" + PsyBoxProcessor::presetFolder().getFullPathName()
+                                          + "\nCheck that the folder exists and can be written to.",
+                                      "OK", this),
+                                  nullptr);
 }

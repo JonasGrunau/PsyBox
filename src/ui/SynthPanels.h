@@ -58,6 +58,7 @@ private:
     std::unique_ptr<ToggleDot> sync;
     int lastType = -1;
     bool lastOn = true, showSettings = false;
+    void refresh();   // enables and lays out for the type; also run once by the constructor
     void timerCallback() override;
 };
 
@@ -101,6 +102,7 @@ private:
     ParamKnob *cutoff, *reso, *drive, *env, *key, *vowel = nullptr;
     std::unique_ptr<Segmented> routing;
     int lastType = -1;
+    void refresh();
     void timerCallback() override;
 };
 
@@ -154,9 +156,12 @@ private:
     std::vector<std::unique_ptr<ModSourceHandle>> handles;
     std::array<juce::String, 4> names;
     std::array<bool, 4> drives {};
+    std::array<int, 4> values {};   // the macro positions in percent, as last drawn
     std::unique_ptr<juce::TextEditor> editor;
     juce::Rectangle<int> rowArea (int i) const;
     juce::Rectangle<int> nameArea (int i) const;
+    juce::Rectangle<int> valueArea (int i) const;
+    void refresh();
     void timerCallback() override;
 };
 

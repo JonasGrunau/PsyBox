@@ -33,7 +33,7 @@ struct CellGrid
 class Section : public juce::Component
 {
 public:
-    explicit Section (juce::String title) : title (std::move (title)) {}
+    explicit Section (juce::String heading) : title (std::move (heading)) {}
     void paint (juce::Graphics&) override;
 
 protected:
@@ -185,5 +185,7 @@ private:
     static juce::Font wordmarkFont();
     void showPresetMenu();
     void savePresetDialog();
+    void saveNamed (const juce::String& name);   // confirms an overwrite, then writePreset
+    void writePreset (const juce::String& name);
     std::unique_ptr<juce::AlertWindow> saveWindow;
 };

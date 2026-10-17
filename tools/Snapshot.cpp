@@ -15,6 +15,7 @@
 // editor) and exits 1 on a failure.
 // PSYSNAP_KEYS=1 renders the standalone's keyboard strip under the panels.
 // PSYSNAP_ARP=1 generates with an arp.
+// PSYSNAP_SCALE=1 renders at 1x (default 2x).
 // PSYSNAP_PARAMS="comp_on=1,comp_mode=0" sets plain parameter values after Generate.
 // PSYSNAP_UNISON=1 opens Osc A's unison settings (the gear), =2 holds Osc A's
 // voice lines up as if the mouse were on its UNISON field.
@@ -222,6 +223,10 @@ int main (int argc, char** argv)
         return runSwapTest (proc, (psy::Category) juce::jlimit (0, psy::kNumCategories - 1, cats[0]), swapOut);
     proc.prepareToPlay (48000.0, 512);
     std::unique_ptr<juce::AudioProcessorEditor> editor (proc.createEditor());
+    // On the desktop (a window nobody looks at) the editor counts as showing, so
+    // the panels' timers keep their layout current, as they do on screen.
+    editor->setVisible (true);
+    editor->addToDesktop (juce::ComponentPeer::windowIsTemporary);
 
     proc.setArpGeneration (std::getenv ("PSYSNAP_ARP") != nullptr);
     for (int c : cats)
@@ -305,7 +310,9 @@ int main (int argc, char** argv)
         if (std::getenv ("PSYSNAP_DNDTEST") != nullptr)
             return runDragAndDropTest (proc, *editor);
 
-        const auto img = editor->createComponentSnapshot (editor->getLocalBounds(), true, 2.f);
+        const auto* scaleText = std::getenv ("PSYSNAP_SCALE");
+        const auto img = editor->createComponentSnapshot (editor->getLocalBounds(), true,
+                                                          scaleText != nullptr ? juce::String (scaleText).getFloatValue() : 2.f);
         const auto file = outDir.getChildFile ("ui_" + juce::String (c) + ".png");
         file.deleteFile();
         juce::FileOutputStream os (file);

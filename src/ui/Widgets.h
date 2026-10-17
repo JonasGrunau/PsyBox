@@ -43,7 +43,17 @@ public:
     void mouseUp (const juce::MouseEvent&) override;
     void mouseMove (const juce::MouseEvent&) override;
     void mouseEnter (const juce::MouseEvent&) override { repaint(); }
-    void mouseExit (const juce::MouseEvent&) override { ringHover = false; repaint(); }
+    void mouseExit (const juce::MouseEvent&) override
+    {
+        ringHover = false;
+        setMouseCursor (juce::MouseCursor::NormalCursor);
+        repaint();
+    }
+    // The slider is listened to for hover; its wheel events must not be forwarded to the parent twice.
+    void mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& w) override
+    {
+        if (e.eventComponent == this) Component::mouseWheelMove (e, w);
+    }
 
     bool isInterestedInDragSource (const SourceDetails&) override;
     void itemDragEnter (const SourceDetails&) override { dropHover = true; repaint(); }
@@ -178,7 +188,7 @@ private:
     psy::ModDst target;
     juce::String caption, overrideText;
     juce::ParameterAttachment attachment;
-    float value = 0.f, dragStart = 0.f;
+    float value = 0.f, dragStart = 0.f, wheelAccum = 0.f;
     bool cell = false, gear = false, gearOn = false, dragging = false, dropHover = false, dragShown = false;
     int numRoutes = 0;
     std::array<PsyBoxProcessor::ModRoute, psy::kNumModSlots> routes {};
@@ -217,15 +227,16 @@ public:
     std::function<void (int)> onPick;
 
 private:
-    PsyBoxProcessor& proc;
-    psy::P param;
     juce::StringArray labels;
     int selected = 0, hover = -1;
     bool vertical = false;
     juce::ParameterAttachment attachment;
+    mutable std::vector<float> cachedWidths;   // text is measured once per width, not per paint and mouse move
+    mutable float cachedTotal = -1.f;
 
     int indexAt (juce::Point<int>) const;
-    std::vector<float> segmentWidths (float total) const;
+    const std::vector<float>& segmentWidths (float total) const;
+    std::vector<float> measureWidths (float total) const;
 };
 
 // ---------------------------------------------------------------------------
@@ -310,6 +321,8 @@ public:
 
 private:
     juce::StringArray names;
+    std::vector<int> nameWidths;
+    std::vector<juce::Range<float>> nameInk;   // measured once in the constructor
     int selected = 0, hover = -1;
     std::vector<juce::Rectangle<int>> tabBounds() const;
     bool ledOn (int i) const { return isLit && (! hasLed || hasLed (i)); }
@@ -321,7 +334,7 @@ private:
 class IconButton : public juce::Button
 {
 public:
-    enum class Icon { Undo, Redo, Left, Right, Save, Menu, Dice, Mutate, Lock, Close };
+    enum class Icon { Undo, Redo, Left, Right, Save, Menu, Close };
     explicit IconButton (Icon, const juce::String& tooltip = {});
     void paintButton (juce::Graphics&, bool over, bool down) override;
 

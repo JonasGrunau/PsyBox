@@ -107,6 +107,7 @@ private:
         std::array<float, psy::kNumModSlots> shown {};
         juce::Rectangle<int> heads;
         int srcX = 0, amtX = 0, amtW = 0, dstX = 0;
+        void refresh();   // greys the empty routes and keeps the values current; also run once by the constructor
         void timerCallback() override;
     };
     Panel panel;
@@ -167,9 +168,14 @@ private:
             void mouseExit (const juce::MouseEvent&) override { hover = {}; repaint(); }
             void mouseDoubleClick (const juce::MouseEvent&) override;
             void mouseWheelMove (const juce::MouseEvent&, const juce::MouseWheelDetails&) override;
+            void refresh();   // repaints when the playing step or the pattern changed
 
         private:
             PsyBoxProcessor& proc;
+            psy::ArpPattern shown;
+            int shownStep = -2;
+            bool shownOn = false;
+            juce::Colour shownAccent;
             enum class Row { None, Ruler, On, Note, Accent, Slide };
             struct Hit { Row row = Row::None; int step = -1; };
             Hit hover, drag;
@@ -217,12 +223,7 @@ private:
         std::vector<ParamKnob*> knobs;
         juce::Rectangle<int> hintArea;
         void rotate (int by);
-        void timerCallback() override
-        {
-            if (! grid.isShowing()) return;
-            grid.repaint();
-            templates.refresh();
-        }
+        void timerCallback() override;
     };
     Panel panel;
 };

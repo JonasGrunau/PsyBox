@@ -97,6 +97,8 @@ private:
     juce::dsp::FFT fft { 12 };
     std::vector<float> fftData;
     std::vector<float> magDb;
+    juce::Path knobPath, livePath;      // the curves, rebuilt only when their inputs change
+    uint64_t knobPrint = 0, livePrint = 0;
     void recompute (int type, float cutoff, float reso, float vowel);
     juce::Path responsePath (juce::Rectangle<float>, float top, float bottom) const;
     bool live (psy::Voice::FilterNow&) const;   // the newest voice's filter, if a note sounds
@@ -172,7 +174,8 @@ public:
     using KickDisplay::KickDisplay;
 
 private:
-    std::vector<float> env;
+    std::vector<float> env, envPoints;   // the render, and the samples the curve is drawn through
+    int envStride = 0;
     uint64_t cached = 0;
     void paintContent (juce::Graphics&, juce::Rectangle<float>) override;
 };
@@ -231,6 +234,7 @@ private:
     std::vector<float> buf;
     std::array<Meter, 2> meters;
     bool dragging = false;
+    int quietFrames = 0;
     void timerCallback() override;
     void paintContent (juce::Graphics&, juce::Rectangle<float>) override;
     void paintWave (juce::Graphics&, juce::Rectangle<float>);
@@ -259,6 +263,7 @@ private:
     struct Target { psy::P param = psy::P::Count, partner = psy::P::Count; bool isDown = false; };
     Target hover, drag;
     float grabOffset = 0.f;
+    uint64_t readingPrint = 0;
 
     bool multi() const { return proc.plain (psy::P::CompMode) > 0.5f; }
     juce::Rectangle<float> plot() const;

@@ -8,22 +8,6 @@ using psy::P;
 
 namespace
 {
-    void stroke (juce::Graphics& g, const juce::Path& p, juce::Colour c, float w = 1.5f)
-    {
-        g.setColour (c);
-        g.strokePath (p, juce::PathStrokeType (w, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
-    }
-
-    void fillBelow (juce::Graphics& g, const juce::Path& curve, juce::Rectangle<float> a, float alpha)
-    {
-        juce::Path f (curve);
-        f.lineTo (a.getRight(), a.getBottom());
-        f.lineTo (a.getX(), a.getBottom());
-        f.closeSubPath();
-        g.setGradientFill (juce::ColourGradient (accent().withAlpha (alpha), 0.f, a.getY(), accent().withAlpha (0.f), 0.f, a.getBottom(), false));
-        g.fillPath (f);
-    }
-
     // The patch's 303 settings as the editor sees them now.
     psy::PhosSettings settings (const PsyBoxProcessor& p)
     {
@@ -95,17 +79,17 @@ void PhosFilterDisplay::paintContent (juce::Graphics& g, juce::Rectangle<float> 
     const float live = liveCutoff();
     if (live > 0.f)
     {
-        stroke (g, curve (resting), col::lineStrong, 1.f);
+        strokeLine (g, curve (resting), col::lineStrong, 1.f);
         const auto p = curve (live);
-        fillBelow (g, p, a, 0.14f);
-        stroke (g, p, accent());
+        fillUnder (g, p, a, 0.14f);
+        strokeLine (g, p, accent());
         drawDot (g, { xOf (live), yOf (psy::PhosVoice::responseDb (live, s.reso, live) + 8.f) }, true, a);
     }
     else
     {
         const auto p = curve (resting);
-        fillBelow (g, p, a, 0.14f);
-        stroke (g, p, accent());
+        fillUnder (g, p, a, 0.14f);
+        strokeLine (g, p, accent());
     }
 }
 
@@ -114,8 +98,13 @@ void PhosFilterDisplay::paintContent (juce::Graphics& g, juce::Rectangle<float> 
 // ---------------------------------------------------------------------------
 uint64_t PhosEnvDisplay::fingerprint() const
 {
-    auto h = hashParams ({ P::PhosDecay, P::PhosAccDecay, P::PhosEnvAttack, P::PhosAccent, P::PhosAccVolume, P::PhosAccCouple });
-    if (view.numVoices > 0) h = mixPos (h, view.voices[0].env[vca ? 0 : 1].pos + (float) view.voices[0].env[0].stage);
+    auto h = hashParams ({ P::PhosDecay, P::PhosAccDecay, P::PhosEnvAttack, P::PhosAccent, P::PhosAccVolume, P::PhosAccCouple,
+                           P::PhosAccAEnv });
+    if (view.numVoices > 0)
+    {
+        const auto& e = view.voices[0].env[vca ? 0 : 1];
+        h = mixPos (h, e.pos + (float) e.stage);
+    }
     return h;
 }
 
@@ -156,8 +145,8 @@ void PhosEnvDisplay::paintContent (juce::Graphics& g, juce::Rectangle<float> r)
             }
             if (acc == 0)
             {
-                fillBelow (g, p, a, 0.14f);
-                stroke (g, p, theme::accent());
+                fillUnder (g, p, a, 0.14f);
+                strokeLine (g, p, theme::accent());
             }
             else
             {
@@ -189,8 +178,8 @@ void PhosEnvDisplay::paintContent (juce::Graphics& g, juce::Rectangle<float> r)
         }
         if (acc == 0)
         {
-            fillBelow (g, p, a, 0.14f);
-            stroke (g, p, theme::accent());
+            fillUnder (g, p, a, 0.14f);
+            strokeLine (g, p, theme::accent());
         }
         else
         {
@@ -247,6 +236,7 @@ PhosSynthPanel::PhosSynthPanel (PsyBoxProcessor& p)
 
 void PhosSynthPanel::timerCallback()
 {
+    if (! isShowing()) return;
     const std::array<bool, 2> now { proc.plain (P::PhosResoCouple) > 0.5f, proc.plain (P::PhosAccCouple) > 0.5f };
     if (now != coupled)
     {
@@ -317,19 +307,26 @@ void PhosSynthPanel::resized()
 PhosFilterPanel::PhosFilterPanel (PsyBoxProcessor& p) : Section ("Filter"), display (p)
 {
     addAndMakeVisible (display);
+    shown = hzText (display.cutoffNow());
     startTimerHz (15);
 }
 
+// The readout is worked out here, not in paint(): the display under it repaints
+// at 60 Hz while a note sweeps, and that would hide the change from this check.
 void PhosFilterPanel::timerCallback()
 {
-    if (hzText (display.cutoffNow()) != shown)
+    if (! isShowing()) return;
+    const auto now = hzText (display.cutoffNow());
+    if (now != shown)
+    {
+        shown = now;
         repaint (header());
+    }
 }
 
 void PhosFilterPanel::paint (juce::Graphics& g)
 {
     Section::paint (g);
-    shown = hzText (display.cutoffNow());
     g.setColour (accent());
     g.setFont (mono (10.f));
     g.drawText (shown, header(), juce::Justification::centredRight, false);
@@ -384,8 +381,8 @@ namespace
             drawGrid (g, r, 4, 2);
             const auto a = r.reduced (sp::sm, sp::sm);
             const int model = (int) std::lround (proc.plain (P::PhosDistModel));
-            stroke (g, phosDriveWave (a, model, 0.f, true), col::lineStrong, 1.f);
-            stroke (g, phosDriveWave (a, model, proc.plain (P::PhosDistDrive), false), proc.plain (P::PhosDistOn) > 0.5f ? accent() : col::textFaint);
+            strokeLine (g, phosDriveWave (a, model, 0.f, true), col::lineStrong, 1.f);
+            strokeLine (g, phosDriveWave (a, model, proc.plain (P::PhosDistDrive), false), proc.plain (P::PhosDistOn) > 0.5f ? accent() : col::textFaint);
         }
     };
 } // namespace
@@ -446,6 +443,7 @@ PhosCalibrationPanel::PhosCalibrationPanel (PsyBoxProcessor& p)
     preset.setTooltip ("The original's calibrations: the reference unit and some well-worn ones");
     preset.onChange = [this] { if (preset.getSelectedId() > 0) apply (preset.getSelectedId() - 1); };
     addAndMakeVisible (preset);
+    refresh();
     startTimerHz (4);
 }
 
@@ -470,6 +468,11 @@ void PhosCalibrationPanel::apply (int index)
 }
 
 void PhosCalibrationPanel::timerCallback()
+{
+    if (isShowing()) refresh();
+}
+
+void PhosCalibrationPanel::refresh()
 {
     // the preset the trims match, if any
     int match = 0;

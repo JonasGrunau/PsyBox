@@ -29,7 +29,8 @@ The editor's visual layer, laid out like Serum: view tabs in the top bar (OSC / 
 - A new modulatable knob only needs its target in `kTargets` (`Params.cpp`): `ParamKnob` then accepts drops and draws rings by itself. New mod sources need a `ModSourceHandle` somewhere.
 - Which views and which OSC-page extra a category gets is decided in `PsyBoxEditor::Root::updateMode` (kicks: Kick/FX/Global; Phoscyon: the PHOSCYON page and `FxPage (p, true)`, the scrolling eleven-strip rack; categories with an arp add Arp; energy shows Length, basses Knock).
 - `FxPage` reads the order from the parameters themselves (`currentOrder`), not `proc.plain`: an attachment's callback runs before the processor's raw values catch up.
-- Panels whose contents depend on a choice (osc type, filter type, LFO/FX page) use a `juce::Timer` to watch it and relayout. Follow that pattern.
+- Panels whose contents depend on a choice (osc type, filter type, LFO/FX page) use a `juce::Timer` to watch it and relayout. Follow that pattern: put the work in a `refresh()`, call it once at the end of the constructor (no wrong layout until the first tick), and let `timerCallback` run it only `if (isShowing())`. Every timer in this layer returns early while hidden, so a hidden page costs nothing (the snapshot tool puts the editor on the desktop so they run there too).
+- Change fingerprints use `theme::fnvMix` / `fnvMixFloat` (`Theme.h`); curve strokes and fills use `theme::strokeLine` / `fillUnder`. Wheel events: a component that listens to a child (`addMouseListener`) must not forward the child's wheel events to its own parent too.
 - Displays read `proc.plain(P)` and `copyScope`. They must stay cheap and must not lock the audio thread.
 
 ### Testing Requirements

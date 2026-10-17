@@ -105,5 +105,6 @@ private:
     juce::ComboBox preset;
     juce::Rectangle<int> note;
     void apply (int index);
+    void refresh();   // selects the calibration the trims match; also run once by the constructor
     void timerCallback() override;
 };

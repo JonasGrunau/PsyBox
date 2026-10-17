@@ -42,6 +42,22 @@ juce::Font heading (float h) { return make (faces().semibold, h, 0.16f); }
 juce::Font title (float h) { return make (faces().semibold, h, 0.01f); }
 juce::Font mono (float h) { return make (faces().mono, h); }
 
+void strokeLine (juce::Graphics& g, const juce::Path& p, juce::Colour c, float width)
+{
+    g.setColour (c);
+    g.strokePath (p, juce::PathStrokeType (width, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+}
+
+void fillUnder (juce::Graphics& g, const juce::Path& curve, juce::Rectangle<float> a, float alpha)
+{
+    juce::Path f (curve);
+    f.lineTo (a.getRight(), a.getBottom());
+    f.lineTo (a.getX(), a.getBottom());
+    f.closeSubPath();
+    g.setGradientFill (juce::ColourGradient (accent().withAlpha (alpha), 0.f, a.getY(), accent().withAlpha (0.f), 0.f, a.getBottom(), false));
+    g.fillPath (f);
+}
+
 void drawHeading (juce::Graphics& g, const juce::String& text, juce::Rectangle<int> area, juce::Justification j, juce::Colour c)
 {
     g.setColour (c);

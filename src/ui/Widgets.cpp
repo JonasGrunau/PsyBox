@@ -57,7 +57,7 @@ ParamKnob::ParamKnob (PsyBoxProcessor& p, P prm, const juce::String& labelOverri
     slider.addMouseListener (this, false);
     addAndMakeVisible (slider);
     attachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (proc.apvts, d.id, slider);
-    slider.setDoubleClickReturnValue (true, d.def);
+    slider.setDoubleClickReturnValue (true, d.def, juce::ModifierKeys());   // alt-click locks, it doesn't reset
     refreshRoutes();
     startTimerHz (target != psy::ModDst::None ? 15 : 10);
 }
@@ -102,12 +102,12 @@ void ParamKnob::refreshRoutes()
 {
     if (target == psy::ModDst::None) return;
     numRoutes = proc.modRoutesTo (target, routes);
-    uint64_t h = 1469598103934665603ULL ^ (uint64_t) numRoutes;
+    uint64_t h = kFnvSeed ^ (uint64_t) numRoutes;
     for (int i = 0; i < numRoutes; ++i)
     {
         const auto& r = routes[(size_t) i];
-        h = (h ^ (uint64_t) (r.slot * 131 + (int) r.src)) * 1099511628211ULL;
-        h = (h ^ (uint64_t) std::lround (r.amount * 10000.f)) * 1099511628211ULL;
+        h = fnvMix (h, (uint64_t) (r.slot * 131 + (int) r.src));
+        h = fnvMix (h, (uint64_t) std::lround (r.amount * 10000.f));
     }
     h ^= (uint64_t) proc.uiSelectedSource << 40;
     if (h != routePrint)
@@ -361,6 +361,7 @@ void ParamKnob::showMenu()
 
 void ParamKnob::timerCallback()
 {
+    if (! isShowing()) return;
     const bool locked = proc.isLocked (param);
     if (locked != lastLocked)
     {
@@ -481,6 +482,7 @@ void ModSourceHandle::mouseUp (const juce::MouseEvent& e)
 
 void ModSourceHandle::timerCallback()
 {
+    if (! isShowing()) return;
     bool u = false;
     for (int s = 0; s < psy::kNumModSlots && ! u; ++s)
         u = (int) std::lround (proc.plain (psy::modSrcParam (s))) == (int) source
@@ -612,9 +614,10 @@ void NumberBox::paint (juce::Graphics& g)
 void NumberBox::setValue (float plain, bool gesture)
 {
     const auto& d = psy::def (param);
-    const float v = d.snap (plain);
+    // The box shows whole numbers, so continuous parameters (cents) move in whole steps too.
+    const float v = d.isDiscrete() ? d.snap (plain) : std::round (plain);
     if (gesture) attachment.setValueAsPartOfGesture (v);
-    else if (v != value) attachment.setValueAsCompleteGesture (v);
+    else if (! juce::approximatelyEqual (v, value)) attachment.setValueAsCompleteGesture (v);
 }
 
 void NumberBox::step (int dir)
@@ -661,7 +664,15 @@ void NumberBox::mouseDoubleClick (const juce::MouseEvent& e)
 
 void NumberBox::mouseWheelMove (const juce::MouseEvent&, const juce::MouseWheelDetails& w)
 {
-    if (std::abs (w.deltaY) > 0.f) step (w.deltaY > 0.f ? 1 : -1);
+    // A trackpad flick sends dozens of tiny events: collect them and step once per notch.
+    if (w.isInertial || w.deltaY == 0.f) return;
+    constexpr float notch = 0.12f;
+    if ((wheelAccum > 0.f) != (w.deltaY > 0.f)) wheelAccum = 0.f;
+    wheelAccum += w.deltaY;
+    if (std::abs (wheelAccum) < notch) return;
+    const float dir = wheelAccum > 0.f ? 1.f : -1.f;
+    wheelAccum = juce::jlimit (-notch, notch, wheelAccum - dir * notch);
+    step ((int) dir);
 }
 
 void NumberBox::mouseEnter (const juce::MouseEvent&)
@@ -672,6 +683,7 @@ void NumberBox::mouseEnter (const juce::MouseEvent&)
 
 void NumberBox::mouseExit (const juce::MouseEvent&)
 {
+    wheelAccum = 0.f;
     if (onActive && ! dragging) onActive (false);
     repaint();
 }
@@ -728,6 +740,7 @@ void NumberBox::showMenu()
 
 void NumberBox::timerCallback()
 {
+    if (! isShowing()) return;
     const int n = target != psy::ModDst::None ? proc.modRoutesTo (target, routes) : 0;
     const bool shown = proc.uiDragSource != psy::ModSrc::None && target != psy::ModDst::None;
     if (n != numRoutes || shown != dragShown)
@@ -742,7 +755,7 @@ void NumberBox::timerCallback()
 // Segmented
 // ---------------------------------------------------------------------------
 Segmented::Segmented (PsyBoxProcessor& p, P prm, juce::StringArray l)
-    : proc (p), param (prm), labels (std::move (l)),
+    : labels (std::move (l)),
       attachment (*p.param (prm), [this] (float v) {
           selected = (int) std::lround (v);
           repaint();
@@ -763,7 +776,15 @@ Segmented::Segmented (PsyBoxProcessor& p, P prm, juce::StringArray l)
 // Equal segments while every label keeps sp::sm of room on each side;
 // otherwise each segment is its label plus an equal share of the spare
 // width, so a long label ("Rectify", "Normal") doesn't touch the pill.
-std::vector<float> Segmented::segmentWidths (float total) const
+const std::vector<float>& Segmented::segmentWidths (float total) const
+{
+    if (juce::approximatelyEqual (total, cachedTotal)) return cachedWidths;
+    cachedTotal = total;
+    cachedWidths = measureWidths (total);
+    return cachedWidths;
+}
+
+std::vector<float> Segmented::measureWidths (float total) const
 {
     const auto f = heading (9.5f);
     const float n = (float) labels.size();
@@ -787,7 +808,7 @@ int Segmented::indexAt (juce::Point<int> pt) const
     if (vertical)
         return juce::jlimit (0, labels.size() - 1, pt.y * labels.size() / juce::jmax (1, getHeight()));
     float x = 0.f;
-    const auto w = segmentWidths ((float) getWidth());
+    const auto& w = segmentWidths ((float) getWidth());
     for (int i = 0; i < labels.size() - 1; ++i)
     {
         x += w[(size_t) i];
@@ -801,7 +822,7 @@ void Segmented::paint (juce::Graphics& g)
     const auto b = getLocalBounds().toFloat().reduced (0.5f);
     g.setColour (col::lineStrong);
     g.drawRoundedRectangle (b, 3.f, 1.f);
-    const auto w = segmentWidths (b.getWidth());
+    const auto& w = segmentWidths (b.getWidth());
     const float rowH = b.getHeight() / (float) juce::jmax (1, labels.size());
     g.setFont (heading (9.5f));
     float x = b.getX();
@@ -828,6 +849,7 @@ void Segmented::paint (juce::Graphics& g)
 
 void Segmented::mouseDown (const juce::MouseEvent& e)
 {
+    if (! isEnabled()) return;
     const int i = indexAt (e.getPosition());
     if (onPick) onPick (i);
     else attachment.setValueAsCompleteGesture ((float) i);
@@ -904,6 +926,7 @@ void ToggleDot::paint (juce::Graphics& g)
 
 void ToggleDot::mouseDown (const juce::MouseEvent&)
 {
+    if (! isEnabled()) return;
     if (attachment != nullptr)
     {
         attachment->setValueAsCompleteGesture (on ? 0.f : 1.f);
@@ -923,15 +946,12 @@ ParamCombo::ParamCombo (PsyBoxProcessor& p, P prm, const juce::String& cap) : ca
     const bool isFilter = d.choices == &psy::choices::filterType;
     const auto heading = [] (int index) -> const char* {
         using T = psy::FilterType;
-        switch ((T) index)
-        {
-            case T::LP6: return "Low-pass";
-            case T::HP6: return "High-pass";
-            case T::BP12: return "Band-pass / Notch";
-            case T::LadderLP12: return "Ladder";
-            case T::Diode303: return "Character";
-            default: return nullptr;
-        }
+        if (index == (int) T::LP6) return "Low-pass";
+        if (index == (int) T::HP6) return "High-pass";
+        if (index == (int) T::BP12) return "Band-pass / Notch";
+        if (index == (int) T::LadderLP12) return "Ladder";
+        if (index == (int) T::Diode303) return "Character";
+        return nullptr;
     };
     int id = 1;
     for (const auto& c : *d.choices)
@@ -976,22 +996,44 @@ AmountSlider::AmountSlider (PsyBoxProcessor& p, P prm)
     slider.onValueChange = [this, &p, prm] {
         slider.setTooltip (psy::def (prm).format (p.plain (prm)));
     };
+    slider.onValueChange();
 }
 
 // ---------------------------------------------------------------------------
 // TabStrip
 // ---------------------------------------------------------------------------
-TabStrip::TabStrip (juce::StringArray n) : names (std::move (n)) {}
+// Horizontal ink extent of a line of text drawn at x = 0. The advance width
+// also counts the tracking after the last glyph, which pushes an underline
+// sized from it past the end of the word.
+static juce::Range<float> inkRange (const juce::Font& f, const juce::String& text)
+{
+    juce::GlyphArrangement ga;
+    ga.addLineOfText (f, text, 0.f, 0.f);
+    juce::Path p;
+    ga.createPath (p);
+    const auto b = p.getBounds();
+    return { b.getX(), b.getRight() };
+}
+
+// The names never change, so they are measured once.
+TabStrip::TabStrip (juce::StringArray n) : names (std::move (n))
+{
+    const auto f = heading (9.5f);
+    for (const auto& name : names)
+    {
+        nameWidths.push_back (juce::GlyphArrangement::getStringWidthInt (f, name.toUpperCase()));
+        nameInk.push_back (inkRange (f, name.toUpperCase()));
+    }
+}
 
 std::vector<juce::Rectangle<int>> TabStrip::tabBounds() const
 {
     // Text runs flush with the strip edges; tabs are sp::lg apart.
     std::vector<juce::Rectangle<int>> out;
     int x = 0;
-    const auto f = heading (9.5f);
     for (int i = 0; i < names.size(); ++i)
     {
-        const int w = juce::GlyphArrangement::getStringWidthInt (f, names[i].toUpperCase()) + (ledOn (i) ? 11 : 0);
+        const int w = nameWidths[(size_t) i] + (ledOn (i) ? 11 : 0);
         out.push_back ({ x, 0, w, getHeight() });
         x += w + sp::lg;
     }
@@ -1010,19 +1052,6 @@ void TabStrip::setSelected (int i)
     repaint();
 }
 
-// Horizontal ink extent of a line of text drawn at x = 0. The advance width
-// also counts the tracking after the last glyph, which pushes an underline
-// sized from it past the end of the word.
-static juce::Range<float> inkRange (const juce::Font& f, const juce::String& text)
-{
-    juce::GlyphArrangement ga;
-    ga.addLineOfText (f, text, 0.f, 0.f);
-    juce::Path p;
-    ga.createPath (p);
-    const auto b = p.getBounds();
-    return { b.getX(), b.getRight() };
-}
-
 void TabStrip::paint (juce::Graphics& g)
 {
     const auto tabs = tabBounds();
@@ -1035,7 +1064,7 @@ void TabStrip::paint (juce::Graphics& g)
         if (sel)
         {
             // spans the ink: from the LED (or first glyph) to the last glyph
-            const auto ink = inkRange (f, names[i].toUpperCase());
+            const auto ink = nameInk[(size_t) i];
             const float x0 = ledOn (i) ? (float) r.getX() : (float) r.getX() + ink.getStart();
             const float x1 = (float) r.getX() + (ledOn (i) ? 11.f : 0.f) + ink.getEnd();
             g.setColour (col::text);   // neutral: the active tab doesn't change colour with the category
@@ -1143,11 +1172,6 @@ void IconButton::paintButton (juce::Graphics& g, bool over, bool down)
             p.lineTo (c.x + s * 0.7f, c.y + s * 0.7f);
             p.startNewSubPath (c.x + s * 0.7f, c.y - s * 0.7f);
             p.lineTo (c.x - s * 0.7f, c.y + s * 0.7f);
-            break;
-        case Icon::Dice:
-        case Icon::Mutate:
-        case Icon::Lock:
-            p.addRoundedRectangle (c.x - s, c.y - s, s * 2.f, s * 2.f, 2.f);
             break;
     }
     g.setColour (! isEnabled() ? col::textFaint : (over ? col::text : col::textDim));
