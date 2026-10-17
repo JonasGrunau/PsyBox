@@ -195,6 +195,33 @@ void slotMacroNamesSurviveASession()
     check (b.proc.getMacroName (0) == "Wobble", "a typed macro name in a category slot survives a session");
 }
 
+void stateRoundTrips()
+{
+    Bench a;
+    a.proc.setCategory (Category::GhostStab);
+    a.proc.generateWithSeed (0x2a2a);
+    a.proc.setLocked (P::F1Cutoff, true);
+    a.proc.setLocked (P::ReverbMix, true);
+    a.set (P::FxOrder, (float) fxOrderCode ({ 3, 1, 2, 0, 4, 5, 6, 7, 8 }));
+    a.proc.setMacroName (2, "Air");
+    juce::MemoryBlock state;
+    a.proc.getStateInformation (state);
+
+    Bench b;
+    b.proc.setStateInformation (state.getData(), (int) state.getSize());
+    bool params = true;
+    for (int i = 0; i < kNumParams; ++i)
+        if (const float v = a.proc.plain ((P) i); std::abs (v - b.proc.plain ((P) i)) > 1e-5f * std::max (1.f, std::abs (v)))   // a ulp or two through norm
+        {
+            std::printf ("  %s: %g -> %g\n", paramDefs()[(size_t) i].id, a.proc.plain ((P) i), b.proc.plain ((P) i));
+            params = false;
+        }
+    check (params, "a session restores every parameter");
+    check (b.proc.getCategory() == Category::GhostStab && b.proc.getSeed() == 0x2a2a, "and the category and seed");
+    check (b.proc.isLocked (P::F1Cutoff) && b.proc.isLocked (P::ReverbMix) && b.proc.numLocks() == 2, "and the locks");
+    check (b.proc.getPresetName() == a.proc.getPresetName() && b.proc.getMacroName (2) == "Air", "and the name and macro names");
+}
+
 void renderLatencyFromTheStart()
 {
     Bench b;
@@ -227,6 +254,7 @@ int runProcessorTests()
     globalSettingsStay();
     redoKeepsTweaks();
     slotMacroNamesSurviveASession();
+    stateRoundTrips();
     renderLatencyFromTheStart();
     tailCoversTheEffects();
     std::printf ("%d failed\n", failures);
