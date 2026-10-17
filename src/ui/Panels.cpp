@@ -659,8 +659,7 @@ void TopBar::savePresetDialog()
 // Asks before replacing a preset of the same name, and says so when the write fails.
 void TopBar::saveNamed (const juce::String& name)
 {
-    const auto file = PsyBoxProcessor::presetFolder().getChildFile (psy::categoryInfo()[(size_t) proc.getCategory()].name)
-                                                     .getChildFile (juce::File::createLegalFileName (name) + ".psyp");
+    const auto file = proc.presetFileFor (name);
     if (! file.existsAsFile())
     {
         writePreset (name);
