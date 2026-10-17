@@ -28,18 +28,19 @@ public:
     void reset() noexcept { std::fill (buf.begin(), buf.end(), 0.f); }
     void push (float x) noexcept { buf[(size_t) w] = x; w = (w + 1) & mask; }
 
-    // delay in samples (>= 1) behind the most recently pushed sample.
+    // delay in samples (>= 1) behind the most recently pushed sample. The
+    // delay is split into whole samples and a fraction before it meets the
+    // write position, so the fraction keeps its precision on a long line (a
+    // float position of 100000 samples would quantise it to 1/32).
     float read (float delay) const noexcept
     {
-        const float rp = (float) (w - 1) - std::clamp (delay, 1.f, (float) (mask - 3));
-        const int i = (int) std::floor (rp);
-        const float f = rp - (float) i;
-        const float xm1 = buf[(size_t) ((i - 1) & mask)], x0 = buf[(size_t) (i & mask)];
-        const float x1 = buf[(size_t) ((i + 1) & mask)], x2 = buf[(size_t) ((i + 2) & mask)];
-        const float c1 = 0.5f * (x1 - xm1);
-        const float c2 = xm1 - 2.5f * x0 + 2.f * x1 - 0.5f * x2;
-        const float c3 = 0.5f * (x2 - xm1) + 1.5f * (x0 - x1);
-        return ((c3 * f + c2) * f + c1) * f + x0;
+        const float d = std::clamp (delay, 1.f, (float) (mask - 3));
+        const int di = (int) d;
+        const float fd = d - (float) di;
+        const int i = fd > 0.f ? w - 2 - di : w - 1 - di;   // the sample at or just before the read point
+        const float f = fd > 0.f ? 1.f - fd : 0.f;
+        return hermite4 (buf[(size_t) ((i - 1) & mask)], buf[(size_t) (i & mask)],
+                         buf[(size_t) ((i + 1) & mask)], buf[(size_t) ((i + 2) & mask)], f);
     }
     float readInt (int delay) const noexcept { return buf[(size_t) ((w - 1 - delay) & mask)]; }
 
@@ -48,6 +49,12 @@ private:
     int mask = 0, w = 0;
 };
 
+// ---------------------------------------------------------------------------
+// On/off of every effect below: the engine keeps calling `process` with `on`
+// until `isActive (on)` is false. The wet signal fades over 10 ms (FxSwitch),
+// the state is cleared when an effect that was fully off is switched on, so
+// no stale delay or reverb audio replays, and while it is off and faded
+// nothing is processed (the audio passes untouched, bit for bit).
 // ---------------------------------------------------------------------------
 class Distortion
 {
@@ -59,6 +66,7 @@ public:
         // at a base rate (-2 dB at 10 kHz, -6 dB at 15 kHz at 44.1 kHz);
         // oversampled, it doesn't matter
         compensate = sr < 60000.f;
+        sw.prepare (sr);
         for (auto& d : dc) d.prepare (sr);
         reset();
     }
@@ -67,19 +75,28 @@ public:
         for (auto& s : sh) s.reset();
         for (auto& t : tone) t.reset();
         for (auto& d : dc) d.reset();
-        for (auto& f : low1) f.reset();
-        for (auto& f : low2) f.reset();
-        for (auto& f : trim1) f.reset();
-        for (auto& f : trim2) f.reset();
-        for (auto& t : top) t.reset();
+        resetLowCut();
         level = meanSquare = 0.f;
         hist = {};
+        sw.reset();
+        rGain.reset();
+        rScale.reset();
+        rMix.reset();
+        wasCut = false;
     }
+
+    // True while the distortion still has to run: on, or fading out.
+    bool isActive (bool on) const noexcept { return sw.isActive (on); }
+
+    // Samples the output lags the input while it runs: the top restoration
+    // looks one sample ahead below 60 kHz (wet and dry come out one late).
+    int latencySamples() const noexcept { return compensate ? 1 : 0; }
 
     // lowCutHz: a 24 dB high-pass on the distorted signal, which takes out
     // the lows a clipper makes from a high-passed sound (the difference
-    // tones bring the fundamental back). At 20 Hz or below it is skipped,
-    // so the distortion sounds exactly as without it. Cutting the lows
+    // tones bring the fundamental back). At 20.5 Hz or below it is skipped,
+    // so the distortion sounds exactly as without it (and its filters start
+    // from rest when it comes on). Cutting the lows
     // under a clipped wave tilts its flat tops into spikes (about 3.5 dB
     // more crest on a heavily clipped saw stack), so the peaks it raises
     // over the shaper's ceiling are clipped again. Only that clip's
@@ -94,15 +111,26 @@ public:
     // bites the same on a quiet patch as on a loud one, and a sound that
     // decays keeps its decay instead of being held up at the clip level.
     // Small signals pass at unity gain.
+    //
+    // The drive, the make-up and the mix ramp across the call, so a control
+    // that moves between blocks doesn't step.
     void process (float* l, float* r, int n, int type, float driveDb, float toneHz, float mix, float lowCutHz = 20.f,
-                  bool autoLevel = false) noexcept
+                  bool autoLevel = false, bool on = true) noexcept
     {
+        if (sw.dormant())
+        {
+            if (! on) return;
+            reset();   // off for a while: start clean
+            sw.start();
+        }
         const float g = dbToGain (driveDb);
         const float comp = 1.f / std::sqrt (g);
         for (auto& t : tone) t.setG (prewarp (toneHz, fs), 1.41421356f);
         const bool cut = lowCutHz > 20.5f;
         if (cut)
         {
+            if (! wasCut)
+                resetLowCut();   // the filters sat idle (stale state) while the cut was off
             // two sections of a 4th-order Butterworth
             const float gc = prewarp (std::min (lowCutHz, 0.45f * fs), fs);
             for (auto& f : low1) f.setG (gc, 0.76536686f);
@@ -110,49 +138,46 @@ public:
             for (auto& f : trim1) f.setG (gc, 0.76536686f);
             for (auto& f : trim2) f.setG (gc, 1.84775907f);
         }
+        wasCut = cut;
         const bool trim = cut && type != AdaaShaper::Rectify;
+        rGain.set (g, n);
+        rScale.set (type == AdaaShaper::Fold || type == AdaaShaper::Hard ? 0.8f : std::max (comp, 0.35f) * 1.2f, n);
+        rMix.set (mix, n);
+        const float avg = 1.f - std::exp (-1.f / (0.015f * fs));
+        const float up = 1.f - std::exp (-1.f / (0.005f * fs)), down = 1.f - std::exp (-1.f / (0.15f * fs));
         float* ch[2] = { l, r };
-        if (autoLevel)
+        for (int i = 0; i < n; ++i)
         {
-            const float avg = 1.f - std::exp (-1.f / (0.015f * fs));
-            const float up = 1.f - std::exp (-1.f / (0.005f * fs)), down = 1.f - std::exp (-1.f / (0.15f * fs));
-            for (int i = 0; i < n; ++i)
+            const float gain = rGain.next(), scale = rScale.next(), mixNow = rMix.next();
+            float pre = 1.f;
+            if (autoLevel)
             {
                 meanSquare += (0.5f * (l[i] * l[i] + r[i] * r[i]) - meanSquare) * avg;
                 meanSquare = flushDenormal (meanSquare);
                 level += (meanSquare - level) * (meanSquare > level ? up : down);
                 level = flushDenormal (level);
                 // at most +40 dB, so silence and tails are not blown up
-                const float pre = std::min (kAutoRef / std::sqrt (level + 1.0e-12f), 100.f);
-                for (int c = 0; c < 2; ++c)
-                {
-                    const float x = ch[c][i];
-                    float y = sh[c].process (x * pre * g, type);
-                    y = dc[c].process (y);
-                    y = tone[c].process (y).lp;
-                    if (cut) y = low2[c].process (low1[c].process (y).hp).hp;
-                    float dry = x, wet = y / (pre * g);
-                    if (compensate) restoreTop (c, dry, wet);
-                    if (trim) wet = trimPeaks (c, wet, 1.f / (pre * g));
-                    ch[c][i] = dry + (wet - dry) * mix;
-                }
+                pre = std::min (kAutoRef / std::sqrt (level + 1.0e-12f), 100.f);
             }
-            return;
-        }
-        for (int c = 0; c < 2; ++c)
-            for (int i = 0; i < n; ++i)
+            const float fade = sw.tick (on);
+            for (size_t c = 0; c < 2; ++c)
             {
                 const float x = ch[c][i];
-                float y = sh[c].process (x * g, type);
+                float y = sh[c].process (autoLevel ? x * pre * gain : x * gain, type);
                 y = dc[c].process (y);
                 y = tone[c].process (y).lp;
                 if (cut) y = low2[c].process (low1[c].process (y).hp).hp;
-                const float scale = type == AdaaShaper::Fold || type == AdaaShaper::Hard ? 0.8f : std::max (comp, 0.35f) * 1.2f;
-                float dry = x, wet = y * scale;
-                if (compensate) restoreTop (c, dry, wet);
-                if (trim) wet = trimPeaks (c, wet, scale);
-                ch[c][i] = dry + (wet - dry) * mix;
+                float dry = x, wet = autoLevel ? y / (pre * gain) : y * scale;
+                if (compensate) restoreTop ((int) c, dry, wet);
+                if (trim) wet = trimPeaks ((int) c, wet, autoLevel ? 1.f / (pre * gain) : scale);
+                ch[c][i] = FxSwitch::blend (x, dry + (wet - dry) * mixNow, fade);
             }
+            if (sw.done (on))
+            {
+                sw.stop();   // the rest of the block passes through
+                return;
+            }
+        }
     }
 
 private:
@@ -165,14 +190,24 @@ private:
     // the wet and the dry signal come out one sample late.
     struct History { float wet1 = 0.f, wet2 = 0.f, dry1 = 0.f; };
     std::array<History, 2> hist {};
-    bool compensate = false;
+    bool compensate = false, wasCut = false;
+
+    void resetLowCut() noexcept
+    {
+        for (auto& f : low1) f.reset();
+        for (auto& f : low2) f.reset();
+        for (auto& f : trim1) f.reset();
+        for (auto& f : trim2) f.reset();
+        for (auto& t : top) t.reset();
+    }
 
     // The low cut's peaks back down to the shaper's ceiling (in the wet
     // signal's scale), after the top is restored, which raises them too.
     float trimPeaks (int c, float wet, float ceiling) noexcept
     {
-        const float res = ceiling * top[c].process (wet / ceiling);
-        return wet + trim2[c].process (trim1[c].process (res).hp).hp;
+        const auto k = (size_t) c;
+        const float res = ceiling * top[k].process (wet / ceiling);
+        return wet + trim2[k].process (trim1[k].process (res).hp).hp;
     }
 
     void restoreTop (int c, float& dry, float& wet) noexcept
@@ -191,16 +226,27 @@ private:
     std::array<Svf, 2> tone, low1, low2, trim1, trim2;   // trim: the low cut again, on the re-clip's residual
     std::array<ClipResidual, 2> top;
     std::array<DcBlocker, 2> dc;
+    FxSwitch sw;
+    Ramp rGain, rScale, rMix;
 };
 
 // ---------------------------------------------------------------------------
 class Bitcrusher
 {
 public:
-    void reset() noexcept { cnt = 0.f; hl = hr = 0.f; }
+    // Without it the fade assumes 48 kHz (10 ms = 480 samples).
+    void prepare (float sampleRate) noexcept { sw.prepare (sampleRate); reset(); }
+    void reset() noexcept { cnt = 0.f; hl = hr = 0.f; sw.reset(); }
+    bool isActive (bool on) const noexcept { return sw.isActive (on); }
 
-    void process (float* l, float* r, int n, float bits, float factor, float mix) noexcept
+    void process (float* l, float* r, int n, float bits, float factor, float mix, bool on = true) noexcept
     {
+        if (sw.dormant())
+        {
+            if (! on) return;
+            reset();
+            sw.start();
+        }
         const float q = std::exp2 (bits - 1.f);
         for (int i = 0; i < n; ++i)
         {
@@ -211,32 +257,55 @@ public:
                 hl = std::round (l[i] * q) / q;
                 hr = std::round (r[i] * q) / q;
             }
-            l[i] += (hl - l[i]) * mix;
-            r[i] += (hr - r[i]) * mix;
+            const float fade = sw.tick (on);
+            l[i] = FxSwitch::blend (l[i], l[i] + (hl - l[i]) * mix, fade);
+            r[i] = FxSwitch::blend (r[i], r[i] + (hr - r[i]) * mix, fade);
+            if (sw.done (on))
+            {
+                sw.stop();
+                return;
+            }
         }
     }
 
 private:
     float cnt = 0.f, hl = 0.f, hr = 0.f;
+    FxSwitch sw;
 };
 
 // ---------------------------------------------------------------------------
-// Frequency shifter: 90-degree allpass pair (Olli Niemitalo's 8th-order
-// design, flat within 0.7 deg over 20 Hz..20 kHz), single-sideband modulation,
+// Frequency shifter: 90-degree allpass pair, single-sideband modulation,
 // saturating feedback. Right channel can shift in the opposite direction.
+// At 48 kHz and below it is Olli Niemitalo's 8th-order design (4 + 4 allpass
+// sections in z^-2). That design keeps the 90 degrees only from about 50 Hz
+// (0.002 of Nyquist) up, so at 96 kHz the bass was off by 20 degrees at 20 Hz
+// and at 192 kHz by 46: the image of a bass note came back at -10 dB. Above
+// 72 kHz the pairs are minimax fits of the phase difference over 20 Hz ..
+// 20 kHz at that rate: 4 + 4 sections at 96 kHz (1.6 degrees, as at 48 kHz),
+// 5 + 5 above 144 kHz (0.7 degrees).
 // ---------------------------------------------------------------------------
 class FrequencyShifter
 {
 public:
-    void prepare (float sr) { fs = sr; reset(); }
+    FrequencyShifter() { design (48000.f); }
+
+    void prepare (float sr) { fs = sr; design (sr); sw.prepare (sr); reset(); }
     void reset() noexcept
     {
-        for (auto& c : chans) c = {};
+        for (auto& c : chans) c.clear();
         phaseL = phaseR = 0.0;
+        sw.reset();
     }
+    bool isActive (bool on) const noexcept { return sw.isActive (on); }
 
-    void process (float* l, float* r, int n, float hz, float feedback, float spread, float mix) noexcept
+    void process (float* l, float* r, int n, float hz, float feedback, float spread, float mix, bool on = true) noexcept
     {
+        if (sw.dormant())
+        {
+            if (! on) return;
+            reset();
+            sw.start();
+        }
         const double incL = hz / fs;
         const double incR = hz * (1.0 - 2.0 * spread) / fs;
         for (int i = 0; i < n; ++i)
@@ -245,9 +314,30 @@ public:
             phaseL -= std::floor (phaseL);
             phaseR += incR;
             phaseR -= std::floor (phaseR);
-            l[i] = processChannel (chans[0], l[i], (float) (kTwoPi * phaseL), feedback, mix);
-            r[i] = processChannel (chans[1], r[i], (float) (kTwoPi * phaseR), feedback, mix);
+            const float fade = sw.tick (on);
+            l[i] = FxSwitch::blend (l[i], processChannel (chans[0], l[i], (float) (kTwoPi * phaseL), feedback, mix), fade);
+            r[i] = FxSwitch::blend (r[i], processChannel (chans[1], r[i], (float) (kTwoPi * phaseR), feedback, mix), fade);
+            if (sw.done (on))
+            {
+                sw.stop();
+                return;
+            }
         }
+    }
+
+    // Sections per branch and their coefficients (the c of (c - z^-2) / (1 - c z^-2)).
+    static constexpr int kMaxSections = 5;
+    struct Design { int sections; std::array<float, kMaxSections> a, b; };
+    static Design designFor (float sampleRate) noexcept
+    {
+        if (sampleRate < 72000.f)   // Niemitalo's coefficients, squared
+            return { 4, { 0.47940087f, 0.87621849f, 0.97659759f, 0.99749926f, 0.f },
+                        { 0.16175850f, 0.73302893f, 0.94534970f, 0.99059916f, 0.f } };
+        if (sampleRate < 144000.f)
+            return { 4, { 0.9987257717940627f, 0.9861601135136604f, 0.9099723868104307f, 0.5481566551987944f, 0.f },
+                        { 0.9949452704526072f, 0.9639416863506184f, 0.7878542497171312f, 0.20166355223692933f, 0.f } };
+        return { 5, { 0.9994879036274034f, 0.9956100263837521f, 0.8909628521071478f, 0.9773770867968602f, 0.5512374416162853f },
+                    { 0.9981450834756546f, 0.9492655743767564f, 0.7736268272239082f, 0.9900681459298641f, 0.2147766732419359f } };
     }
 
 private:
@@ -265,32 +355,43 @@ private:
 
     struct Chan
     {
-        std::array<Allpass2, 4> a, b;
+        std::array<Allpass2, kMaxSections> a, b;
         float delayA = 0.f, fb = 0.f;
-        bool init = false;
+        void clear() noexcept
+        {
+            for (auto* set : { &a, &b })
+                for (auto& s : *set) s = { s.c, 0.f, 0.f, 0.f, 0.f };
+            delayA = fb = 0.f;
+        }
     };
 
     std::array<Chan, 2> chans;
+    int sections = 4;
     float fs = 48000.f;
     double phaseL = 0.0, phaseR = 0.0;
+    FxSwitch sw;
 
-    static float processChannel (Chan& ch, float x, float theta, float feedback, float mix) noexcept
+    void design (float sampleRate) noexcept
     {
-        if (! ch.init)
-        {
-            static constexpr float ca[4] = { 0.6923878f, 0.9360654322959f, 0.9882295226860f, 0.9987488452737f };
-            static constexpr float cb[4] = { 0.4021921162426f, 0.8561710882420f, 0.9722909545651f, 0.9952884791278f };
-            for (int k = 0; k < 4; ++k)
+        const auto d = designFor (sampleRate);
+        sections = d.sections;
+        for (auto& ch : chans)
+            for (size_t k = 0; k < (size_t) kMaxSections; ++k)
             {
-                ch.a[(size_t) k].c = ca[k] * ca[k];
-                ch.b[(size_t) k].c = cb[k] * cb[k];
+                ch.a[k].c = d.a[k];
+                ch.b[k].c = d.b[k];
             }
-            ch.init = true;
-        }
+    }
+
+    float processChannel (Chan& ch, float x, float theta, float feedback, float mix) const noexcept
+    {
         const float in = x + fastTanh (ch.fb * feedback);
         float re = in, im = in;
-        for (auto& s : ch.a) re = s.process (re);
-        for (auto& s : ch.b) im = s.process (im);
+        for (size_t k = 0; k < (size_t) sections; ++k)
+        {
+            re = ch.a[k].process (re);
+            im = ch.b[k].process (im);
+        }
         const float reD = ch.delayA;  // one-sample delay on the first branch
         ch.delayA = re;
         const float y = reD * std::cos (theta) + im * std::sin (theta);
@@ -300,48 +401,73 @@ private:
 };
 
 // ---------------------------------------------------------------------------
-// Six-stage TPT allpass phaser, stereo LFO in quadrature.
+// Six-stage TPT allpass phaser, stereo LFO in quadrature. The LFO phase is a
+// double (a float one drifts a slow rate), and the two channels share one
+// sin / cos pair.
 // ---------------------------------------------------------------------------
 class Phaser
 {
 public:
-    void prepare (float sr) { fs = sr; reset(); }
-    void reset() noexcept { for (auto& c : st) c.fill (0.f); fb.fill (0.f); lfo = 0.f; }
+    void prepare (float sr) { fs = sr; sw.prepare (sr); reset(); }
+    void reset() noexcept { for (auto& c : st) c.fill (0.f); fb.fill (0.f); lfo = 0.0; sw.reset(); }
+    bool isActive (bool on) const noexcept { return sw.isActive (on); }
 
-    void process (float* l, float* r, int n, float rate, float depth, float feedback, float centre, float mix) noexcept
+    void process (float* l, float* r, int n, float rate, float depth, float feedback, float centre, float mix, bool on = true) noexcept
     {
+        if (sw.dormant())
+        {
+            if (! on) return;
+            reset();
+            sw.start();
+        }
         float* ch[2] = { l, r };
+        const double inc = (double) rate / (double) fs;
+        const float span = depth * 2.5f;
+        // without depth the sweep stands still: one coefficient for all samples
+        const bool still = span <= 0.f;
+        const float gStill = prewarp (std::clamp (centre, 20.f, 0.45f * fs), fs);
         for (int i = 0; i < n; ++i)
         {
-            lfo += rate / fs;
-            if (lfo >= 1.f) lfo -= 1.f;
-            for (int c = 0; c < 2; ++c)
+            lfo += inc;
+            if (lfo >= 1.0) lfo -= 1.0;
+            const double a = (double) kTwoPi * lfo;
+            const float m[2] = { (float) std::sin (a), (float) std::cos (a) };   // the right channel a quarter cycle on
+            const float fade = sw.tick (on);
+            for (size_t c = 0; c < 2; ++c)
             {
-                const float m = std::sin (kTwoPi * (lfo + 0.25f * (float) c));
-                const float f = std::clamp (centre * std::exp2 (m * depth * 2.5f), 20.f, 0.45f * fs);
-                const float g = prewarp (f, fs);
+                const float g = still ? gStill : prewarp (std::clamp (centre * std::exp2 (m[c] * span), 20.f, 0.45f * fs), fs);
                 const float G = g / (1.f + g);
-                float x = ch[c][i] + fb[(size_t) c] * feedback;
-                for (auto& s : st[(size_t) c])
+                const float in = ch[c][i];
+                float x = in + fb[c] * feedback;
+                for (auto& s : st[c])
                 {
                     const float v = (x - s) * G;
                     const float lp = v + s;
                     s = lp + v;
                     x = 2.f * lp - x;
                 }
-                fb[(size_t) c] = flushDenormal (fastTanh (x));
-                ch[c][i] += (x - ch[c][i]) * mix;
+                fb[c] = flushDenormal (fastTanh (x));
+                ch[c][i] = FxSwitch::blend (in, in + (x - in) * mix, fade);
+            }
+            if (sw.done (on))
+            {
+                sw.stop();
+                return;
             }
         }
     }
 
 private:
-    float fs = 48000.f, lfo = 0.f;
+    float fs = 48000.f;
+    double lfo = 0.0;
     std::array<std::array<float, 6>, 2> st {};
     std::array<float, 2> fb {};
+    FxSwitch sw;
 };
 
 // ---------------------------------------------------------------------------
+// The delay base, the swing and the wet level glide (30 ms) when the control
+// or the flanger / chorus switch moves, so a block never steps them.
 class ChorusFlanger
 {
 public:
@@ -349,37 +475,74 @@ public:
     {
         fs = sr;
         for (auto& d : lines) d.prepare ((int) (0.05f * sr));
+        sw.prepare (sr);
         reset();
     }
-    void reset() noexcept { for (auto& d : lines) d.reset(); lfo = 0.f; fb.fill (0.f); }
-
-    void process (float* l, float* r, int n, bool flanger, float rate, float depth, float feedback, float mix) noexcept
+    void reset() noexcept
     {
-        const float baseMs = flanger ? 1.2f : 11.f;
-        const float modMs = flanger ? 1.0f * depth : 6.f * depth;
+        for (auto& d : lines) d.reset();
+        lfo = 0.0;
+        fb.fill (0.f);
+        sw.reset();
+        primed = false;
+    }
+    bool isActive (bool on) const noexcept { return sw.isActive (on); }
+
+    void process (float* l, float* r, int n, bool flanger, float rate, float depth, float feedback, float mix, bool on = true) noexcept
+    {
+        if (sw.dormant())
+        {
+            if (! on) return;
+            reset();
+            sw.start();
+        }
+        const float baseTarget = flanger ? 1.2f : 11.f;
+        const float modTarget = flanger ? 1.0f * depth : 6.f * depth;
+        const float wetTarget = flanger ? 1.f : 0.7f;
+        if (! primed)
+        {
+            baseMs.reset (baseTarget);
+            modMs.reset (modTarget);
+            wetGain.reset (wetTarget);
+            primed = true;
+        }
+        for (auto* o : { &baseMs, &modMs, &wetGain }) o->setTime (0.03f, fs);
+        const double inc = (double) rate / (double) fs;
         float* ch[2] = { l, r };
         for (int i = 0; i < n; ++i)
         {
-            lfo += rate / fs;
-            if (lfo >= 1.f) lfo -= 1.f;
-            for (int c = 0; c < 2; ++c)
+            lfo += inc;
+            if (lfo >= 1.0) lfo -= 1.0;
+            const double a = (double) kTwoPi * lfo;
+            const float m[2] = { (float) std::sin (a), (float) std::cos (a) };   // the right channel a quarter cycle on
+            const float base = baseMs.process (baseTarget), swing = modMs.process (modTarget), wetNow = wetGain.process (wetTarget);
+            const float fade = sw.tick (on);
+            for (size_t c = 0; c < 2; ++c)
             {
-                const float m = std::sin (kTwoPi * (lfo + 0.25f * (float) c));
-                const float dMs = baseMs + modMs * (0.5f + 0.5f * m);
+                const float dMs = base + swing * (0.5f + 0.5f * m[c]);
                 const float x = ch[c][i];
-                auto& line = lines[(size_t) c];
-                line.push (x + fastTanh (fb[(size_t) c] * feedback));
+                auto& line = lines[c];
+                line.push (x + fastTanh (fb[c] * feedback));
                 const float wet = line.read (dMs * 0.001f * fs);
-                fb[(size_t) c] = wet;
-                ch[c][i] = x + (wet - x) * mix * (flanger ? 1.f : 0.7f);
+                fb[c] = wet;
+                ch[c][i] = FxSwitch::blend (x, x + (wet - x) * mix * wetNow, fade);
+            }
+            if (sw.done (on))
+            {
+                sw.stop();
+                return;
             }
         }
     }
 
 private:
-    float fs = 48000.f, lfo = 0.f;
+    float fs = 48000.f;
+    double lfo = 0.0;
     std::array<DelayLine, 2> lines;
     std::array<float, 2> fb {};
+    OnePole baseMs, modMs, wetGain;
+    bool primed = false;
+    FxSwitch sw;
 };
 
 // ---------------------------------------------------------------------------
@@ -390,6 +553,7 @@ public:
     {
         fs = sr;
         for (auto& d : lines) d.prepare ((int) (2.1f * sr));
+        sw.prepare (sr);
         reset();
     }
     void reset() noexcept
@@ -398,17 +562,26 @@ public:
         for (auto& f : hp) f.reset();
         for (auto& f : lp) f.reset();
         smoothTime.reset (-1.f);
+        sw.reset();
     }
+    bool isActive (bool on) const noexcept { return sw.isActive (on); }
 
-    void process (float* l, float* r, int n, float timeMs, float feedback, bool pingPong, float lowCut, float highCut, float mix) noexcept
+    void process (float* l, float* r, int n, float timeMs, float feedback, bool pingPong, float lowCut, float highCut, float mix,
+                  bool on = true) noexcept
     {
+        if (sw.dormant())
+        {
+            if (! on) return;
+            reset();   // off for a while: the old echoes must not come back
+            sw.start();
+        }
         const float target = std::clamp (timeMs * 0.001f * fs, 1.f, 2.f * fs);
         if (smoothTime.z < 0.f) smoothTime.reset (target);
         smoothTime.setTime (0.08f, fs);
-        for (int c = 0; c < 2; ++c)
+        for (size_t c = 0; c < 2; ++c)
         {
-            hp[(size_t) c].setG (prewarp (lowCut, fs), 1.41421356f);
-            lp[(size_t) c].setG (prewarp (highCut, fs), 1.41421356f);
+            hp[c].setG (prewarp (lowCut, fs), 1.41421356f);
+            lp[c].setG (prewarp (highCut, fs), 1.41421356f);
         }
         for (int i = 0; i < n; ++i)
         {
@@ -428,8 +601,14 @@ public:
                 lines[0].push (flushDenormal (inL + fastTanh (wl * feedback)));
                 lines[1].push (flushDenormal (inR + fastTanh (wr * feedback)));
             }
-            l[i] = inL + wl * mix;
-            r[i] = inR + wr * mix;
+            const float fade = sw.tick (on);
+            l[i] = FxSwitch::blend (inL, inL + wl * mix, fade);
+            r[i] = FxSwitch::blend (inR, inR + wr * mix, fade);
+            if (sw.done (on))
+            {
+                sw.stop();
+                return;
+            }
         }
     }
 
@@ -438,13 +617,17 @@ private:
     std::array<DelayLine, 2> lines;
     std::array<Svf, 2> hp, lp;
     OnePole smoothTime;
+    FxSwitch sw;
 };
 
 // ---------------------------------------------------------------------------
 // 8-line feedback delay network reverb: input diffusion (4 allpasses),
 // orthogonal Householder feedback matrix, per-line RT60-derived gains with
 // one-pole damping, slow delay modulation on two lines against metallic
-// ringing, pre-delay.
+// ringing, pre-delay. The line lengths, gains, pre-delay, size and damping
+// glide (80 ms, damping 20 ms) to their new values, so a control moved
+// between blocks neither steps nor clicks. The damping pole is set for 48 kHz
+// and moved with the rate (pole^(48000 / fs)) to keep its corner in Hz.
 // ---------------------------------------------------------------------------
 class Reverb
 {
@@ -458,6 +641,7 @@ public:
         for (int i = 0; i < 4; ++i)
             diff[(size_t) i].line.prepare ((int) (kDiffLen[i] * scale * 1.5f) + 8);
         pre.prepare ((int) (0.26f * sr));
+        sw.prepare (sr);
         reset();
     }
 
@@ -467,63 +651,97 @@ public:
         for (auto& d : diff) d.line.reset();
         pre.reset();
         damp.fill (0.f);
-        modPhase = 0.f;
+        modPhase = 0.0;
+        sw.reset();
+        primed = false;
     }
+    bool isActive (bool on) const noexcept { return sw.isActive (on); }
 
-    void process (float* l, float* r, int n, float size, float decaySec, float damping, float preMs, float mix) noexcept
+    void process (float* l, float* r, int n, float size, float decaySec, float damping, float preMs, float mix, bool on = true) noexcept
     {
-        const float scale = fs / 48000.f * (0.35f + 1.65f * size);
-        std::array<float, 8> len;
-        std::array<float, 8> gain;
-        for (int i = 0; i < 8; ++i)
+        if (sw.dormant())
         {
-            len[(size_t) i] = kBaseLen[i] * scale;
-            gain[(size_t) i] = std::pow (10.f, -3.f * len[(size_t) i] / (fs * std::max (decaySec, 0.05f)));
+            if (! on) return;
+            reset();   // off for a while: the old tail must not come back
+            sw.start();
         }
-        const float dampCoef = 0.05f + 0.9f * damping;
-        const float preSamples = std::max (preMs * 0.001f * fs, 1.f);
+        const float scale = fs / 48000.f * (0.35f + 1.65f * size);
+        std::array<float, 8> lenTarget, gainTarget;
+        for (size_t i = 0; i < 8; ++i)
+        {
+            lenTarget[i] = kBaseLen[i] * scale;
+            gainTarget[i] = std::pow (10.f, -3.f * lenTarget[i] / (fs * std::max (decaySec, 0.05f)));
+        }
+        const float dampTarget = std::pow (0.05f + 0.9f * damping, 48000.f / fs);
+        const float preTarget = std::max (preMs * 0.001f * fs, 1.f);
+        if (! primed)
+        {
+            len = lenTarget;
+            gain = gainTarget;
+            dampCoef = dampTarget;
+            preSamples = preTarget;
+            sizeNow = size;
+            primed = true;
+        }
+        const float glide = 1.f - std::exp (-1.f / (0.08f * fs)), dampGlide = 1.f - std::exp (-1.f / (0.02f * fs));
+        const double modInc = 0.37 / (double) fs;
 
         for (int s = 0; s < n; ++s)
         {
+            for (size_t i = 0; i < 8; ++i)
+            {
+                len[i] += (lenTarget[i] - len[i]) * glide;
+                gain[i] += (gainTarget[i] - gain[i]) * glide;
+            }
+            dampCoef += (dampTarget - dampCoef) * dampGlide;
+            preSamples += (preTarget - preSamples) * glide;
+            sizeNow += (size - sizeNow) * glide;
+
             pre.push (0.5f * (l[s] + r[s]));
             float x = pre.read (preSamples);
 
             // input diffusion
-            for (int k = 0; k < 4; ++k)
+            for (size_t k = 0; k < 4; ++k)
             {
-                auto& d = diff[(size_t) k];
-                const float dl = kDiffLen[k] * (fs / 48000.f) * (0.6f + 0.4f * size + 0.4f);
+                auto& d = diff[k];
+                const float dl = kDiffLen[k] * (fs / 48000.f) * (0.6f + 0.4f * sizeNow + 0.4f);
                 const float delayed = d.line.read (dl);
                 const float v = x + 0.62f * delayed;
                 d.line.push (v);
                 x = delayed - 0.62f * v;
             }
 
-            modPhase += 0.37f / fs;
-            if (modPhase >= 1.f) modPhase -= 1.f;
-            const float mod = std::sin (kTwoPi * modPhase) * 12.f * (fs / 48000.f);
+            modPhase += modInc;
+            if (modPhase >= 1.0) modPhase -= 1.0;
+            const float mod = (float) std::sin (kTwoPi * modPhase) * 12.f * (fs / 48000.f);
 
             std::array<float, 8> o;
-            for (int i = 0; i < 8; ++i)
+            for (size_t i = 0; i < 8; ++i)
             {
-                float d = len[(size_t) i];
+                float d = len[i];
                 if (i == 1) d += mod;
                 if (i == 6) d -= mod;
-                const float y = lines[(size_t) i].read (d);
-                damp[(size_t) i] += (1.f - dampCoef) * (y - damp[(size_t) i]);
-                o[(size_t) i] = damp[(size_t) i] * gain[(size_t) i];
+                const float y = lines[i].read (d);
+                damp[i] += (1.f - dampCoef) * (y - damp[i]);
+                o[i] = damp[i] * gain[i];
             }
             // Householder: y = o - (2/N) * sum(o)
             float sum = 0.f;
             for (float v : o) sum += v;
             sum *= 0.25f;
-            for (int i = 0; i < 8; ++i)
-                lines[(size_t) i].push (flushDenormal (o[(size_t) i] - sum + (i % 2 == 0 ? x : -x) * 0.5f));
+            for (size_t i = 0; i < 8; ++i)
+                lines[i].push (flushDenormal (o[i] - sum + (i % 2 == 0 ? x : -x) * 0.5f));
 
             const float wl = (o[0] + o[2] + o[4] + o[6]) * 0.6f;
             const float wr = (o[1] + o[3] + o[5] + o[7]) * 0.6f;
-            l[s] = l[s] * (1.f - 0.4f * mix) + wl * mix;
-            r[s] = r[s] * (1.f - 0.4f * mix) + wr * mix;
+            const float fade = sw.tick (on);
+            l[s] = FxSwitch::blend (l[s], l[s] * (1.f - 0.4f * mix) + wl * mix, fade);
+            r[s] = FxSwitch::blend (r[s], r[s] * (1.f - 0.4f * mix) + wr * mix, fade);
+            if (sw.done (on))
+            {
+                sw.stop();
+                return;
+            }
         }
     }
 
@@ -533,11 +751,16 @@ private:
 
     struct Diffuser { DelayLine line; };
 
-    float fs = 48000.f, modPhase = 0.f;
+    float fs = 48000.f;
+    double modPhase = 0.0;
     std::array<DelayLine, 8> lines;
     std::array<Diffuser, 4> diff;
     DelayLine pre;
     std::array<float, 8> damp {};
+    std::array<float, 8> len {}, gain {};
+    float dampCoef = 0.5f, preSamples = 1.f, sizeNow = 0.5f;
+    bool primed = false;
+    FxSwitch sw;
 };
 
 // ---------------------------------------------------------------------------

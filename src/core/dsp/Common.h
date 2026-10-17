@@ -1,6 +1,8 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
+#include <bit>
 #include <cmath>
 #include <cstdint>
 
@@ -15,6 +17,51 @@ inline float noteToHz (float note) noexcept { return 440.f * std::exp2 ((note - 
 inline float dbToGain (float db) noexcept { return std::pow (10.f, db * 0.05f); }
 inline float gainToDb (float g) noexcept { return 20.f * std::log10 (std::max (g, 1e-10f)); }  // floors at -200 dB
 inline float clamp01 (float x) noexcept { return std::clamp (x, 0.f, 1.f); }
+
+// True when two parameter values are not bit-identical: the exact comparison
+// a "did it change" cache wants, without -Wfloat-equal (and NaN never sticks).
+inline bool differs (float a, float b) noexcept { return std::bit_cast<uint32_t> (a) != std::bit_cast<uint32_t> (b); }
+inline bool differs (double a, double b) noexcept { return std::bit_cast<uint64_t> (a) != std::bit_cast<uint64_t> (b); }
+
+// 4-point, 3rd-order Hermite (Catmull-Rom) interpolation between x0 and x1,
+// f in [0, 1); xm1 and x2 are the neighbours either side.
+inline float hermite4 (float xm1, float x0, float x1, float x2, float f) noexcept
+{
+    const float c1 = 0.5f * (x1 - xm1);
+    const float c2 = xm1 - 2.5f * x0 + 2.f * x1 - 0.5f * x2;
+    const float c3 = 0.5f * (x2 - xm1) + 1.5f * (x0 - x1);
+    return ((c3 * f + c2) * f + c1) * f + x0;
+}
+
+// 6-point, 5th-order Lagrange interpolation between y2 and y3 (the points at
+// -2 .. 3, f in [0, 1) from y2): flatter and less imaging than the Hermite on
+// signals with content up to a quarter of the sample rate.
+inline float lagrange6 (float y0, float y1, float y2, float y3, float y4, float y5, float f) noexcept
+{
+    const float tm3 = f - 3.f, tm2 = f - 2.f, tm1 = f - 1.f, tp1 = f + 1.f, tp2 = f + 2.f;
+    const float w0 = -tp1 * f * tm1 * tm2 * tm3 * (1.f / 120.f);
+    const float w1 = tp2 * f * tm1 * tm2 * tm3 * (1.f / 24.f);
+    const float w2 = -tp2 * tp1 * tm1 * tm2 * tm3 * (1.f / 12.f);
+    const float w3 = tp2 * tp1 * f * tm2 * tm3 * (1.f / 12.f);
+    const float w4 = -tp2 * tp1 * f * tm1 * tm3 * (1.f / 24.f);
+    const float w5 = tp2 * tp1 * f * tm1 * tm2 * (1.f / 120.f);
+    return w0 * y0 + w1 * y1 + w2 * y2 + w3 * y3 + w4 * y4 + w5 * y5;
+}
+
+// Solves a 4x4 tridiagonal system from its Thomas factorisation: inv[i] the
+// reciprocal of the modified diagonal, cp[i] the modified upper diagonal,
+// lower[i - 1] the coefficient of row i on row i - 1. y may not alias rhs.
+inline void thomas4 (const std::array<float, 4>& inv, const std::array<float, 4>& lower, const std::array<float, 4>& cp,
+                     const std::array<float, 4>& rhs, std::array<float, 4>& y) noexcept
+{
+    std::array<float, 4> dp;
+    dp[0] = rhs[0] * inv[0];
+    for (size_t i = 1; i < 4; ++i)
+        dp[i] = (rhs[i] - lower[i - 1] * dp[i - 1]) * inv[i];
+    y[3] = dp[3];
+    for (int i = 2; i >= 0; --i)
+        y[(size_t) i] = dp[(size_t) i] - cp[(size_t) i] * y[(size_t) i + 1];
+}
 
 // Pade-style tanh, accurate to ~1e-4 in [-3, 3], saturates exactly outside.
 inline float fastTanh (float x) noexcept
@@ -116,6 +163,38 @@ struct Ramp
     }
     void reset() noexcept { init = false; step = 0.f; }
     float next() noexcept { cur += step; return cur; }
+};
+
+// The on/off of an effect: the wet part fades over 10 ms, and an effect that
+// has been fully off starts from clean state when it is switched on again (so
+// no stale delay or reverb audio replays). The pattern of StereoWidth and the
+// Compressor, shared. An effect uses it as:
+//     if (sw.dormant()) { if (! on) return; reset(); sw.start(); }
+//     per sample: const float f = sw.tick (on);  ...  out = FxSwitch::blend (dry, wet, f);
+//                 if (sw.done (on)) { sw.stop(); return; }   // the rest of the block passes
+// The engine skips the effect while `isActive (on)` is false.
+struct FxSwitch
+{
+    float fade = 0.f, step = 1.f / 480.f;
+    bool running = false;
+
+    void prepare (float sampleRate) noexcept { step = 1.f / (0.01f * sampleRate); }
+    void reset() noexcept { fade = 0.f; running = false; }
+    bool isActive (bool on) const noexcept { return on || fade > 0.f; }
+    bool dormant() const noexcept { return ! running; }
+    void start() noexcept { running = true; }
+    void stop() noexcept { running = false; }
+    float tick (bool on) noexcept
+    {
+        fade = on ? std::min (1.f, fade + step) : std::max (0.f, fade - step);
+        return fade;
+    }
+    bool done (bool on) const noexcept { return ! on && fade <= 0.f; }
+    // Fully on is the wet signal itself and fully off the dry one, bit for bit.
+    static float blend (float dry, float wet, float f) noexcept
+    {
+        return f >= 1.f ? wet : (f <= 0.f ? dry : dry + f * (wet - dry));
+    }
 };
 
 } // namespace psy::dsp

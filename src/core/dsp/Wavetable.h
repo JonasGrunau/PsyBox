@@ -21,9 +21,14 @@ public:
 
     WavetableBank();
 
-    // phase in [0,1), inc = f / fs. harmonicLimit is the highest allowed
-    // partial as a fraction of fs (e.g. 0.45 at 1x, ~0.55 with 2x decimation).
-    float read (int table, float position, float phase, float inc, float harmonicLimit) const noexcept;
+    // phase in [0,1), inc = f / fs. harmonicLimit is the highest wanted
+    // partial as a fraction of fs (e.g. 0.45 at 1x, 0.62 at 2x). foldLimit is
+    // the fraction above which a partial folds back into the audible band,
+    // 1 - 20 kHz / rate (0.58 / 0.79 / 0.9 for 48 kHz at 1x / 2x / 4x); the
+    // brighter of two crossfaded levels never goes past it. 0 takes
+    // min (1.27 x harmonicLimit, 0.88), which is those values for the
+    // engine's three limits.
+    float read (int table, float position, float phase, float inc, float harmonicLimit, float foldLimit = 0.f) const noexcept;
 
     // Raw access for the GUI's waveform preview (level 0).
     const float* frame (int table, int frame) const noexcept;
@@ -41,7 +46,7 @@ private:
         return (((size_t) t * kFrames + (size_t) f) * kLevels + (size_t) l) * (kSize + 4);
     }
 
-    float readFrame (int t, int f, float levelF, float phase) const noexcept;
+    float readFrame (int t, int f, int level, float darker, float phase) const noexcept;
     void build();
 };
 

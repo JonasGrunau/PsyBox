@@ -247,6 +247,7 @@ public:
                 if (! s.on)
                 {
                     running = false;   // stays bypassed until switched on again, then starts clean
+                    finishMeters();
                     return;
                 }
                 if (s.mode != mode)
@@ -258,6 +259,7 @@ public:
             }
         }
 
+        finishMeters();
         xover[0].flush();
         xover[1].flush();
         for (auto& sm : smooth) sm.g = flushDenormal (sm.g);
@@ -274,6 +276,16 @@ private:
     std::array<Ramp, 3> rDown, rUp, rBandGain;
     Ramp rThresh, rKnee, rSlope, rMix, rOut, rDownSlope, rUpSlope;
     CompMeter meters;
+    std::array<float, 3> lastGain {};   // the last sample's total gain per band (linear), for the meter
+
+    // The meter shows the total gain of the block's last sample; its dB is
+    // taken once per block, not per sample and band.
+    void finishMeters() noexcept
+    {
+        const size_t bands = mode == 0 ? 1 : 3;
+        for (size_t b = 0; b < bands; ++b)
+            meters.totalDb[b] = gainToDb (lastGain[b]);
+    }
 
     void resetMode() noexcept
     {
@@ -337,7 +349,7 @@ private:
 
         meters.inDb[0] = std::max (meters.inDb[0], lvl);
         meters.gainDb[0] = g;
-        meters.totalDb[0] = gainToDb (gain);
+        lastGain[0] = gain;
     }
 
     void processMulti (float xl, float xr, float& yl, float& yr) noexcept
@@ -361,7 +373,7 @@ private:
 
             meters.inDb[b] = std::max (meters.inDb[b], lvl);
             meters.gainDb[b] = g;
-            meters.totalDb[b] = gainToDb (std::abs (w));
+            lastGain[b] = std::abs (w);
         }
         const float out = rOut.next();
         yl *= out;

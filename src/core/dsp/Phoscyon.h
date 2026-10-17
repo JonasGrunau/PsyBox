@@ -21,7 +21,11 @@ namespace psy::dsp
 // bottom that sags back towards zero like a coupling capacitor (`sagPerSample`
 // is the per-sample decay of the bottom's distance from zero, `low` its depth
 // right after the fall). Steps get BLEP corrections and the sag's slope
-// changes BLAMP corrections. Output is delayed by two samples.
+// changes BLAMP corrections. The caller moves `duty` from sample to sample
+// (slides, vibrato), so the fall fires also when the duty has gone behind
+// the phase within a cycle; otherwise the cycle would stay high to the
+// wrap and the next rise would be a double step. Output is delayed by two
+// samples.
 // ---------------------------------------------------------------------------
 class PhosOsc
 {
@@ -43,7 +47,6 @@ public:
         inc = std::clamp (inc, 0.0, 0.45);
         duty = std::clamp (duty, 0.05, 0.95);
         const double end = p + inc;
-        const double tau = -1.0 / std::log (std::clamp (sagPerSample, 1e-9, 0.999999999));   // samples
 
         if (! square)
         {
@@ -54,11 +57,18 @@ public:
         }
 
         // Square: rises at phase 0, falls at `duty`.
+        if (differs (sagPerSample, tauFor))   // the sag rate rarely moves: its log is kept
+        {
+            tauFor = sagPerSample;
+            tau = -1.0 / std::log (std::clamp (sagPerSample, 1e-9, 0.999999999));   // samples
+        }
         double sagNow = sag * sagPerSample;
         const auto since = [&] (double u) { return (end - u) / inc; };
-        if (high && end >= duty && p < duty)
+        if (high && end >= duty)
         {
-            const double d = since (duty);   // samples since the fall
+            // samples since the fall: a duty already behind the phase puts it at the start of
+            // this sample, which is just after the last one (that one was output high)
+            const double d = std::min (since (std::max (duty, p)), 1.0 - 1e-9);
             acc.addStep (d, -(low + top));
             acc.addRamp (d, (float) (low / tau));
             high = false;
@@ -87,7 +97,7 @@ public:
     }
 
 private:
-    double p = 0.0, sag = 1.0;
+    double p = 0.0, sag = 1.0, tau = 1.0, tauFor = -1.0;
     bool high = true;
     blep::Accumulator acc;
     blep::Delay2 delay;
@@ -112,7 +122,7 @@ struct PhosLadder
     std::array<float, 4> s {};
     float hpS = 0.f;                  // feedback high-pass state
     float g = 0.f, k = 0.f, drive = 1.f, hpG = 0.f;
-    std::array<float, 4> cp {}, inv {}, lower {};
+    std::array<float, 4> cp {}, inv {}, lower {}, ye {};   // ye: the response to the input node, M^-1 (g e1), from g alone
 
     void reset() noexcept
     {
@@ -141,13 +151,13 @@ struct PhosLadder
             inv[i] = 1.f / d;
             cp[i] = (i < 3 ? up : 0.f) * inv[i];
         }
+        thomas4 (inv, lower, cp, { g, 0.f, 0.f, 0.f }, ye);
     }
 
     float process (float x) noexcept
     {
-        std::array<float, 4> ys, ye;
-        solve (s, ys);
-        solve ({ g, 0.f, 0.f, 0.f }, ye);
+        std::array<float, 4> ys;
+        thomas4 (inv, lower, cp, s, ys);
         // y4 = a u + b; the high-pass of it: hp = (1 - G) (y4 - hpS) = a' u + b'
         const float hg = 1.f - hpG;
         const float a = hg * ye[3], b = hg * (ys[3] - hpS);
@@ -173,18 +183,6 @@ struct PhosLadder
         const float v = (y4 - hpS) * hpG;
         hpS = v + hpS + v;
         return y4;
-    }
-
-private:
-    void solve (const std::array<float, 4>& rhs, std::array<float, 4>& y) const noexcept
-    {
-        std::array<float, 4> dp;
-        dp[0] = rhs[0] * inv[0];
-        for (size_t i = 1; i < 4; ++i)
-            dp[i] = (rhs[i] - lower[i - 1] * dp[i - 1]) * inv[i];
-        y[3] = dp[3];
-        for (int i = 2; i >= 0; --i)
-            y[(size_t) i] = dp[(size_t) i] - cp[(size_t) i] * y[(size_t) i + 1];
     }
 };
 

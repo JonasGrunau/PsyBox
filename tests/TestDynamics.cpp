@@ -1,6 +1,8 @@
 #include "TestUtil.h"
 #include "dsp/Dynamics.h"
 
+#include <numbers>
+
 #include <catch2/catch_test_macros.hpp>
 
 using namespace psy::dsp;
@@ -24,7 +26,7 @@ namespace
     std::vector<float> sine (double hz, float amp, int n, double fs = kFs)
     {
         std::vector<float> x ((size_t) n);
-        for (int i = 0; i < n; ++i) x[(size_t) i] = amp * (float) std::sin (2.0 * M_PI * hz * i / fs);
+        for (int i = 0; i < n; ++i) x[(size_t) i] = amp * (float) std::sin (2.0 * std::numbers::pi * hz * i / fs);
         return x;
     }
 

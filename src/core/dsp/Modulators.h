@@ -42,7 +42,14 @@ class Adsr
 public:
     enum class Stage { Idle, Attack, Decay, Sustain, Release };
 
-    void setSampleRate (float sr) noexcept { fs = sr; }
+    // A new rate drops the cached coefficients, so the next set() solves them
+    // for it (they depend on the rate; the time in ms must stay the same).
+    void setSampleRate (float sr) noexcept
+    {
+        if (differs (sr, fs))
+            aMs = dMs = rMs = -1.f;
+        fs = sr;
+    }
 
     // 0 keeps the RC charge; above it the attack bends into a swell (see attackBend).
     void setAttackCurve (float curve) noexcept { aCurve = curve; }
@@ -52,20 +59,20 @@ public:
 
     void set (float attackMs, float decayMs, float sustain, float releaseMs) noexcept
     {
-        if (attackMs != aMs)
+        if (differs (attackMs, aMs))
         {
             aMs = attackMs;
             calc (aMs, kAttackRatio, 1.f + kAttackRatio, aCoef, aBase);
             aInc = 1.f / std::max (aMs * 0.001f * fs, 1.f);
         }
-        if (decayMs != dMs || sustain != sus)
+        if (differs (decayMs, dMs) || differs (sustain, sus))
         {
             dMs = decayMs;
             sus = sustain;
             calc (dMs, kDecayRatio, 0.f, dCoef, dBase);
             dBase = (sus - kDecayRatio) * (1.f - dCoef);
         }
-        if (releaseMs != rMs) { rMs = releaseMs; calc (rMs, kDecayRatio, 0.f, rCoef, rBase); rBase = -kDecayRatio * (1.f - rCoef); }
+        if (differs (releaseMs, rMs)) { rMs = releaseMs; calc (rMs, kDecayRatio, 0.f, rCoef, rBase); rBase = -kDecayRatio * (1.f - rCoef); }
     }
 
     void noteOn() noexcept
@@ -109,6 +116,7 @@ public:
             case Stage::Attack:
                 if (aCurve <= 0.f && aStart <= 0.f)
                 {
+                    aPhase = -1.f;   // the bent path picks the curve up again from the level
                     out = aBase + out * aCoef;
                     if (out >= 1.f || aMs <= 0.05f) { out = 1.f; stage = Stage::Decay; }
                     break;
@@ -216,14 +224,14 @@ class Lfo
 public:
     void setSampleRate (float sr) noexcept { fs = sr; edge = 1.f - std::exp (-1.f / (0.00035f * sr)); }
     void seed (uint64_t s) noexcept { rng.reseed (s); prevRand = rng.bipolar(); nextRand = rng.bipolar(); held = prevRand; }
-    void reset (float startPhase) noexcept { p = startPhase - std::floor (startPhase); odd = false; }
+    void reset (float startPhase) noexcept { p = (double) startPhase - std::floor ((double) startPhase); odd = false; }
     // The next value is taken as it is, without rounding from the last: a new note on a silent voice.
     void snap() noexcept { fresh = true; }
 
     float process (int shape, float hz) noexcept
     {
-        p += hz / fs;
-        if (p >= 1.f)
+        p += (double) hz / (double) fs;   // double: a float phase drifts the rate of a slow LFO
+        if (p >= 1.0)
         {
             p -= std::floor (p);
             odd = ! odd;
@@ -231,18 +239,19 @@ public:
             nextRand = rng.bipolar();
             held = nextRand;
         }
+        const float ph = (float) p;
         float raw;
         switch (shape)
         {
-            case 0: raw = std::sin (kTwoPi * p); break;
-            case 1: raw = p < 0.25f ? 4.f * p : (p < 0.75f ? 2.f - 4.f * p : 4.f * p - 4.f); break;
-            case 2: raw = 2.f * p - 1.f; break;
-            case 3: raw = 1.f - 2.f * p; break;
-            case 4: raw = p < 0.5f ? 1.f : -1.f; break;
+            case 0: raw = std::sin (kTwoPi * ph); break;
+            case 1: raw = ph < 0.25f ? 4.f * ph : (ph < 0.75f ? 2.f - 4.f * ph : 4.f * ph - 4.f); break;
+            case 2: raw = 2.f * ph - 1.f; break;
+            case 3: raw = 1.f - 2.f * ph; break;
+            case 4: raw = ph < 0.5f ? 1.f : -1.f; break;
             case 5: raw = held; break;
             default:
             {
-                const float s = 0.5f - 0.5f * std::cos (kPi * p);  // cosine interpolation
+                const float s = 0.5f - 0.5f * std::cos (kPi * ph);  // cosine interpolation
                 raw = prevRand + (nextRand - prevRand) * s;
                 break;
             }
@@ -253,12 +262,13 @@ public:
     }
 
     float value() const noexcept { return out; }
-    float phase() const noexcept { return p; }
+    float phase() const noexcept { return (float) p; }
     // Phase over two cycles, 0..2 (displays draw two).
-    float phase2() const noexcept { return p + (odd ? 1.f : 0.f); }
+    float phase2() const noexcept { return (float) p + (odd ? 1.f : 0.f); }
 
 private:
-    float fs = 48000.f, p = 0.f, out = 0.f, edge = 1.f;
+    float fs = 48000.f, out = 0.f, edge = 1.f;
+    double p = 0.0;
     bool odd = false, fresh = true;
     Rng rng;
     float prevRand = 0.f, nextRand = 0.f, held = 0.f;

@@ -231,48 +231,66 @@ const float* WavetableBank::frame (int table, int f) const noexcept
     return slot (std::clamp (table, 0, kTables - 1), std::clamp (f, 0, kFrames - 1), 0);
 }
 
-float WavetableBank::readFrame (int t, int f, float levelF, float phase) const noexcept
+float WavetableBank::readFrame (int t, int f, int l0, float darker, float phase) const noexcept
 {
-    const auto hermite = [] (const float* tab, float ph) {
-        const float x = ph * (float) N;
+    // The two lowest levels (256 and 512 harmonics, for the low notes) hold
+    // partials up to an eighth and a quarter of the table's rate, where the
+    // 4-point Hermite read images at -60 .. -76 dB; they get the 6-point,
+    // 5th-order Lagrange read, which is at the -92 dB floor of the test
+    // there at 2x. Higher levels have far fewer harmonics per table sample
+    // and keep the cheaper Hermite.
+    const auto read = [phase] (const float* tab, int level) {
+        const float x = phase * (float) N;
         const int i = (int) x;
         const float fr = x - (float) i;
-        const float xm1 = i == 0 ? tab[N + 3] : tab[i - 1];
-        const float x0 = tab[i], x1 = tab[i + 1], x2 = tab[i + 2];
-        const float c1 = 0.5f * (x1 - xm1);
-        const float c2 = xm1 - 2.5f * x0 + 2.f * x1 - 0.5f * x2;
-        const float c3 = 0.5f * (x2 - xm1) + 1.5f * (x0 - x1);
-        return ((c3 * fr + c2) * fr + c1) * fr + x0;
+        if (level > 1)
+        {
+            const float xm1 = i == 0 ? tab[N + 3] : tab[i - 1];
+            return hermite4 (xm1, tab[i], tab[i + 1], tab[i + 2], fr);
+        }
+        // points i-2 .. i+3 (the table is periodic: the guard samples cover the right side)
+        const float y0 = tab[i < 2 ? N + i - 2 : i - 2], y1 = i == 0 ? tab[N + 3] : tab[i - 1];
+        return lagrange6 (y0, y1, tab[i], tab[i + 1], tab[i + 2], tab[i + 3], fr);
     };
 
-    const int l0 = std::clamp ((int) levelF, 0, kLevels - 1);
-    const int l1 = std::min (l0 + 1, kLevels - 1);
-    const float lf = std::clamp (levelF - (float) l0, 0.f, 1.f);
-    const float a = hermite (slot (t, f, l0), phase);
-    if (lf <= 0.f || l0 == l1)
+    const float a = read (slot (t, f, l0), l0);
+    if (darker <= 0.f || l0 + 1 >= kLevels)
         return a;
-    return a + (hermite (slot (t, f, l1), phase) - a) * lf;
+    return a + (read (slot (t, f, l0 + 1), l0 + 1) - a) * darker;
 }
 
-float WavetableBank::read (int table, float position, float phase, float inc, float harmonicLimit) const noexcept
+float WavetableBank::read (int table, float position, float phase, float inc, float harmonicLimit, float foldLimit) const noexcept
 {
     table = std::clamp (table, 0, kTables - 1);
     phase = phase - std::floor (phase);
     if (phase >= 1.f)
         phase = 0.f;
 
-    // Highest harmonic allowed: harmonicLimit / inc. Level l holds 512 >> l.
-    const float allowed = std::max (harmonicLimit / std::max (inc, 1e-7f), 1.f);
+    // Level l holds 512 >> l harmonics, whose top partial sits at (512 >> l) x inc
+    // of the rate. A note wants the level whose top is at the target limit; the
+    // pitch falls between two levels, and the brighter one (floor of levelF)
+    // reaches up to 2^frac x the target. It may only be heard while its top
+    // partial stays under the fold bound, above which a partial lands in
+    // the audible band after decimation (0.79 at 2x, 0.9 at 4x). So the
+    // crossfade to the darker level is finished by the point where the
+    // brighter one reaches that bound, instead of spreading over a whole
+    // octave: below that point the sound is the same as before.
+    const float fold = foldLimit > 0.f ? foldLimit : std::min (harmonicLimit * 1.27f, 0.88f);
+    const float target = std::min (harmonicLimit, fold * 0.933f);
+    const float fadeSpan = std::min (1.f, std::log2 (fold / target));
+    const float allowed = std::max (target / std::max (inc, 1e-7f), 1.f);
     const float levelF = std::clamp (std::log2 ((float) kMaxHarmonics / allowed), 0.f, (float) (kLevels - 1));
+    const int l0 = std::min ((int) levelF, kLevels - 1);
+    const float darker = std::min (1.f, (levelF - (float) l0) / fadeSpan);
 
     const float fp = std::clamp (position, 0.f, 1.f) * (kFrames - 1);
     const int f0 = std::min ((int) fp, kFrames - 2);
     const float ff = fp - (float) f0;
 
-    const float a = readFrame (table, f0, levelF, phase);
+    const float a = readFrame (table, f0, l0, darker, phase);
     if (ff <= 1e-4f)
         return a;
-    const float b = readFrame (table, f0 + 1, levelF, phase);
+    const float b = readFrame (table, f0 + 1, l0, darker, phase);
     return a + (b - a) * ff;
 }
 

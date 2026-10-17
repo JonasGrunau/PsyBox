@@ -60,10 +60,12 @@ class HalfbandDecimator
 {
 public:
     // q: number of non-zero odd tap pairs. Length N = 4q + 1, latency 2q input
-    // samples = q output samples.
+    // samples = q output samples. The length sets the transition band, so
+    // `transitionFraction` (the band the caller meant; nothing reads it, and
+    // callers pass 0 or the design note's value) is only documentation.
     void design (int q, double transitionFraction, double attenuationDb)
     {
-        (void) transitionFraction;  // length chosen by the caller for this transition
+        (void) transitionFraction;
         const int c = 2 * q;
         designHalfband (q, attenuationDb, centre, taps);
         latencyIn = c;

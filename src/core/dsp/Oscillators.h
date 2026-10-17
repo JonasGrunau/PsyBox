@@ -20,7 +20,10 @@ struct SyncInfo
 // Analog-style oscillator: sine -> triangle -> saw -> square morph with a
 // continuous shape control. Saw and pulse edges get 4-point BLEP corrections,
 // triangle corners 4-point BLAMP corrections, hard sync resets correct both the
-// value step and the slope change. Output is delayed by two samples.
+// value step and the slope change. The pulse edge is where phase minus width
+// crosses a whole number, so a width that moves past the phase (PWM) flips the
+// square with a correction too, not only the phase running into the edge.
+// Output is delayed by two samples.
 // ---------------------------------------------------------------------------
 class AnalogOsc
 {
@@ -28,6 +31,7 @@ public:
     void reset (double phase = 0.0) noexcept
     {
         p = phase;
+        havePw = false;
         acc.reset();
         delay.reset();
     }
@@ -41,6 +45,7 @@ public:
     {
         inc = std::clamp (inc, 0.0, 0.49);
         pw = std::clamp ((double) pulseWidth, 0.02, 0.98);
+        if (! havePw) { pwPrev = pw; havePw = true; }
         computeWeights (shape);
 
         SyncInfo mine;
@@ -49,17 +54,18 @@ public:
             // Run up to the reset instant, restart from phase 0, continue.
             const double ds = sync->fraction;
             const double uReset = p + inc * (1.0 - ds);
-            edgeEvents (p, uReset, inc, ds);
+            edgeEvents (p, uReset, inc, ds, pwPrev);
             const double atReset = uReset - std::floor (uReset);
             resetEvent (atReset, ds, inc);
             p = inc * ds;
+            edgeEvents (0.0, p, inc, 0.0, pw);   // a short pulse can end before the sample does
             mine.wrapped = true;
             mine.fraction = ds;
         }
         else
         {
             const double end = p + inc;
-            edgeEvents (p, end, inc, 0.0);
+            edgeEvents (p, end, inc, 0.0, pwPrev);
             if (end >= 1.0)
             {
                 mine.wrapped = true;
@@ -67,6 +73,7 @@ public:
             }
             p = end - std::floor (end);
         }
+        pwPrev = pw;
 
         if (outSync != nullptr)
             *outSync = mine;
@@ -74,7 +81,8 @@ public:
     }
 
 private:
-    double p = 0.0, pw = 0.5;
+    double p = 0.0, pw = 0.5, pwPrev = 0.5;
+    bool havePw = false;
     blep::Accumulator acc;
     blep::Delay2 delay;
     float wSin = 0.f, wTri = 0.f, wSaw = 1.f, wSq = 0.f;
@@ -100,8 +108,10 @@ private:
     }
 
     // All waveform corners in the unwrapped phase interval (from, to], where
-    // `to` is reached dOffset samples before the current sample.
-    void edgeEvents (double from, double to, double inc, double dOffset) noexcept
+    // `to` is reached dOffset samples before the current sample. pwFrom is the
+    // pulse width at `from`; it moves to `pw` in a straight line across the
+    // interval.
+    void edgeEvents (double from, double to, double inc, double dOffset, double pwFrom) noexcept
     {
         if (inc <= 0.0)
             return;
@@ -109,9 +119,24 @@ private:
         const auto inRange = [&] (double u) { return u > from && u <= to; };
         const float triSlope = 8.f * (float) inc * wTri;
 
+        // The pulse edge: p - pw crossing a whole number, upwards (the square
+        // falls) or, when the width runs ahead of the phase, downwards (it rises).
+        if (wSq > 0.f)
+        {
+            const double u0 = from - pwFrom, u1 = to - pw, du = u1 - u0;
+            if (std::abs (du) > 1e-12)
+                for (int n = 0; n <= 1; ++n)
+                {
+                    const double edge = (double) n;
+                    const bool up = du > 0.0 && edge > u0 && edge <= u1;
+                    const bool down = du < 0.0 && edge >= u1 && edge < u0;
+                    if (up || down)
+                        acc.addStep ((1.0 - (edge - u0) / du) * (to - from) / inc + dOffset, up ? -2.f * wSq : 2.f * wSq);
+                }
+        }
+
         for (double k = 0.0; k <= 1.0; k += 1.0)
         {
-            if (inRange (k + pw))  acc.addStep (since (k + pw), -2.f * wSq);
             if (inRange (k + 0.5)) acc.addRamp (since (k + 0.5), -triSlope);
             if (k > 0.0 && inRange (k))
             {
@@ -217,9 +242,11 @@ public:
     void setBank (const WavetableBank* b) noexcept { bank = b; }
     void reset (double phase = 0.0) noexcept { p = phase; }
 
-    // harmonicLimitHz: highest partial frequency that may be produced without
-    // folding into the audible band (depends on oversampling).
-    float process (double inc, int table, float position, float harmonicLimit) noexcept
+    // harmonicLimit: the partials' target ceiling as a fraction of the
+    // oscillator's rate. foldLimit (0: derived from harmonicLimit, see
+    // WavetableBank::read) is the true bound, 1 - 20 kHz / rate, above which
+    // a partial folds into the audible band.
+    float process (double inc, int table, float position, float harmonicLimit, float foldLimit = 0.f) noexcept
     {
         if (bank == nullptr)
             return 0.f;
@@ -227,7 +254,7 @@ public:
         p += inc;
         if (p >= 1.0)
             p -= 1.0;
-        return bank->read (table, position, (float) p, (float) inc, harmonicLimit);
+        return bank->read (table, position, (float) p, (float) inc, harmonicLimit, foldLimit);
     }
 
     double phase() const noexcept { return p; }
@@ -279,14 +306,37 @@ private:
 // Noise: white, pink (Kellet's refined 7-pole filter), "digital" sample &
 // hold noise clocked from the note pitch, and hiss: white noise above about
 // 10 kHz (three one-pole high-passes), the fizz on top of a distorted bass.
+//
+// It runs at the oversampled rate, and what reaches the output is its band
+// up to the base rate's Nyquist, so white noise of a fixed amplitude would
+// fall 3 dB per doubling of the rate (white and hiss: -7.9 / -11.0 / -14.0 dB
+// at 1x / 2x / 4x of 48 kHz). White is scaled by sqrt (rate / 96 kHz), which
+// leaves 2x at 48 kHz as it was and makes the level the same at every rate.
+// Pink needs no such scaling: Kellet's filter has fixed poles in cycles per
+// sample, so its 1/f band grows with the rate by as much as the white input
+// loses. What differs is the shape in the top octave, which a trim of up to
+// 0.8 dB evens out. The hiss's high-passes are TPT one-poles (flat to Nyquist
+// at any rate, with the corner prewarped) that reproduce the old exp-matched
+// one-poles at 96 kHz: their corner is 9.35 kHz, which is where those sat;
+// their warping at 48 kHz leaves 1.2 dB more in the top octave, also trimmed.
+// Both trims level the band below 19 kHz with 2x of 48 kHz (measured).
 // ---------------------------------------------------------------------------
 class Noise
 {
 public:
-    // The rate the noise runs at, for the hiss's corner.
+    Noise() noexcept { setRate (96000.f); }
+
+    // The rate the noise runs at, for the level and the hiss's corner.
     void setRate (float sampleRate) noexcept
     {
-        hissCoef = std::exp (-kTwoPi * 10000.f / std::max (sampleRate, 24000.f));
+        const float fs = std::max (sampleRate, 24000.f);
+        whiteGain = std::sqrt (fs / 96000.f);
+        const float hissG = std::tan (kPi * kHissHz / fs);
+        hissK = hissG / (1.f + hissG);
+        const float octaves = std::clamp (std::log2 (fs / 96000.f), -1.5f, 1.5f);
+        const auto trimDb = [octaves] (float below, float above) { return octaves < 0.f ? -octaves * below : octaves * above; };
+        pinkGain = 0.2f * dbToGain (trimDb (0.512f, 0.764f));
+        hissGain = kHissGain * dbToGain (trimDb (-1.162f, 0.181f));
     }
 
     void reset (uint64_t seed) noexcept
@@ -313,7 +363,7 @@ public:
                 b5 = -0.7616f * b5 - white * 0.0168980f;
                 const float pink = b0 + b1 + b2 + b3 + b4 + b5 + b6 + white * 0.5362f;
                 b6 = white * 0.115926f;
-                return pink * 0.2f;
+                return pink * pinkGain;
             }
             case 2:
                 clock += clockInc;
@@ -326,24 +376,35 @@ public:
             case 3:
             {
                 // white minus its low end, three times: 18 dB per octave under the corner
-                hp1 = hissCoef * hp1 + (1.f - hissCoef) * white;
-                const float a = white - hp1;
-                hp2 = hissCoef * hp2 + (1.f - hissCoef) * a;
-                const float b = a - hp2;
-                hp3 = hissCoef * hp3 + (1.f - hissCoef) * b;
-                return (b - hp3) * 1.8f;
+                const float w = white * whiteGain;
+                const float a = hp (hp1, w);
+                const float b = hp (hp2, a);
+                return hp (hp3, b) * hissGain;
             }
             default:
-                return white * 0.7f;
+                return white * whiteGain * 0.7f;
         }
     }
 
 private:
+    // the old one-pole high-pass at 96 kHz had 2c / (1 + c) of a TPT one's gain at Nyquist
+    // (c = exp (-2 pi 10 kHz / 96 kHz)); cubed and with the old 1.8 it is this
+    static constexpr float kHissGain = 0.5759057f;
+    static constexpr float kHissHz = 9354.123f;
+
+    float hp (float& state, float x) noexcept
+    {
+        const float v = (x - state) * hissK;
+        const float lp = v + state;
+        state = lp + v;
+        return x - lp;
+    }
+
     Rng rng;
     float b0 = 0, b1 = 0, b2 = 0, b3 = 0, b4 = 0, b5 = 0, b6 = 0;
     float held = 0.f;
     double clock = 0.0;
-    float hissCoef = 0.6f, hp1 = 0.f, hp2 = 0.f, hp3 = 0.f;
+    float whiteGain = 1.f, pinkGain = 0.2f, hissGain = kHissGain, hissK = 0.f, hp1 = 0.f, hp2 = 0.f, hp3 = 0.f;
 };
 
 } // namespace psy::dsp
