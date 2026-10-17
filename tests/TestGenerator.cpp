@@ -935,7 +935,7 @@ TEST_CASE ("Every short name is different and fits a chip", "[generator][categor
     std::set<std::string> seen;
     for (const auto& info : categoryInfo())
     {
-        CHECK (std::string_view (info.shortName).size() <= 8);
+        CHECK (std::string_view (info.shortName).size() <= 10);   // the top bar chip
         CHECK (seen.insert (info.shortName).second);
     }
 }

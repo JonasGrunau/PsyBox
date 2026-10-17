@@ -83,13 +83,13 @@ inline const std::array<CategoryInfo, kNumCategories>& categoryInfo() noexcept
         // Categories added after the kicks (the enum only ever grows).
         { "Bass Shot",    "Shot",    Bass,       0x3EAAFA, "Progressive one-shot bass hits, OTT-compressed" },
         { "Offbeat Bass", "Offbeat", Bass,       0x639AFE, "One plucked note between the kicks" },
-        { "Prog Bass",    "ProgBass", Bass,       0x7593FD, "Round, dark progressive bass with a soft knock" },
+        { "Prog Bass",    "Prog Bass", Bass,      0x7593FD, "Round, dark progressive bass with a soft knock" },
         { "Reverse Bass", "Rev Bass", Bass,       0x9487FD, "A bass that swells into the next kick and stops dead" },
         { "Reverse Sub",  "Rev Sub",  Bass,       0xA481FD, "A sine sub that swells into the kick, sliding at the end" },
         { "Jilax",        "Jilax",   Main,       0xFF7238, "Wide psytrance synth shots, one or two beats long" },
         { "Grid",         "Grid",    Main,       0xFE6445, "Short FM, pluck and stab hits locked to the 16th grid" },
-        { "Ghost Stab",   "G Stab",  Main,       0xFE5654, "Wide fifth stacks on the offbeat, cut at the kick (Ghost Rider)" },
-        { "Ghost Bass",   "G Bass",  Bass,       0x51A2FD, "Rolling prog bass with a quick filter flick on every note (Ghost Rider)" },
+        { "Ghost Stab",   "Ghost Stab", Main,     0xFE5654, "Wide fifth stacks on the offbeat, cut at the kick (Ghost Rider)" },
+        { "Ghost Bass",   "Ghost Bass", Bass,     0x51A2FD, "Rolling prog bass with a quick filter flick on every note (Ghost Rider)" },
         { "Phoscyon",     "Phos",    Acid,       0xFCBA14, "Phoscyon's 303: its filter, accent sweep and slide" },
     } };
     return info;
