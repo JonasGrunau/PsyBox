@@ -18,6 +18,8 @@ public:
     void releaseResources() override {}
     bool isBusesLayoutSupported (const BusesLayout& layouts) const override;
     void processBlock (juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
+    // Silent, but follows the keys, so the right ones sound again after the bypass.
+    void processBlockBypassed (juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
 
     juce::AudioProcessorEditor* createEditor() override;
     bool hasEditor() const override { return true; }
@@ -26,7 +28,7 @@ public:
     bool acceptsMidi() const override { return true; }
     bool producesMidi() const override { return false; }
     bool isMidiEffect() const override { return false; }
-    double getTailLengthSeconds() const override { return 8.0; }
+    double getTailLengthSeconds() const override;   // release + delay + reverb of the current patch
 
     int getNumPrograms() override { return 1; }
     int getCurrentProgram() override { return 0; }
@@ -89,7 +91,8 @@ public:
     // ---- Presets --------------------------------------------------------------
     static juce::File presetFolder();
     juce::String getPresetName() const { return presetName; }
-    bool savePreset (const juce::String& name);
+    bool savePreset (const juce::String& name);   // false when the file could not be written
+    juce::File presetFileFor (const juce::String& name) const;   // where savePreset writes it (it may exist)
     bool loadPreset (const juce::File& file);
     void stepPreset (int delta);
     juce::Array<juce::File> listPresets() const;
@@ -173,10 +176,16 @@ private:
     std::array<std::atomic<float>*, psy::kNumParams> rawValues {};
 
     psy::Engine engine;
-    psy::ParamState audioParams;
+    psy::ParamState audioParams, incoming;   // audio thread: the values playing, the ones just read
     std::vector<psy::MidiEvent> midiEvents;
+    std::array<psy::MidiEvent, 2 * 128 + 1> restartEvents {};   // the pedal, the keys, the pedal's keys let go
     int reportedLatency = -1;
 
+    // The patch's metadata (category, seed, name, macro names, slots, locks)
+    // is written on the message thread; hosts may save the state from
+    // another one, so writes and getStateInformation hold this lock (never
+    // around a parameter change, which calls into the host).
+    juce::CriticalSection stateLock;
     psy::Generator generator;
     psy::Category category = psy::Category::Acid;
     uint32_t seed = 0;
@@ -185,6 +194,7 @@ private:
     bool arpGeneration = false;
     bool kickKeyGeneration = true;
     juce::String presetName { "Init" };
+    juce::File presetFile;   // the preset the patch came from, for stepping (message thread)
     std::atomic<int> lastPlayedNote { 48 };
 
     // Patch swaps (Generate, Mutate, undo, presets, category switch) open a
@@ -202,8 +212,15 @@ private:
     enum class Swap { None, FadingOut, Restart };
     Swap swap = Swap::None;
     int fadePos = 0;
-    std::array<float, 128> heldVelocity {};   // audio thread: notes currently down
-    std::array<bool, 128> pressedInFade {};   // audio thread: note-ons that arrived during the fade-out
+    // Audio thread: the keys as the host plays them, so a restart (after a
+    // swap or a bypass) brings back exactly what was sounding.
+    std::array<float, 128> heldVelocity {};   // notes currently down
+    std::array<float, 128> pedalHeld {};      // notes let go while the sustain pedal holds them
+    bool sustainDown = false;
+    std::array<bool, 128> pressedInFade {};   // note-ons that arrived during the fade-out
+    bool wasBypassed = false;
+    void trackKeys (const juce::MidiMessage&) noexcept;
+    void startFadeOut() noexcept;
     void beginPatchChange() noexcept
     {
         openChanges.fetch_add (1);   // before the epoch: whoever sees the new epoch sees it open
@@ -218,12 +235,14 @@ private:
         PatchChange& operator= (const PatchChange&) = delete;
         PsyBoxProcessor& proc;
     };
-    static constexpr int kFadeOut = 480, kFadeIn = 128;   // 10 ms, ~3 ms at 48 kHz
+    int fadeOutLen = 480, fadeInLen = 128;   // samples: 10 ms, ~2.7 ms (set in prepareToPlay)
     std::atomic<double> lastBpm { 120.0 };
     MacroNames macroNames;   // typed names; empty = automatic
     void resetMacroNames();
     void writeMacroNames (juce::ValueTree&) const;
     void readMacroNames (const juce::ValueTree&);
+    // A stored macro name: empty for automatic (older sessions stored "Macro 3" for that).
+    static juce::String parseMacroName (const juce::var& stored, int i);
 
     // The patch each category had when you last left it; restored when you come back.
     struct Slot { bool valid = false; psy::ParamState state; uint32_t seed = 0; juce::String name; MacroNames macros; };
@@ -236,6 +255,7 @@ private:
     struct Snapshot { psy::ParamState state; uint32_t seed; psy::Category category; juce::String name; MacroNames macros; };
     std::vector<Snapshot> history;
     int historyIndex = -1;
+    void stepHistory (int delta);   // undo / redo: keeps tweaks made since in the entry left
 
     std::array<float, kScopeSize> scope {};
     std::atomic<int> scopeWrite { 0 };
@@ -251,6 +271,7 @@ private:
     psy::ParamState currentState() const;
     void normaliseFamily();   // the engine mode and the arp follow the category
     void applyState (const psy::ParamState& s);
+    void markEdited();   // the name gets a "*": no longer the preset or seed it names
     void pushHistory();
     void restoreRanges();
 

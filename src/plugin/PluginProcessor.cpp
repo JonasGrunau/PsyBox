@@ -55,7 +55,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout PsyBoxProcessor::createLayou
             auto attrs = juce::AudioParameterFloatAttributes()
                              .withAutomatable (std::string_view (d.id) != "fx_order")
                              .withStringFromValueFunction ([dp] (float v, int) { return juce::String (dp->format (v)); })
-                             .withValueFromStringFunction ([dp] (const juce::String& s) { return dp->snap (s.getFloatValue()); });
+                             .withValueFromStringFunction ([dp] (const juce::String& s) { return dp->parse (s.toStdString()); });
             layout.add (std::make_unique<juce::AudioParameterFloat> (id, name, rangeFor (d), d.def, attrs));
         }
     }
@@ -86,6 +86,7 @@ bool PsyBoxProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
 
 void PsyBoxProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 {
+    engine.setOffline (isNonRealtime());   // a render reports the Render quality's latency from the start
     engine.setParams (currentState());
     engine.prepare (sampleRate, samplesPerBlock);
     reportedLatency = engine.latencySamples();
@@ -93,7 +94,13 @@ void PsyBoxProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
     swap = Swap::None;
     seenEpoch = patchEpoch.load();
     maxHold = (int) sampleRate;
+    fadeOutLen = std::max (1, (int) std::lround (sampleRate * 0.010));
+    fadeInLen = std::max (1, (int) std::lround (sampleRate * (128.0 / 48000.0)));
     heldVelocity.fill (0.f);
+    pedalHeld.fill (0.f);
+    pressedInFade.fill (false);
+    sustainDown = false;
+    wasBypassed = false;
 }
 
 ParamState PsyBoxProcessor::currentState() const
@@ -104,53 +111,126 @@ ParamState PsyBoxProcessor::currentState() const
     return s;
 }
 
+void PsyBoxProcessor::trackKeys (const juce::MidiMessage& m) noexcept
+{
+    if (m.isNoteOn())
+    {
+        const auto k = (size_t) m.getNoteNumber();
+        lastPlayedNote.store (m.getNoteNumber(), std::memory_order_relaxed);
+        heldVelocity[k] = std::max (0.01f, m.getFloatVelocity());
+        pedalHeld[k] = 0.f;
+    }
+    else if (m.isNoteOff())
+    {
+        const auto k = (size_t) m.getNoteNumber();
+        if (sustainDown && heldVelocity[k] > 0.f)
+            pedalHeld[k] = heldVelocity[k];
+        heldVelocity[k] = 0.f;
+    }
+    else if (m.isAllNotesOff() || m.isAllSoundOff())
+    {
+        heldVelocity.fill (0.f);
+        pedalHeld.fill (0.f);
+        pressedInFade.fill (false);
+    }
+    else if (m.isSustainPedalOn())   // CC 64 >= 64, the engine's threshold
+    {
+        sustainDown = true;
+    }
+    else if (m.isSustainPedalOff())
+    {
+        sustainDown = false;
+        pedalHeld.fill (0.f);
+    }
+}
+
+void PsyBoxProcessor::startFadeOut() noexcept
+{
+    // from where the sound is: a fade-in still running starts the fade-out lower
+    fadePos = swap == Swap::Restart ? (int) ((1.f - (float) fadePos / (float) fadeInLen) * (float) fadeOutLen) : 0;
+    swap = Swap::FadingOut;   // keep the old values for the fade
+}
+
+void PsyBoxProcessor::processBlockBypassed (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi)
+{
+    buffer.clear();
+    for (const auto meta : midi)
+        trackKeys (meta.getMessage());
+    wasBypassed = true;
+}
+
 void PsyBoxProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi)
 {
     juce::ScopedNoDenormals noDenormals;
     const int n = buffer.getNumSamples();
+    if (n <= 0)
+        return;
 
-    if (swap == Swap::None && patchEpoch.load (std::memory_order_acquire) != seenEpoch)
+    // Back from a host bypass: the engine still holds whatever it held when
+    // the bypass began, so it restarts like after a swap (already silent)
+    // and the keys down now come back.
+    if (wasBypassed)
     {
-        swap = Swap::FadingOut;   // keep the old values for the fade
-        fadePos = 0;
+        wasBypassed = false;
+        swap = Swap::FadingOut;
+        fadePos = fadeOutLen;
     }
+
+    if (swap != Swap::FadingOut && patchEpoch.load (std::memory_order_acquire) != seenEpoch)
+        startFadeOut();
     if (swap != Swap::FadingOut)
     {
         for (size_t i = 0; i < (size_t) kNumParams; ++i)
-            audioParams.v[i] = rawValues[i]->load (std::memory_order_relaxed);
-        engine.setParams (audioParams);
+            incoming.v[i] = rawValues[i]->load (std::memory_order_relaxed);
+        // A change that opened while these were read may have written some of
+        // its values already: keep the old ones and fade out on them instead.
+        std::atomic_thread_fence (std::memory_order_acquire);
+        if (patchEpoch.load (std::memory_order_relaxed) == seenEpoch)
+        {
+            audioParams = incoming;
+            engine.setParams (audioParams);
+        }
+        else
+        {
+            startFadeOut();
+        }
     }
 
     keyboardState.processNextMidiBuffer (midi, 0, n, true);
 
-    // First block after a reset: the keys that were already down come back
+    // First block after a reset: the keys that were sounding come back
     // (taken before this block's MIDI: a key pressed now brings its own
     // note-on, and replaying it too would start it twice).
     const bool restart = swap == Swap::Restart && fadePos == 0;
-    std::array<float, 128> replay {};
-    if (restart) replay = heldVelocity;
+    std::array<float, 128> replay {}, replayPedal {};
+    const bool replaySustain = restart && sustainDown;
+    if (restart)
+    {
+        replay = heldVelocity;
+        replayPedal = pedalHeld;
+    }
 
     midiEvents.clear();
+    const size_t forNotes = midiEvents.capacity() / 4;   // controllers never crowd out note events
     for (const auto meta : midi)
     {
         const auto m = meta.getMessage();
+        if (swap == Swap::FadingOut && m.isNoteOn())
+            pressedInFade[(size_t) m.getNoteNumber()] = true;
+        trackKeys (m);
         MidiEvent e;
         e.offset = juce::jlimit (0, n - 1, meta.samplePosition);
-        if (m.isNoteOn())
-        {
-            e.type = MidiEvent::NoteOn; e.number = m.getNoteNumber(); e.value = m.getFloatVelocity();
-            lastPlayedNote.store (e.number, std::memory_order_relaxed);
-            heldVelocity[(size_t) e.number] = std::max (0.01f, e.value);
-            if (swap == Swap::FadingOut) pressedInFade[(size_t) e.number] = true;
-        }
-        else if (m.isNoteOff()) { e.type = MidiEvent::NoteOff; e.number = m.getNoteNumber(); heldVelocity[(size_t) e.number] = 0.f; }
+        // CC 120/123 before the other controllers, which they also are
+        if (m.isNoteOn()) { e.type = MidiEvent::NoteOn; e.number = m.getNoteNumber(); e.value = m.getFloatVelocity(); }
+        else if (m.isNoteOff()) { e.type = MidiEvent::NoteOff; e.number = m.getNoteNumber(); }
+        else if (m.isAllNotesOff() || m.isAllSoundOff()) { e.type = MidiEvent::AllNotesOff; }
         else if (m.isPitchWheel()) { e.type = MidiEvent::PitchBend; e.value = (float) (m.getPitchWheelValue() - 8192) / 8192.f; }
         else if (m.isController()) { e.type = MidiEvent::Controller; e.number = m.getControllerNumber(); e.value = (float) m.getControllerValue() / 127.f; }
         else if (m.isChannelPressure()) { e.type = MidiEvent::ChannelPressure; e.value = (float) m.getChannelPressureValue() / 127.f; }
         else if (m.isAftertouch()) { e.type = MidiEvent::ChannelPressure; e.value = (float) m.getAfterTouchValue() / 127.f; }
-        else if (m.isAllNotesOff() || m.isAllSoundOff()) { e.type = MidiEvent::AllNotesOff; heldVelocity.fill (0.f); }
         else continue;
-        if (midiEvents.size() < midiEvents.capacity())
+        const bool note = e.type == MidiEvent::NoteOn || e.type == MidiEvent::NoteOff || e.type == MidiEvent::AllNotesOff;
+        if (midiEvents.size() + (note ? 0 : forNotes) < midiEvents.capacity())
             midiEvents.push_back (e);
     }
 
@@ -158,7 +238,7 @@ void PsyBoxProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
     if (auto* ph = getPlayHead())
         if (const auto pos = ph->getPosition())
         {
-            if (const auto b = pos->getBpm())
+            if (const auto b = pos->getBpm(); b && *b > 0.0)
                 transport.bpm = *b;
             if (const auto ppq = pos->getPpqPosition())
             {
@@ -169,23 +249,36 @@ void PsyBoxProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
     const double bpm = transport.bpm;
     lastBpm.store (bpm, std::memory_order_relaxed);
 
-    // The new patch starts clean and the held keys come back. A kick is a
-    // one-shot: only keys pressed during the fade are played again (unless
-    // the arp owns the keys), and it starts without a fade-in so the
-    // transient stays sharp.
+    // The new patch starts clean and what sounded comes back: the pedal, the
+    // keys held and the keys the pedal held (let go again, so the engine
+    // sustains them). A kick is a one-shot: only keys pressed during the
+    // fade are played again (unless the arp owns the keys), and it starts
+    // without a fade-in so the transient stays sharp.
     const bool oneShot = audioParams.geti (P::EngineMode) == (int) EngineMode::Kick && ! audioParams.on (P::ArpOn);
     if (restart)
     {
+        size_t count = 0;
+        const auto add = [&] (MidiEvent::Type type, int number, float value) {
+            auto& e = restartEvents[count++];
+            e = {};
+            e.type = type;
+            e.number = number;
+            e.value = value;
+        };
+        if (replaySustain && ! oneShot)
+            add (MidiEvent::Controller, 64, 1.f);
         for (int note = 0; note < 128; ++note)
-            if (replay[(size_t) note] > 0.f && (! oneShot || pressedInFade[(size_t) note])
-                && midiEvents.size() < midiEvents.capacity())
-            {
-                MidiEvent e;
-                e.type = MidiEvent::NoteOn;
-                e.number = note;
-                e.value = replay[(size_t) note];
-                midiEvents.insert (midiEvents.begin(), e);
-            }
+        {
+            const float v = oneShot ? replay[(size_t) note] : std::max (replay[(size_t) note], replayPedal[(size_t) note]);
+            if (v > 0.f && (! oneShot || pressedInFade[(size_t) note]))
+                add (MidiEvent::NoteOn, note, v);
+        }
+        if (! oneShot)
+            for (int note = 0; note < 128; ++note)
+                if (replayPedal[(size_t) note] > 0.f && replay[(size_t) note] <= 0.f)
+                    add (MidiEvent::NoteOff, note, 0.f);
+        count = std::min (count, midiEvents.capacity() - midiEvents.size());
+        midiEvents.insert (midiEvents.begin(), restartEvents.begin(), restartEvents.begin() + (std::ptrdiff_t) count);
         pressedInFade.fill (false);
         if (oneShot) swap = Swap::None;
     }
@@ -200,7 +293,7 @@ void PsyBoxProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
     {
         for (int i = 0; i < n; ++i)
         {
-            const float g = std::max (0.f, 1.f - (float) fadePos / (float) kFadeOut);
+            const float g = std::max (0.f, 1.f - (float) fadePos / (float) fadeOutLen);
             l[i] *= g;
             if (r != l) r[i] *= g;
             ++fadePos;
@@ -208,7 +301,7 @@ void PsyBoxProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
         // silent until the new patch is all written (the epoch first: a change
         // that opens after this read shows up as a new epoch next block)
         const uint32_t epoch = patchEpoch.load();
-        if (fadePos >= kFadeOut && (openChanges.load() == 0 || fadePos >= kFadeOut + maxHold))
+        if (fadePos >= fadeOutLen && (openChanges.load() == 0 || fadePos >= fadeOutLen + maxHold))
         {
             engine.reset();   // voices, filter states, delay and reverb tails; params jump, no smoothing
             seenEpoch = epoch;
@@ -218,15 +311,15 @@ void PsyBoxProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
     }
     else if (swap == Swap::Restart)
     {
-        const int m = std::min (n, kFadeIn - fadePos);
+        const int m = std::min (n, fadeInLen - fadePos);
         for (int i = 0; i < m; ++i)
         {
-            const float g = (float) (fadePos + i) / (float) kFadeIn;
+            const float g = (float) (fadePos + i) / (float) fadeInLen;
             l[i] *= g;
             if (r != l) r[i] *= g;
         }
         fadePos += m;
-        if (fadePos >= kFadeIn) swap = Swap::None;
+        if (fadePos >= fadeInLen) swap = Swap::None;
     }
 
     const int lat = engine.latencySamples();
@@ -293,7 +386,9 @@ void PsyBoxProcessor::applyState (const ParamState& state)
     // one switched on).
     auto s = state;
     s.set (P::EngineMode, (float) categoryEngine());
-    // the qualities are global settings, not part of a sound (init and undo keep them too)
+    // the volume and the qualities are global settings, not part of a sound
+    // (init, undo, presets and category slots keep them too)
+    s.set (P::MasterVol, plain (P::MasterVol));
     s.set (P::Quality, plain (P::Quality));
     s.set (P::RenderQuality, plain (P::RenderQuality));
     if (! hasArp (category))
@@ -329,6 +424,7 @@ void PsyBoxProcessor::setCategory (Category c)
 
 void PsyBoxProcessor::saveSlot()
 {
+    const juce::ScopedLock sl (stateLock);
     slots[(size_t) category] = { true, currentState(), seed, presetName, macroNames };
 }
 
@@ -336,15 +432,17 @@ void PsyBoxProcessor::switchCategory (Category c)
 {
     const PatchChange change (*this);
     saveSlot();
-    category = c;
-    const auto& slot = slots[(size_t) c];
-    if (! slot.valid) return;
-    auto s = slot.state;
-    s.set (P::MasterVol, plain (P::MasterVol));   // global settings are not part of a sound (applyState keeps the qualities)
-    seed = slot.seed;
-    presetName = slot.name;
-    macroNames = slot.macros;
-    applyState (s);
+    {
+        const juce::ScopedLock sl (stateLock);
+        category = c;
+        presetFile = juce::File();
+        if (! slots[(size_t) c].valid) return;
+        const auto& slot = slots[(size_t) c];
+        seed = slot.seed;
+        presetName = slot.name;
+        macroNames = slot.macros;
+    }
+    applyState (slots[(size_t) c].state);
     restoreRanges();
 }
 
@@ -360,8 +458,9 @@ void PsyBoxProcessor::writeSlots (juce::ValueTree& t) const
         st.setProperty ("category", c, nullptr);
         st.setProperty ("seed", (int) slot.seed, nullptr);
         st.setProperty ("name", slot.name, nullptr);
+        // not "macro1": that is Macro 1's parameter id, written below
         for (int i = 0; i < kNumMacros; ++i)
-            st.setProperty ("macro" + juce::String (i + 1), slot.macros[(size_t) i], nullptr);
+            st.setProperty ("macroName" + juce::String (i + 1), slot.macros[(size_t) i], nullptr);
         for (size_t i = 0; i < (size_t) kNumParams; ++i)
             st.setProperty (juce::Identifier (defs[i].id), slot.state.v[i], nullptr);
         all.appendChild (st, nullptr);
@@ -379,11 +478,10 @@ void PsyBoxProcessor::readSlots (const juce::ValueTree& t)
         const int c = (int) st.getProperty ("category", -1);
         if (c < 0 || c >= kNumCategories) continue;
         Slot slot { true, ParamState(), (uint32_t) (int) st.getProperty ("seed", 0), st.getProperty ("name").toString(), {} };
+        // Sessions before 0.5.3 kept slot names under "macro1".., which the
+        // macro knobs' values overwrote: those names were lost, so automatic.
         for (int i = 0; i < kNumMacros; ++i)
-        {
-            const auto n = st.getProperty ("macro" + juce::String (i + 1), {}).toString();
-            slot.macros[(size_t) i] = n == "Macro " + juce::String (i + 1) ? juce::String() : n;
-        }
+            slot.macros[(size_t) i] = parseMacroName (st.getProperty ("macroName" + juce::String (i + 1), {}), i);
         for (size_t i = 0; i < (size_t) kNumParams; ++i)
             if (const auto* v = st.getPropertyPointer (juce::Identifier (defs[i].id)))
                 slot.state.v[i] = defs[i].snap ((float) *v);
@@ -402,10 +500,14 @@ void PsyBoxProcessor::generateWithSeed (uint32_t s)
     auto patch = generator.generate (category, s, currentState(), locks, arpGeneration, kickKeyGeneration);
     levelPatch (patch, category, locks);   // every new patch about as loud as the last
     const PatchChange change (*this);
-    seed = s;
     applyState (patch);
-    resetMacroNames();   // a new sound: the macros are named after what they now drive
-    presetName = juce::String (categoryInfo()[(size_t) category].name) + " #" + juce::String::toHexString ((int) seed).toUpperCase().paddedLeft ('0', 6);
+    {
+        const juce::ScopedLock sl (stateLock);
+        seed = s;
+        resetMacroNames();   // a new sound: the macros are named after what they now drive
+        presetName = juce::String (categoryInfo()[(size_t) category].name) + " #" + juce::String::toHexString ((int) seed).toUpperCase().paddedLeft ('0', 6);
+        presetFile = juce::File();
+    }
     pushHistory();
     sendChangeMessage();
 }
@@ -435,8 +537,7 @@ void PsyBoxProcessor::generateArpPattern()
     auto patch = generator.generateArpPattern (category, (uint32_t) random.nextInt(), currentState(), locks);
     levelPatch (patch, category, locks);
     applyState (patch);
-    if (! presetName.endsWith ("*"))
-        presetName << "*";
+    markEdited();
     pushHistory();
     sendChangeMessage();
 }
@@ -447,21 +548,33 @@ void PsyBoxProcessor::mutate()
     levelPatch (patch, category, locks);
     const PatchChange change (*this);
     applyState (patch);
-    if (! presetName.endsWith ("*"))
-        presetName << "*";
+    markEdited();
     pushHistory();
     sendChangeMessage();
 }
 
+void PsyBoxProcessor::markEdited()
+{
+    const juce::ScopedLock sl (stateLock);
+    if (! presetName.endsWith ("*"))
+        presetName << "*";
+}
+
 void PsyBoxProcessor::setLocked (P p, bool shouldLock)
 {
-    locks.set ((size_t) p, shouldLock);
+    {
+        const juce::ScopedLock sl (stateLock);
+        locks.set ((size_t) p, shouldLock);
+    }
     sendChangeMessage();
 }
 
 void PsyBoxProcessor::clearLocks()
 {
-    locks.reset();
+    {
+        const juce::ScopedLock sl (stateLock);
+        locks.reset();
+    }
     sendChangeMessage();
 }
 
@@ -477,34 +590,31 @@ void PsyBoxProcessor::pushHistory()
 
 void PsyBoxProcessor::undo()
 {
-    if (! canUndo()) return;
-    const PatchChange change (*this);
-    // keep manual tweaks made since the last generator action reachable via redo
-    history[(size_t) historyIndex].state = currentState();
-    history[(size_t) historyIndex].macros = macroNames;
-    --historyIndex;
-    const auto& h = history[(size_t) historyIndex];
-    if (h.category != category) saveSlot();
-    seed = h.seed;
-    category = h.category;
-    presetName = h.name;
-    macroNames = h.macros;
-    applyState (h.state);
-    restoreRanges();
-    sendChangeMessage();
+    if (canUndo()) stepHistory (-1);
 }
 
 void PsyBoxProcessor::redo()
 {
-    if (! canRedo()) return;
+    if (canRedo()) stepHistory (1);
+}
+
+void PsyBoxProcessor::stepHistory (int delta)
+{
     const PatchChange change (*this);
-    ++historyIndex;
+    // keep manual tweaks made since the last generator action reachable
+    // from the other direction
+    history[(size_t) historyIndex].state = currentState();
+    history[(size_t) historyIndex].macros = macroNames;
+    historyIndex += delta;
     const auto& h = history[(size_t) historyIndex];
     if (h.category != category) saveSlot();
-    seed = h.seed;
-    category = h.category;
-    presetName = h.name;
-    macroNames = h.macros;
+    {
+        const juce::ScopedLock sl (stateLock);
+        seed = h.seed;
+        category = h.category;
+        presetName = h.name;
+        macroNames = h.macros;
+    }
     applyState (h.state);
     restoreRanges();
     sendChangeMessage();
@@ -537,18 +647,29 @@ void PsyBoxProcessor::setMacroName (int i, const juce::String& name)
 {
     // Typing the automatic name, a default name or nothing goes back to automatic.
     auto n = name.trim().substring (0, 14);
-    macroNames[(size_t) i] = {};
-    if (n == getMacroName (i) || n == "Macro " + juce::String (i + 1))
+    const auto automatic = macroLabel (currentState(), i);
+    if (n == juce::String (automatic) || n == "Macro " + juce::String (i + 1))
         n = {};
-    macroNames[(size_t) i] = n;
+    {
+        const juce::ScopedLock sl (stateLock);
+        macroNames[(size_t) i] = n;
+    }
     sendChangeMessage();
 }
 
 void PsyBoxProcessor::resetMacroNames()
 {
+    const juce::ScopedLock sl (stateLock);
     for (auto& n : macroNames) n = {};
 }
 
+juce::String PsyBoxProcessor::parseMacroName (const juce::var& stored, int i)
+{
+    const auto n = stored.toString().trim();
+    return n == "Macro " + juce::String (i + 1) ? juce::String() : n;
+}
+
+// On the state's root: the parameters are children there, so "macro1" is free.
 void PsyBoxProcessor::writeMacroNames (juce::ValueTree& t) const
 {
     for (int i = 0; i < kNumMacros; ++i)
@@ -557,12 +678,9 @@ void PsyBoxProcessor::writeMacroNames (juce::ValueTree& t) const
 
 void PsyBoxProcessor::readMacroNames (const juce::ValueTree& t)
 {
-    // Older sessions stored "Macro 1" for a name nobody typed.
+    const juce::ScopedLock sl (stateLock);
     for (int i = 0; i < kNumMacros; ++i)
-    {
-        const auto n = t.getProperty ("macro" + juce::String (i + 1), {}).toString().trim();
-        macroNames[(size_t) i] = n == "Macro " + juce::String (i + 1) ? juce::String() : n;
-    }
+        macroNames[(size_t) i] = parseMacroName (t.getProperty ("macro" + juce::String (i + 1), {}), i);
 }
 
 // ---------------------------------------------------------------------------
@@ -690,10 +808,53 @@ void PsyBoxProcessor::initPatch()
 {
     const PatchChange change (*this);
     applyState (ParamState());
-    resetMacroNames();
-    presetName = "Init";
+    {
+        const juce::ScopedLock sl (stateLock);
+        resetMacroNames();
+        presetName = "Init";
+        presetFile = juce::File();
+    }
     pushHistory();
     sendChangeMessage();
+}
+
+double PsyBoxProcessor::getTailLengthSeconds() const
+{
+    // What sounds on after the last note-off: the release, then the echoes
+    // (to -60 dB) and the reverb. Capped, so an infinite feedback stays finite.
+    const auto mode = (EngineMode) std::lround (plain (P::EngineMode));
+    const double bpm = juce::jmax (20.0, getBpm());
+    const auto echoes = [] (double seconds, double feedback) {
+        return feedback <= 1.0e-3 ? seconds : seconds * std::log (1.0e-3) / std::log (juce::jmin (feedback, 0.999));
+    };
+    double tail = 0.0;
+    if (mode == EngineMode::Phoscyon)
+    {
+        tail = 0.5;   // the 303's VCA lets go within a few hundred ms
+        if (plain (P::PhosDlyOn) > 0.5f)
+        {
+            const double t = plain (P::PhosDlySync) > 0.5f
+                                ? PhosFx::delayMs ((int) std::lround (plain (P::PhosDlyLNum)), (int) std::lround (plain (P::PhosDlyLDen)),
+                                                   (int) std::lround (plain (P::PhosDlyLScale)), bpm) / 1000.0
+                                : (double) plain (P::PhosDlyTime);
+            tail += echoes (t, plain (P::PhosDlyFb));
+        }
+        if (plain (P::PhosRevOn) > 0.5f)
+            tail += 10.0;
+    }
+    else
+    {
+        tail = (mode == EngineMode::Kick ? plain (P::KickDecay) : plain (P::AenvR)) / 1000.0;
+        if (plain (P::DelayOn) > 0.5f)
+        {
+            const double t = plain (P::DelaySync) > 0.5f ? syncDivBeats ((int) std::lround (plain (P::DelayDiv))) * 60.0 / bpm
+                                                         : plain (P::DelayMs) / 1000.0;
+            tail += echoes (t, plain (P::DelayFb));
+        }
+        if (plain (P::ReverbOn) > 0.5f)
+            tail += plain (P::ReverbDecay);
+    }
+    return juce::jlimit (0.1, 60.0, tail);
 }
 
 // ---------------------------------------------------------------------------
@@ -707,7 +868,7 @@ juce::File PsyBoxProcessor::bounceToFile()
     auto st = currentState();
     if (st.geti (P::EngineMode) == (int) EngineMode::Kick)
         st.set (P::ArpOn, 0.f);   // one hit: the WAV is a kick sample
-    const double bpm = lastBpm.load();
+    const double bpm = juce::jmax (20.0, lastBpm.load());
     const int note = lastPlayedNote.load();
 
     // Gate: percussive patches (no sustain) only need attack + decay; sustained
@@ -767,20 +928,25 @@ juce::File PsyBoxProcessor::bounceToFile()
         out.applyGain (juce::Decibels::decibelsToGain (-1.f) / pk);
 
     auto dir = juce::File::getSpecialLocation (juce::File::userMusicDirectory).getChildFile ("PsyBox").getChildFile ("Bounces");
-    dir.createDirectory();
-    const auto noteName = juce::MidiMessage::getMidiNoteName (note, true, true, 4);
+    if (! dir.createDirectory())
+        return {};
+    // Flats: a file name can't hold "#", and C#3 would become C3. Never over
+    // an earlier bounce: a DAW may still play it from there.
+    const auto noteName = juce::MidiMessage::getMidiNoteName (note, false, true, 4);
     const auto base = juce::File::createLegalFileName (presetName.trimCharactersAtEnd ("*") + " " + noteName);
-    auto file = dir.getChildFile (base + ".wav");
-    file.deleteFile();
+    const auto file = dir.getChildFile (base + ".wav").getNonexistentSibling();
 
     juce::WavAudioFormat wav;
     std::unique_ptr<juce::OutputStream> stream (file.createOutputStream());
     if (stream == nullptr)
         return {};
     auto writer = wav.createWriterFor (stream, juce::AudioFormatWriterOptions {}.withSampleRate (fs).withNumChannels (2).withBitsPerSample (24));
-    if (writer == nullptr)
+    if (writer == nullptr || ! writer->writeFromAudioSampleBuffer (out, 0, len))
+    {
+        writer.reset();
+        file.deleteFile();
         return {};
-    writer->writeFromAudioSampleBuffer (out, 0, len);
+    }
     writer.reset();
     return file;
 }
@@ -792,6 +958,8 @@ juce::File PsyBoxProcessor::bounceToFile()
 void PsyBoxProcessor::getStateInformation (juce::MemoryBlock& destData)
 {
     auto state = apvts.copyState();
+    const juce::ScopedLock sl (stateLock);
+    state.setProperty ("stateVersion", kStateVersion, nullptr);
     state.setProperty ("category", (int) category, nullptr);
     state.setProperty ("seed", (int) seed, nullptr);
     state.setProperty ("mutate", mutateAmount, nullptr);
@@ -824,21 +992,27 @@ void PsyBoxProcessor::setStateInformation (const void* data, int sizeInBytes)
             child.setProperty ("value", d.def, nullptr);
             tree.appendChild (child, nullptr);
         }
+    // A host preset or A/B compare can load while notes play: one clean swap.
+    const PatchChange change (*this);
     apvts.replaceState (tree);
-    category = (Category) juce::jlimit (0, kNumCategories - 1, (int) tree.getProperty ("category", 0));
-    seed = (uint32_t) (int) tree.getProperty ("seed", 0);
-    mutateAmount = (float) tree.getProperty ("mutate", 0.25f);
-    arpGeneration = (bool) tree.getProperty ("arpGen", false);
-    kickKeyGeneration = (bool) tree.getProperty ("kickKeyGen", true);
+    {
+        const juce::ScopedLock sl (stateLock);
+        category = (Category) juce::jlimit (0, kNumCategories - 1, (int) tree.getProperty ("category", 0));
+        seed = (uint32_t) (int) tree.getProperty ("seed", 0);
+        setMutateAmount ((float) tree.getProperty ("mutate", 0.25f));
+        arpGeneration = (bool) tree.getProperty ("arpGen", false);
+        kickKeyGeneration = (bool) tree.getProperty ("kickKeyGen", true);
+        presetName = tree.getProperty ("presetName", "Init").toString();
+        presetFile = juce::File();
+        readMacroNames (tree);
+        readSlots (tree);
+        locks.reset();
+        for (const auto& id : juce::StringArray::fromTokens (tree.getProperty ("locks").toString(), ",", ""))
+            if (const int idx = findParam (id.toStdString()); idx >= 0)
+                locks.set ((size_t) idx);
+    }
     normaliseFamily();
-    presetName = tree.getProperty ("presetName", "Init").toString();
-    readMacroNames (tree);
-    readSlots (tree);
     apvts.state.removeChild (apvts.state.getChildWithName ("Slots"), nullptr);
-    locks.reset();
-    for (const auto& id : juce::StringArray::fromTokens (tree.getProperty ("locks").toString(), ",", ""))
-        if (const int idx = findParam (id.toStdString()); idx >= 0)
-            locks.set ((size_t) idx);
     restoreRanges();
     history.clear();
     historyIndex = -1;
@@ -869,20 +1043,31 @@ juce::Array<juce::File> PsyBoxProcessor::listPresets() const
     return files;
 }
 
+juce::File PsyBoxProcessor::presetFileFor (const juce::String& name) const
+{
+    return presetFolder().getChildFile (categoryInfo()[(size_t) category].name)
+                         .getChildFile (juce::File::createLegalFileName (name.trim()) + ".psyp");
+}
+
 bool PsyBoxProcessor::savePreset (const juce::String& name)
 {
     auto state = apvts.copyState();
+    state.setProperty ("stateVersion", kStateVersion, nullptr);
     state.setProperty ("category", (int) category, nullptr);
     state.setProperty ("seed", (int) seed, nullptr);
     writeMacroNames (state);
     auto xml = state.createXml();
     if (xml == nullptr) return false;
-    const auto file = presetFolder().getChildFile (categoryInfo()[(size_t) category].name)
-                                    .getChildFile (juce::File::createLegalFileName (name) + ".psyp");
-    file.getParentDirectory().createDirectory();
+    const auto file = presetFileFor (name);
+    if (file.getFileNameWithoutExtension().isEmpty() || ! file.getParentDirectory().createDirectory())
+        return false;
     if (! xml->writeTo (file))
         return false;
-    presetName = name;
+    {
+        const juce::ScopedLock sl (stateLock);
+        presetName = file.getFileNameWithoutExtension();   // what the preset list shows
+        presetFile = file;
+    }
     sendChangeMessage();
     return true;
 }
@@ -902,14 +1087,17 @@ bool PsyBoxProcessor::loadPreset (const juce::File& file)
         if (idx >= 0)
             s.v[(size_t) idx] = paramDefs()[(size_t) idx].snap ((float) child.getProperty ("value"));
     }
-    s.set (P::MasterVol, plain (P::MasterVol));
     saveSlot();
-    category = (Category) juce::jlimit (0, kNumCategories - 1, (int) tree.getProperty ("category", (int) category));
-    seed = (uint32_t) (int) tree.getProperty ("seed", (int) seed);
-    readMacroNames (tree);
+    {
+        const juce::ScopedLock sl (stateLock);
+        category = (Category) juce::jlimit (0, kNumCategories - 1, (int) tree.getProperty ("category", (int) category));
+        seed = (uint32_t) (int) tree.getProperty ("seed", (int) seed);
+        readMacroNames (tree);
+        presetName = file.getFileNameWithoutExtension();
+        presetFile = file;
+    }
     applyState (s);
     restoreRanges();
-    presetName = file.getFileNameWithoutExtension();
     pushHistory();
     sendChangeMessage();
     return true;
@@ -919,9 +1107,12 @@ void PsyBoxProcessor::stepPreset (int delta)
 {
     const auto files = listPresets();
     if (files.isEmpty()) return;
-    int idx = -1;
-    for (int i = 0; i < files.size(); ++i)
-        if (files[i].getFileNameWithoutExtension() == presetName) { idx = i; break; }
+    // From the preset the patch came from (edited or not); a name alone can
+    // be in two category folders.
+    int idx = files.indexOf (presetFile);
+    if (idx < 0)
+        for (int i = 0; i < files.size(); ++i)
+            if (files[i].getFileNameWithoutExtension() == presetName.trimCharactersAtEnd ("*")) { idx = i; break; }
     idx = idx < 0 ? (delta > 0 ? 0 : files.size() - 1) : (idx + delta + files.size()) % files.size();
     loadPreset (files[idx]);
 }

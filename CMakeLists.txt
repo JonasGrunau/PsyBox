@@ -125,6 +125,7 @@ if(PSYBOX_BUILD_PLUGIN)
     juce_add_console_app(psybox_snapshot PRODUCT_NAME "psybox_snapshot")
     target_sources(psybox_snapshot PRIVATE
         tools/Snapshot.cpp
+        tools/ProcessorTest.cpp
         src/plugin/PluginProcessor.cpp
         src/plugin/PluginEditor.cpp
         src/ui/Theme.cpp
@@ -167,7 +168,8 @@ if(PSYBOX_BUILD_TESTS)
         tests/TestArp.cpp
         tests/TestKick.cpp
         tests/TestLoudness.cpp
-        tests/TestPhoscyon.cpp)
+        tests/TestPhoscyon.cpp
+        tests/TestParams.cpp)
     target_link_libraries(psybox_tests PRIVATE psybox_core Catch2::Catch2WithMain)
 
     add_executable(psybox_render tools/RenderCategories.cpp)

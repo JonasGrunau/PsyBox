@@ -1,6 +1,7 @@
 #include "Params.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdio>
 
@@ -357,6 +358,97 @@ std::string ParamDef::format (float p) const
         case Unit::Meter:   std::snprintf (buf, sizeof buf, "%.1f m", p); break;
     }
     return buf;
+}
+
+namespace
+{
+    std::string lower (std::string_view s)
+    {
+        std::string out;
+        for (const char c : s)
+            if (c != ' ' && c != '\t')
+                out += (char) std::tolower ((unsigned char) c);
+        return out;
+    }
+
+    // A decimal number at the start of s (a comma counts as the decimal point;
+    // no locale), and where it ends. strtod would follow the host's locale.
+    bool leadingNumber (std::string_view s, double& value, size_t& end)
+    {
+        size_t i = 0;
+        while (i < s.size() && (s[i] == ' ' || s[i] == '\t')) ++i;
+        const bool negative = i < s.size() && s[i] == '-';
+        if (i < s.size() && (s[i] == '-' || s[i] == '+')) ++i;
+        double v = 0.0, scale = 1.0;
+        bool digits = false, point = false;
+        for (; i < s.size(); ++i)
+        {
+            const char c = s[i];
+            if (c >= '0' && c <= '9')
+            {
+                digits = true;
+                if (point) { scale *= 0.1; v += (c - '0') * scale; }
+                else v = v * 10.0 + (c - '0');
+            }
+            else if ((c == '.' || c == ',') && ! point) point = true;
+            else break;
+        }
+        if (! digits) return false;
+        if (i + 1 < s.size() && (s[i] == 'e' || s[i] == 'E') && (std::isdigit ((unsigned char) s[i + 1]) || s[i + 1] == '-' || s[i + 1] == '+'))
+        {
+            size_t j = i + 1;
+            const bool negExp = s[j] == '-';
+            if (s[j] == '-' || s[j] == '+') ++j;
+            int e = 0;
+            bool expDigits = false;
+            for (; j < s.size() && std::isdigit ((unsigned char) s[j]); ++j) { e = std::min (e * 10 + (s[j] - '0'), 400); expDigits = true; }
+            if (expDigits) { v *= std::pow (10.0, negExp ? -e : e); i = j; }
+        }
+        value = negative ? -v : v;
+        end = i;
+        return true;
+    }
+
+    bool startsWith (const std::string& s, std::string_view prefix) { return s.compare (0, prefix.size(), prefix) == 0; }
+} // namespace
+
+float ParamDef::parse (std::string_view text) const
+{
+    const auto t = lower (text);
+    if (mapping == Mapping::Choice)
+    {
+        for (int i = 0; i < numChoices(); ++i)
+            if (lower ((*choices)[(size_t) i]) == t)
+                return (float) i;
+    }
+    if (mapping == Mapping::Toggle)
+    {
+        if (t == "on" || t == "true" || t == "yes") return 1.f;
+        if (t == "off" || t == "false" || t == "no") return 0.f;
+    }
+
+    double v = 0.0;
+    size_t end = 0;
+    if (! leadingNumber (text, v, end))
+        return snap (def);
+    const auto suffix = lower (text.substr (end));
+    switch (unit)
+    {
+        case Unit::Percent:    v *= 0.01; break;
+        case Unit::Hz:         if (startsWith (suffix, "k")) v *= 1000.0; break;
+        case Unit::Ms:         if (startsWith (suffix, "s")) v *= 1000.0; break;
+        case Unit::Sec:        if (startsWith (suffix, "ms")) v *= 0.001; break;
+        case Unit::NanoFarad:
+            if (startsWith (suffix, "mf")) v *= 1.0e6;
+            else if (startsWith (suffix, "uf") || startsWith (suffix, "\xc2\xb5" "f")) v *= 1000.0;
+            else if (startsWith (suffix, "pf")) v *= 0.001;
+            break;
+        case Unit::OctPerVolt: v -= 1.0; break;
+        case Unit::None: case Unit::Semi: case Unit::Cents: case Unit::Db: case Unit::Octaves: case Unit::Ratio:
+        case Unit::RatioTo1: case Unit::Int: case Unit::Mv: case Unit::Volt: case Unit::Meter:
+            break;
+    }
+    return snap ((float) v);
 }
 
 const std::array<ParamDef, kNumParams>& paramDefs() noexcept

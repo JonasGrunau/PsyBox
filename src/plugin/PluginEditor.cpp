@@ -113,8 +113,9 @@ PsyBoxEditor::PsyBoxEditor (PsyBoxProcessor& p)
       withKeyboard (forceKeyboard || p.wrapperType == juce::AudioProcessor::wrapperType_Standalone),
       keyboard (p.keyboardState, juce::MidiKeyboardComponent::horizontalKeyboard)
 {
-    juce::LookAndFeel::setDefaultLookAndFeel (&lnf);
-    setLookAndFeel (&lnf);
+    ++openEditors;
+    juce::LookAndFeel::setDefaultLookAndFeel (&lnf.get());
+    setLookAndFeel (&lnf.get());
     addAndMakeVisible (root);
     root.setBounds (0, 0, kW, kH);
 
@@ -171,10 +172,12 @@ void PsyBoxEditor::paint (juce::Graphics& g)
 
 PsyBoxEditor::~PsyBoxEditor()
 {
-    proc.keyboardState.allNotesOff (0);
+    if (withKeyboard)
+        proc.keyboardState.allNotesOff (0);   // the on-screen keys let go; notes the host holds play on
     proc.removeChangeListener (this);
     setLookAndFeel (nullptr);
-    juce::LookAndFeel::setDefaultLookAndFeel (nullptr);
+    if (--openEditors == 0)
+        juce::LookAndFeel::setDefaultLookAndFeel (nullptr);
 }
 
 void PsyBoxEditor::resized()

@@ -6,11 +6,14 @@
 // PSYSNAP_VIEW=n opens view n (0 Osc/Kick, 1 FX, 2 Matrix, 3 Arp, 4 Global).
 // PSYSNAP_MODTAB=n opens page n of the modulators (0 Amp Env ... 6 LFO 3).
 // PSYSNAP_DRAG=1 shows the knobs as they look while a mod source is dragged.
-// PSYSNAP_DROP="7:oscA_level,15:delay_mix" drops mod source 7 (LFO 2) and 15
+// PSYSNAP_DROP="7:oscA_level,15:delay_mix" drops mod source 7 (LFO 3) and 15
 // (Macro 2) on those knobs, through the knobs' own drop handling.
-// PSYSNAP_DNDTEST=1 opens the editor in a window and drives the mouse through
-// JUCE (no OS events): drags LFO 2 onto Osc A's level, then the new ring
-// upwards, and prints PASS/FAIL for each step.
+// PSYSNAP_DNDTEST=1 drives the editor through JUCE without a window (no OS
+// events): drags LFO 2 onto Osc A's level, then the new ring upwards, then the
+// FX chain, and prints PASS/FAIL for each step (plus the macro names).
+// PSYSNAP_PLUGINTEST=1 runs the processor checks in ProcessorTest.cpp (no
+// editor) and exits 1 on a failure.
+// PSYSNAP_KEYS=1 renders the standalone's keyboard strip under the panels.
 // PSYSNAP_ARP=1 generates with an arp.
 // PSYSNAP_PARAMS="comp_on=1,comp_mode=0" sets plain parameter values after Generate.
 // PSYSNAP_UNISON=1 opens Osc A's unison settings (the gear), =2 holds Osc A's
@@ -32,6 +35,8 @@
 #include <chrono>
 #include <thread>
 #include <typeinfo>
+
+int runProcessorTests();   // ProcessorTest.cpp: PSYSNAP_PLUGINTEST=1
 
 static void selectTabs (juce::Component& c, int tab)
 {
@@ -83,9 +88,6 @@ static T* findChild (juce::Component& c, std::function<bool (T&)> match)
     return nullptr;
 }
 
-// Drives the knob the way a drop and a ring drag do, with synthetic mouse
-// events sent to the components (no window: macOS won't show one for a
-// console tool, and JUCE's drag container itself is stock).
 static int runSwapTest (PsyBoxProcessor& proc, psy::Category c, const char* path)
 {
     constexpr int block = 256, rate = 48000;
@@ -118,10 +120,13 @@ static int runSwapTest (PsyBoxProcessor& proc, psy::Category c, const char* path
         proc.generate();
     }
     audio.join();
-    juce::File (path).replaceWithData (out.data(), out.size() * sizeof (float));
+    juce::File::getCurrentWorkingDirectory().getChildFile (path).replaceWithData (out.data(), out.size() * sizeof (float));
     return 0;
 }
 
+// Drives the knob the way a drop and a ring drag do, with synthetic mouse
+// events sent to the components (no window: macOS won't show one for a
+// console tool, and JUCE's drag container itself is stock).
 static int runDragAndDropTest (PsyBoxProcessor& proc, juce::AudioProcessorEditor& editor)
 {
     int failures = 0;
@@ -202,7 +207,7 @@ static int runDragAndDropTest (PsyBoxProcessor& proc, juce::AudioProcessorEditor
 int main (int argc, char** argv)
 {
     juce::ScopedJuceInitialiser_GUI gui;
-    const juce::File outDir (argc > 1 ? juce::String (argv[1]) : juce::File::getCurrentWorkingDirectory().getFullPathName());
+    const auto outDir = juce::File::getCurrentWorkingDirectory().getChildFile (argc > 1 ? juce::String (argv[1]) : juce::String());
     outDir.createDirectory();
 
     std::vector<int> cats;
@@ -210,6 +215,8 @@ int main (int argc, char** argv)
     if (cats.empty()) cats = { 0 };
 
     PsyBoxEditor::forceKeyboard = std::getenv ("PSYSNAP_KEYS") != nullptr;
+    if (std::getenv ("PSYSNAP_PLUGINTEST") != nullptr)
+        return runProcessorTests();
     PsyBoxProcessor proc;
     if (auto* swapOut = std::getenv ("PSYSNAP_SWAPTEST"))
         return runSwapTest (proc, (psy::Category) juce::jlimit (0, psy::kNumCategories - 1, cats[0]), swapOut);

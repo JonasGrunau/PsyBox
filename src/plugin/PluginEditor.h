@@ -71,7 +71,10 @@ private:
     };
 
     PsyBoxProcessor& proc;
-    PsyLookAndFeel lnf;
+    // One look for every open PsyBox, also the default (popup menus, alerts):
+    // closing one window must not take it from the others.
+    juce::SharedResourcePointer<PsyLookAndFeel> lnf;
+    static inline int openEditors = 0;
     Root root;
     const bool withKeyboard;
     Keys keyboard;

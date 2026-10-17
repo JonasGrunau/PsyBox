@@ -49,6 +49,10 @@ struct ParamDef
     float toNorm (float plain) const noexcept;
     float snap (float plain) const noexcept;  // rounds Choice/Toggle/Int
     std::string format (float plain) const;
+    // The inverse of format: a value typed in the units format prints ("1.20 kHz",
+    // "50%", "2.00 s", a choice's name), snapped into range. Text without a
+    // number gives the default.
+    float parse (std::string_view text) const;
     int numChoices() const noexcept { return choices ? (int) choices->size() : 0; }
     bool isDiscrete() const noexcept { return mapping == Mapping::Choice || mapping == Mapping::Toggle || unit == Unit::Int; }
 };
