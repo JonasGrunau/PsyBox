@@ -1,12 +1,20 @@
 cmake_minimum_required(VERSION 3.24)
 
+# Before project(): on Apple platforms project() creates an empty cache entry
+# for the deployment target, and a set(... CACHE ...) after it never applies,
+# so the plugin only loaded on the macOS it was built on (releases said minos
+# 26.0). FORCE also fills that empty entry in existing build dirs; an explicit
+# -DCMAKE_OSX_DEPLOYMENT_TARGET still wins. Check: otool -l <binary> | grep minos
+if(NOT CMAKE_OSX_DEPLOYMENT_TARGET)
+    set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "Minimum macOS version" FORCE)
+endif()
+
 # Release builds pass the tag's version, e.g. -DPSYBOX_VERSION=1.2.0.
 set(PSYBOX_VERSION "0.1.0" CACHE STRING "Plugin version, MAJOR.MINOR.PATCH")
 project(PsyBox VERSION ${PSYBOX_VERSION} LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "")
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 # Static MSVC runtime, so the Windows plugin doesn't need the VC++ redistributable.
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
