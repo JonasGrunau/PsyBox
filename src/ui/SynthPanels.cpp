@@ -1,5 +1,7 @@
 #include "SynthPanels.h"
 
+#include "PhosPanels.h"
+
 #include "dsp/Unison.h"
 
 using namespace theme;
@@ -342,10 +344,11 @@ void FilterPanel::resized()
 // ---------------------------------------------------------------------------
 // ModPanel
 // ---------------------------------------------------------------------------
-ModPanel::ModPanel (PsyBoxProcessor& p) : Section ("Modulation"), proc (p), envDisplay (p), pitchDisplay (p), lfoDisplay (p)
+ModPanel::ModPanel (PsyBoxProcessor& p, bool phoscyon)
+    : Section ("Modulation"), proc (p), envDisplay (p), pitchDisplay (p), lfoDisplay (p), phos (phoscyon)
 {
     using S = psy::ModSrc;
-    const std::pair<S, const char*> tabList[kNumPages] = { { S::AmpEnv, "Amp Env" }, { S::FilterEnv, "Env 1" },
+    const std::pair<S, const char*> tabList[kNumPages] = { { S::AmpEnv, phos ? "VCA" : "Amp Env" }, { S::FilterEnv, phos ? "MEG" : "Env 1" },
                                                            { S::ModEnv, "Env 2" }, { S::PitchEnv, "Env 3" },
                                                            { S::Lfo1, "LFO 1" }, { S::Lfo2, "LFO 2" }, { S::Lfo3, "LFO 3" } };
     for (int i = 0; i < kNumPages; ++i)
@@ -354,9 +357,12 @@ ModPanel::ModPanel (PsyBoxProcessor& p) : Section ("Modulation"), proc (p), envD
         t->setTab (true);
         static const char* const also[kNumPages] = { "", " (it also drives the filters' Env knobs)", "",
                                                      " (it also bends the pitch by its Amount)", "", "", "" };
-        t->setTooltip ("Click to edit " + juce::String (tabList[i].second) + also[i] + ", drag onto a knob to modulate it");
+        static const char* const alsoPhos[kNumPages] = { " (the 303's amp envelope)", " (the 303's filter envelope)", "", "", "", "", "" };
+        t->setTooltip ("Click to edit " + juce::String (tabList[i].second) + (phos ? alsoPhos[i] : also[i])
+                       + ", drag onto a knob to modulate it");
         t->onClick = [this, i] { show (i); };
-        addAndMakeVisible (*t);
+        if (phos && i == PitchEnv) addChildComponent (*t);   // the 303 has no pitch envelope
+        else addAndMakeVisible (*t);
         tabs.push_back (std::move (t));
     }
     const std::pair<S, const char*> more[] = { { S::Velocity, "Velocity" }, { S::Note, "Note" }, { S::ModWheel, "Mod Wheel" },
@@ -375,19 +381,41 @@ ModPanel::ModPanel (PsyBoxProcessor& p) : Section ("Modulation"), proc (p), envD
     static const P envIds[3][4] = { { P::AenvA, P::AenvD, P::AenvS, P::AenvR },
                                     { P::FenvA, P::FenvD, P::FenvS, P::FenvR },
                                     { P::MenvA, P::MenvD, P::MenvS, P::MenvR } };
-    for (int e = 0; e < 3; ++e)
+    if (phos)
+    {
+        // the 303's envelopes have no ADSR: the knobs that shape them instead
+        vcaDisplay = std::make_unique<PhosEnvDisplay> (p, true);
+        megDisplay = std::make_unique<PhosEnvDisplay> (p, false);
+        addChildComponent (*vcaDisplay);
+        addChildComponent (*megDisplay);
+        pages[AmpEnv].push_back (ks.add (*this, p, P::PhosAccent, "Accent"));
+        pages[AmpEnv].push_back (ks.add (*this, p, P::PhosAccVolume, "Acc. Vol."));
+        pages[FilterEnv].push_back (ks.add (*this, p, P::PhosEnvMod, "Envmod"));
+        pages[FilterEnv].push_back (ks.add (*this, p, P::PhosDecay, "Decay"));
+        pages[FilterEnv].push_back (ks.add (*this, p, P::PhosEnvAttack, "Env. Attack"));
+        pages[FilterEnv].push_back (ks.add (*this, p, P::PhosAccDecay, "Acc. Decay"));
         for (int i = 0; i < 4; ++i)
-            pages[(size_t) e].push_back (ks.add (*this, p, envIds[e][i]));
-    pages[AmpEnv].push_back (ks.add (*this, p, P::AenvCurve));   // the attack's bend: RC charge to swell
-    pages[AmpEnv].push_back (ks.add (*this, p, P::AenvStart));   // the level the attack starts from
+            pages[ModEnv].push_back (ks.add (*this, p, envIds[2][i]));
+    }
+    else
+    {
+        for (int e = 0; e < 3; ++e)
+            for (int i = 0; i < 4; ++i)
+                pages[(size_t) e].push_back (ks.add (*this, p, envIds[e][i]));
+        pages[AmpEnv].push_back (ks.add (*this, p, P::AenvCurve));   // the attack's bend: RC charge to swell
+        pages[AmpEnv].push_back (ks.add (*this, p, P::AenvStart));   // the level the attack starts from
+    }
 
-    for (auto [prm, name] : { std::pair { P::PenvAmt, "Amount" }, std::pair { P::PenvAttack, "Attack" },
-                              std::pair { P::PenvDecay, "Decay" }, std::pair { P::PenvCurve, "Curve" } })
-        pages[PitchEnv].push_back (ks.add (*this, p, prm, name));
-    auto dest = std::make_unique<ParamCombo> (p, P::PenvDest, "Target");
-    addAndMakeVisible (*dest);
-    pages[PitchEnv].push_back (dest.get());
-    owned.push_back (std::move (dest));
+    if (! phos)
+    {
+        for (auto [prm, name] : { std::pair { P::PenvAmt, "Amount" }, std::pair { P::PenvAttack, "Attack" },
+                                  std::pair { P::PenvDecay, "Decay" }, std::pair { P::PenvCurve, "Curve" } })
+            pages[PitchEnv].push_back (ks.add (*this, p, prm, name));
+        auto dest = std::make_unique<ParamCombo> (p, P::PenvDest, "Target");
+        addAndMakeVisible (*dest);
+        pages[PitchEnv].push_back (dest.get());
+        owned.push_back (std::move (dest));
+    }
 
     for (int i = 0; i < 3; ++i)
     {
@@ -426,7 +454,12 @@ void ModPanel::show (int page)
         for (auto* c : pages[(size_t) i]) c->setVisible (i == page);
     }
     if (page <= ModEnv) envDisplay.setEnvelope (page);
-    envDisplay.setVisible (page <= ModEnv);
+    envDisplay.setVisible (phos ? page == ModEnv : page <= ModEnv);
+    if (phos)
+    {
+        vcaDisplay->setVisible (page == AmpEnv);
+        megDisplay->setVisible (page == FilterEnv);
+    }
     pitchDisplay.setVisible (page == PitchEnv);
     lfoDisplay.setVisible (page >= Lfo1);
     if (page >= Lfo1)
@@ -476,6 +509,7 @@ void ModPanel::resized()
     int x = h.getX();
     for (auto& t : tabs)
     {
+        if (phos && t.get() == tabs[PitchEnv].get()) continue;
         const int w = t->idealWidth();
         t->setBounds (x, h.getY(), w, h.getHeight());
         x += w + sp::lg;
@@ -489,14 +523,22 @@ void ModPanel::resized()
     envDisplay.setBounds (disp);
     pitchDisplay.setBounds (disp);
     lfoDisplay.setBounds (disp);
+    if (phos)
+    {
+        vcaDisplay->setBounds (disp);
+        megDisplay->setBounds (disp);
+    }
 
     captions.clear();
     for (int e = 0; e <= ModEnv; ++e)
         for (size_t i = 0; i < pages[(size_t) e].size(); ++i)   // ADSR, and the amp's Curve
             pages[(size_t) e][i]->setBounds (gr.cell ((int) i, 0));
-    for (int i = 0; i < 4; ++i)
-        pages[PitchEnv][(size_t) i]->setBounds (gr.cell (i, 0));
-    pages[PitchEnv][4]->setBounds (gr.captioned (4, 0, 2));
+    if (! phos)
+    {
+        for (int i = 0; i < 4; ++i)
+            pages[PitchEnv][(size_t) i]->setBounds (gr.cell (i, 0));
+        pages[PitchEnv][4]->setBounds (gr.captioned (4, 0, 2));
+    }
     for (int l = 0; l < 3; ++l)
     {
         auto& pg = pages[(size_t) (Lfo1 + l)];

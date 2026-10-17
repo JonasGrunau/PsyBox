@@ -24,10 +24,14 @@ enum class Mapping : uint8_t
     Exp,      // min * (max / min)^n                  (frequencies)
     BiPower,  // max * sign(2n-1) * |2n-1|^skew       (bipolar, fine near 0)
     Choice,   // integer index into a choice list
-    Toggle    // 0 / 1
+    Toggle,   // 0 / 1
+    Inverse   // min / n, at most max                 (a capacitor whose 1/C the knob turns)
 };
 
-enum class Unit : uint8_t { None, Percent, Hz, Ms, Sec, Semi, Cents, Db, Octaves, Ratio, RatioTo1, Int };
+// Mv, Volt, NanoFarad, OctPerVolt and Meter label the Phoscyon engine's
+// calibration trims and reverb sizes. OctPerVolt shows 1 + the value.
+enum class Unit : uint8_t { None, Percent, Hz, Ms, Sec, Semi, Cents, Db, Octaves, Ratio, RatioTo1, Int,
+                            Mv, Volt, NanoFarad, OctPerVolt, Meter };
 
 struct ParamDef
 {
@@ -55,7 +59,8 @@ namespace choices
     extern const std::vector<std::string> voiceMode, glideMode, quality, oscType, wavetable,
         subOct, subShape, noiseType, penvDest, filterType, filterRouting, lfoShape, syncDiv,
         modSrc, modDst, distType, chorusMode, compMode, arpMode, engineMode, kickClick, kickDrive,
-        energyMode, energyBars, uniMode, uniStack, arpKey, arpScale;
+        energyMode, energyBars, uniMode, uniStack, arpKey, arpScale,
+        phosWave, phosDistModel, phosDistOrder, phosDelayFilter, phosDelayScale;
 }
 
 // Sync divisions expressed in beats (quarter notes), index-aligned with choices::syncDiv.
@@ -82,8 +87,9 @@ enum class LfoShape : int { Sine, Triangle, SawUp, SawDown, Square, SampleHold, 
 enum class DistType : int { Soft, Hard, Fold, Tube, Rectify };
 enum class CompMode : int { Normal, Multiband };
 enum class ArpMode : int { Up, Down, UpDown, Random, Order };
-// A patch is a synth sound or a kick; the category decides, never the recipe.
-enum class EngineMode : int { Synth, Kick };
+// A patch is a synth sound, a kick or a Phoscyon (TB-303) line; the category
+// decides, never the recipe.
+enum class EngineMode : int { Synth, Kick, Phoscyon };
 enum class EnergyMode : int { Bars, Time };
 enum class KickClick : int { Noise, Tick, Blip };
 enum class KickDrive : int { Soft, Tube, Hard };
@@ -108,6 +114,10 @@ enum class ModDst : int
     // free LFOs) drive them directly; per-voice sources follow the newest note.
     DistDrive, DistMix, CrushMix, ShiftHz, ShiftMix, PhaserMix, ChorusMix,
     DelayFb, DelayMix, ReverbSize, ReverbMix, WidthAmount,
+    // The Phoscyon engine's knobs, then its effects (appended: saved
+    // patches store the index).
+    PhosCutoff, PhosReso, PhosEnvMod, PhosDecay, PhosAccent, PhosTune,
+    PhosDistDrive, PhosDistColor, PhosChorusMix, PhosDelayFb, PhosDelayMix, PhosReverbMix,
     Count
 };
 
@@ -343,7 +353,7 @@ enum class ModDst : int
     PSY_ARP_STEP (X, 9)  PSY_ARP_STEP (X, 10) PSY_ARP_STEP (X, 11) PSY_ARP_STEP (X, 12) \
     PSY_ARP_STEP (X, 13) PSY_ARP_STEP (X, 14) PSY_ARP_STEP (X, 15) PSY_ARP_STEP (X, 16) \
     \
-    X(EngineMode,  "engine_mode",  "Engine",      "Engine", Choice, 0, 1, 0, 1.f, None, &choices::engineMode, false) \
+    X(EngineMode,  "engine_mode",  "Engine",      "Engine", Choice, 0, 2, 0, 1.f, None, &choices::engineMode, false) \
     \
     X(KickTune,    "kick_tune",    "Tune",        "Kick Pitch", Exp, 30.f, 90.f, 44.f, 1.f, Hz, nullptr, false) \
     X(KickKeyTrack,"kick_keytrack","Key Track",   "Kick Pitch", Toggle, 0, 1, 1, 1.f, None, nullptr, false) \
@@ -364,12 +374,107 @@ enum class ModDst : int
     X(KickDrive,   "kick_drive",   "Drive",       "Kick Drive", Linear, -30.f, 30.f, -27.f, 1.f, Db, nullptr, false) \
     X(KickTone,    "kick_tone",    "Tone",        "Kick Drive", Exp, 200.f, 20000.f, 20000.f, 1.f, Hz, nullptr, false) \
     \
+    PSY_PHOS_PARAMS (X) \
+    \
     X(RenderQuality, "render_quality", "Quality", "Render", Choice, 0, 2, 2, 1.f, None, &choices::quality, false)
+
+// The Phoscyon engine (EngineMode::Phoscyon): a TB-303 voice with its
+// calibration trims, and the effects that replace ours in its chain. Knobs
+// keep the original's ranges and units.
+#define PSY_PHOS_PARAMS(X) \
+    X(PhosWave,      "phos_wave",       "Wave",        "Phoscyon", Choice, 0, 1, 0, 1.f, None, &choices::phosWave, false) \
+    X(PhosTune,      "phos_tune",       "Tuning",      "Phoscyon", Linear, -12.f, 12.f, 0.f, 1.f, Semi, nullptr, true) \
+    X(PhosCutoff,    "phos_cutoff",     "Cut Off",     "Phoscyon", Linear, 0.f, 1.f, 0.34f, 1.f, Percent, nullptr, true) \
+    X(PhosReso,      "phos_reso",       "Resonance",   "Phoscyon", Linear, 0.f, 1.f, 0.904f, 1.f, Percent, nullptr, true) \
+    X(PhosEnvMod,    "phos_envmod",     "Envmod",      "Phoscyon", Linear, 0.f, 1.f, 0.32f, 1.f, Percent, nullptr, true) \
+    X(PhosDecay,     "phos_decay",      "Decay",       "Phoscyon", Linear, 0.f, 1.f, 0.664f, 1.f, Percent, nullptr, true) \
+    X(PhosAccent,    "phos_accent",     "Accent",      "Phoscyon", Linear, 0.f, 1.f, 1.f, 1.f, Percent, nullptr, true) \
+    X(PhosSlide,     "phos_slide",      "Slide Time",  "Phoscyon", Linear, 0.f, 1.f, 0.5f, 1.f, Percent, nullptr, false) \
+    X(PhosSweep,     "phos_sweep",      "Sweep Amt.",  "Phoscyon", Linear, 0.f, 1.f, 1.f, 1.f, Percent, nullptr, false) \
+    X(PhosEnvAttack, "phos_env_attack", "Env. Attack", "Phoscyon", Linear, 0.f, 1.f, 0.f, 1.f, Percent, nullptr, false) \
+    X(PhosAccDecay,  "phos_acc_decay",  "Acc. Decay",  "Phoscyon", Linear, 0.f, 1.f, 0.f, 1.f, Percent, nullptr, false) \
+    X(PhosAccVolume, "phos_acc_vol",    "Acc. Vol.",   "Phoscyon", Linear, 0.f, 1.f, 1.f, 1.f, Percent, nullptr, false) \
+    X(PhosVibSpeed,  "phos_vib_speed",  "Vib. Speed",  "Phoscyon", Linear, 0.f, 1.f, 0.5f, 1.f, Percent, nullptr, false) \
+    X(PhosVibDepth,  "phos_vib_depth",  "Vib. Depth",  "Phoscyon", Linear, 0.f, 1.f, 0.5f, 1.f, Percent, nullptr, false) \
+    X(PhosResoCouple,"phos_reso_couple","Reso / Sweep Couple", "Phoscyon", Toggle, 0, 1, 1, 1.f, None, nullptr, false) \
+    X(PhosAccCouple, "phos_acc_couple", "Acc. / Volume Couple", "Phoscyon", Toggle, 0, 1, 1, 1.f, None, nullptr, false) \
+    X(PhosTm3,       "phos_tm3",        "TM3 Cutoff Tuning",    "Phoscyon Calibration", Linear, -500.f, 500.f, 0.f, 1.f, Mv, nullptr, false) \
+    X(PhosC21,       "phos_c21",        "C21/C22 DC Filter",    "Phoscyon Calibration", Exp, 7.9f, 42.5f, 15.9f, 1.f, NanoFarad, nullptr, false) \
+    X(PhosAccFEnv,   "phos_acc_fenv",   "Accent Filter Env",    "Phoscyon Calibration", Linear, 0.f, 4000.f, 1951.f, 1.f, Mv, nullptr, false) \
+    X(PhosAccAEnv,   "phos_acc_aenv",   "Accent Amp Env",       "Phoscyon Calibration", Linear, 0.f, 3.5f, 1.0984f, 1.f, Volt, nullptr, false) \
+    X(PhosC13,       "phos_c13",        "C13 Accent Capacitor", "Phoscyon Calibration", Inverse, 457.f, 1638000.f, 926.f, 1.f, NanoFarad, nullptr, false) \
+    X(PhosTm5,       "phos_tm5",        "TM5 Octave Width",     "Phoscyon Calibration", BiPower, -0.1f, 0.1f, 0.f, 2.f, OctPerVolt, nullptr, false) \
+    X(PhosPwShift,   "phos_pw_shift",   "Square PW Shift",      "Phoscyon Calibration", Linear, -1.f, 1.f, 0.f, 1.f, Percent, nullptr, false) \
+    X(PhosClicks,    "phos_clicks",     "BA662 Clicks",         "Phoscyon Calibration", Toggle, 0, 1, 0, 1.f, None, nullptr, false) \
+    X(PhosNoise,     "phos_noise",      "BA662 Noise",          "Phoscyon Calibration", Linear, 0.f, 1.f, 0.f, 1.f, Percent, nullptr, false) \
+    X(PhosDistOn,    "phos_dist_on",    "On",          "Phoscyon Distortion", Toggle, 0, 1, 1, 1.f, None, nullptr, false) \
+    X(PhosDistModel, "phos_dist_model", "Model",       "Phoscyon Distortion", Choice, 0, 18, 6, 1.f, None, &choices::phosDistModel, false) \
+    X(PhosDistDyn,   "phos_dist_dyn",   "Dynamics",    "Phoscyon Distortion", Linear, 0.f, 1.f, 1.f, 1.f, Percent, nullptr, false) \
+    X(PhosDistOrder, "phos_dist_order", "Order",       "Phoscyon Distortion", Choice, 0, 1, 0, 1.f, None, &choices::phosDistOrder, false) \
+    X(PhosDistDrive, "phos_dist_drive", "Drive",       "Phoscyon Distortion", Linear, 0.f, 1.f, 0.f, 1.f, Percent, nullptr, false) \
+    X(PhosDistColor, "phos_dist_color", "Color",       "Phoscyon Distortion", Linear, -1.f, 1.f, 0.f, 1.f, Percent, nullptr, false) \
+    PSY_PHOS_EQ_BAND (X, Low, "low", "Low", 100.f, 2.f) \
+    PSY_PHOS_EQ_BAND (X, MidLow, "midlow", "Mid-Low", 550.f, 1.5f) \
+    PSY_PHOS_EQ_BAND (X, MidHigh, "midhigh", "Mid-High", 3500.f, 2.63f) \
+    PSY_PHOS_EQ_BAND (X, High, "high", "High", 10000.f, 3.53f) \
+    X(PhosEqOn,      "phos_eq_on",      "On",          "Phoscyon EQ", Toggle, 0, 1, 0, 1.f, None, nullptr, false) \
+    X(PhosDlyOn,     "phos_dly_on",     "On",          "Phoscyon Delay", Toggle, 0, 1, 0, 1.f, None, nullptr, false) \
+    X(PhosDlyFb,     "phos_dly_fb",     "Feedback",    "Phoscyon Delay", Linear, 0.f, 1.f, 0.132f, 1.f, Percent, nullptr, false) \
+    X(PhosDlyCut,    "phos_dly_cut",    "FB Cutoff",   "Phoscyon Delay", Linear, 10.f, 16000.f, 16000.f, 1.f, Hz, nullptr, false) \
+    X(PhosDlyReso,   "phos_dly_reso",   "FB Reso",     "Phoscyon Delay", Linear, 0.f, 1.f, 0.f, 1.f, Percent, nullptr, false) \
+    X(PhosDlyFilter, "phos_dly_filter", "FB Filter",   "Phoscyon Delay", Choice, 0, 3, 0, 1.f, None, &choices::phosDelayFilter, false) \
+    X(PhosDlySpread, "phos_dly_spread", "Spread",      "Phoscyon Delay", Linear, -1.f, 1.f, 0.f, 1.f, Percent, nullptr, false) \
+    X(PhosDlyTime,   "phos_dly_time",   "Time",        "Phoscyon Delay", Linear, 0.01f, 1.f, 0.22f, 1.f, Sec, nullptr, false) \
+    X(PhosDlySync,   "phos_dly_sync",   "Sync",        "Phoscyon Delay", Toggle, 0, 1, 1, 1.f, None, nullptr, false) \
+    X(PhosDlyLScale, "phos_dly_lscale", "L Scale",     "Phoscyon Delay", Choice, 0, 2, 0, 1.f, None, &choices::phosDelayScale, false) \
+    X(PhosDlyLNum,   "phos_dly_lnum",   "L Steps",     "Phoscyon Delay", Linear, 1, 32, 3, 1.f, Int, nullptr, false) \
+    X(PhosDlyLDen,   "phos_dly_lden",   "L Division",  "Phoscyon Delay", Linear, 1, 32, 16, 1.f, Int, nullptr, false) \
+    X(PhosDlyRScale, "phos_dly_rscale", "R Scale",     "Phoscyon Delay", Choice, 0, 2, 0, 1.f, None, &choices::phosDelayScale, false) \
+    X(PhosDlyRNum,   "phos_dly_rnum",   "R Steps",     "Phoscyon Delay", Linear, 1, 32, 3, 1.f, Int, nullptr, false) \
+    X(PhosDlyRDen,   "phos_dly_rden",   "R Division",  "Phoscyon Delay", Linear, 1, 32, 16, 1.f, Int, nullptr, false) \
+    X(PhosDlyMix,    "phos_dly_mix",    "Mix",         "Phoscyon Delay", Linear, 0.f, 1.f, 0.304f, 1.f, Percent, nullptr, false) \
+    X(PhosRevOn,     "phos_rev_on",     "On",          "Phoscyon Reverb", Toggle, 0, 1, 0, 1.f, None, nullptr, false) \
+    X(PhosRevPre,    "phos_rev_pre",    "Predelay",    "Phoscyon Reverb", Linear, 0.f, 1000.f, 116.f, 1.f, Ms, nullptr, false) \
+    X(PhosRevESize,  "phos_rev_esize",  "Early Size",  "Phoscyon Reverb", Linear, 1.1f, 20.5f, 1.1f, 1.f, Meter, nullptr, false) \
+    X(PhosRevEDiff,  "phos_rev_ediff",  "Early Diffusion", "Phoscyon Reverb", Linear, 0.f, 1.f, 0.42f, 1.f, Percent, nullptr, false) \
+    X(PhosRevLSize,  "phos_rev_lsize",  "Late Size",   "Phoscyon Reverb", Linear, 5.1f, 51.1f, 5.1f, 1.f, Meter, nullptr, false) \
+    X(PhosRevLDiff,  "phos_rev_ldiff",  "Late Diffusion", "Phoscyon Reverb", Linear, 0.f, 1.f, 0.45f, 1.f, Percent, nullptr, false) \
+    X(PhosRevFb,     "phos_rev_fb",     "Feedback",    "Phoscyon Reverb", Linear, 0.f, 1.f, 0.5f, 1.f, Percent, nullptr, false) \
+    X(PhosRevBlend,  "phos_rev_blend",  "Early/Late",  "Phoscyon Reverb", Linear, 0.f, 1.f, 0.204f, 1.f, Percent, nullptr, false) \
+    X(PhosRevMod,    "phos_rev_mod",    "Tail Mod",    "Phoscyon Reverb", Linear, 0.f, 1.f, 0.47f, 1.f, Percent, nullptr, false) \
+    X(PhosRevEBright,"phos_rev_ebright","Early Bright", "Phoscyon Reverb", Linear, 0.f, 1.f, 0.7f, 1.f, Percent, nullptr, false) \
+    X(PhosRevLBright,"phos_rev_lbright","Late Bright", "Phoscyon Reverb", Linear, 0.f, 1.f, 0.7f, 1.f, Percent, nullptr, false) \
+    X(PhosRevMix,    "phos_rev_mix",    "Mix",         "Phoscyon Reverb", Linear, 0.f, 1.f, 0.288f, 1.f, Percent, nullptr, false) \
+    X(PhosChoOn,     "phos_cho_on",     "On",          "Phoscyon Chorus", Toggle, 0, 1, 0, 1.f, None, nullptr, false) \
+    X(PhosChoOffset, "phos_cho_offset", "Offset",      "Phoscyon Chorus", Linear, 0.f, 1.f, 0.f, 1.f, Percent, nullptr, false) \
+    X(PhosChoDepth,  "phos_cho_depth",  "Depth",       "Phoscyon Chorus", Linear, 0.f, 1.f, 0.372f, 1.f, Percent, nullptr, false) \
+    X(PhosChoRate,   "phos_cho_rate",   "Rate",        "Phoscyon Chorus", Linear, 0.f, 1.f, 0.36f, 1.f, Percent, nullptr, false) \
+    X(PhosChoSpatial,"phos_cho_spatial","Spatial",     "Phoscyon Chorus", Linear, 0.f, 1.f, 0.5f, 1.f, Percent, nullptr, false) \
+    X(PhosChoFat,    "phos_cho_fat",    "Fatness",     "Phoscyon Chorus", Linear, 0.f, 1.f, 0.f, 1.f, Percent, nullptr, false) \
+    X(PhosChoHp,     "phos_cho_hp",     "HP Cutoff",   "Phoscyon Chorus", Linear, 0.f, 1.f, 0.f, 1.f, Percent, nullptr, false) \
+    X(PhosChoOut,    "phos_cho_out",    "Output",      "Phoscyon Chorus", Linear, -24.f, 12.f, 0.f, 1.f, Db, nullptr, false) \
+    X(PhosChoMix,    "phos_cho_mix",    "Mix",         "Phoscyon Chorus", Linear, 0.f, 1.f, 0.5f, 1.f, Percent, nullptr, false) \
+    X(PhosLimOn,     "phos_lim_on",     "On",          "Phoscyon Limiter", Toggle, 0, 1, 0, 1.f, None, nullptr, false) \
+    X(PhosLimKnee,   "phos_lim_knee",   "Knee",        "Phoscyon Limiter", Linear, 0.f, 1.f, 1.f, 1.f, Percent, nullptr, false) \
+    X(PhosLimRatio,  "phos_lim_ratio",  "Ratio",       "Phoscyon Limiter", Exp, 2.f, 40.f, 40.f, 1.f, RatioTo1, nullptr, false) \
+    X(PhosLimAttack, "phos_lim_attack", "Attack",      "Phoscyon Limiter", Exp, 0.1f, 100.f, 0.1f, 1.f, Ms, nullptr, false) \
+    X(PhosLimRelease,"phos_lim_release","Release",     "Phoscyon Limiter", Exp, 25.f, 500.f, 145.6f, 1.f, Ms, nullptr, false) \
+    X(PhosLimThresh, "phos_lim_thresh", "Threshold",   "Phoscyon Limiter", Linear, -48.f, 0.f, 0.f, 1.f, Db, nullptr, false) \
+    X(PhosLimGain,   "phos_lim_gain",   "Gain",        "Phoscyon Limiter", Linear, 0.f, 24.f, 0.f, 1.f, Db, nullptr, false) \
+    X(PhosLimClip,   "phos_lim_clip",   "Soft Clip",   "Phoscyon Limiter", Toggle, 0, 1, 0, 1.f, None, nullptr, false) \
+    X(PhosEqSlot,    "phos_eq_slot",    "EQ Slot",     "FX", Linear, 0, 10, 1, 1.f, Int, nullptr, false) \
+    X(PhosLimSlot,   "phos_lim_slot",   "Limiter Slot","FX", Linear, 0, 10, 10, 1.f, Int, nullptr, false)
+
+// One band of the Phoscyon EQ: gain, frequency, width in octaves.
+#define PSY_PHOS_EQ_BAND(X, B, id, name, hz, oct) \
+    X(PhosEq##B##Gain,  "phos_eq_" id "_gain",  name " Gain",  "Phoscyon EQ", Linear, -24.f, 24.f, 0.f, 1.f, Db, nullptr, false) \
+    X(PhosEq##B##Freq,  "phos_eq_" id "_freq",  name " Freq",  "Phoscyon EQ", Exp, 20.f, 16000.f, hz, 1.f, Hz, nullptr, false) \
+    X(PhosEq##B##Width, "phos_eq_" id "_width", name " Width", "Phoscyon EQ", Linear, 0.5f, 4.f, oct, 1.f, Octaves, nullptr, false)
 
 // One modulation slot: source, target, bipolar amount.
 #define PSY_MOD_SLOT(X, n) \
     X(Mod##n##Src, "mod" #n "_src", "Source", "Mod " #n, Choice, 0, 18, 0, 1.f, None, &choices::modSrc, false) \
-    X(Mod##n##Dst, "mod" #n "_dst", "Target", "Mod " #n, Choice, 0, 46, 0, 1.f, None, &choices::modDst, false) \
+    X(Mod##n##Dst, "mod" #n "_dst", "Target", "Mod " #n, Choice, 0, 58, 0, 1.f, None, &choices::modDst, false) \
     X(Mod##n##Amt, "mod" #n "_amt", "Amount", "Mod " #n, BiPower, -1.f, 1.f, 0.f, 1.5f, Percent, nullptr, false)
 
 // One step of the arp pattern: plays, accented, slides into the next step,
@@ -416,7 +521,13 @@ ModDst modTargetFor (P p) noexcept;     // ModDst::None when the knob can't be m
 float modDepthNorm (ModDst d) noexcept;
 // Effect targets are modulated in their parameter's normalised range, once
 // for all voices, after the voices are mixed.
-constexpr bool isFxTarget (ModDst d) noexcept { return (int) d >= (int) ModDst::DistDrive && d != ModDst::Count; }
+constexpr bool isFxTarget (ModDst d) noexcept
+{
+    return ((int) d >= (int) ModDst::DistDrive && (int) d <= (int) ModDst::WidthAmount)
+        || ((int) d >= (int) ModDst::PhosDistDrive && d != ModDst::Count);
+}
+// The Phoscyon voice's own targets (its knobs, read by PhosVoice).
+constexpr bool isPhosVoiceTarget (ModDst d) noexcept { return (int) d >= (int) ModDst::PhosCutoff && (int) d <= (int) ModDst::PhosTune; }
 
 // The effects in their default signal order. FxOrder holds the order the
 // chain plays them in, as the index of that permutation (0 = this order).
@@ -425,6 +536,15 @@ constexpr int kNumFx = (int) Fx::Count;
 using FxChain = std::array<int, kNumFx>;   // effect ids, first to last
 FxChain fxChain (int orderCode) noexcept;
 int fxOrderCode (const FxChain&) noexcept;   // -1 unless every effect appears once
+
+// The Phoscyon engine plays two more effects, its EQ and limiter. Their places
+// in the eleven-long chain are their own parameters (PhosEqSlot, PhosLimSlot),
+// so the nine effects keep their FxOrder code and sessions from before load.
+constexpr int kPhosEq = kNumFx, kPhosLimiter = kNumFx + 1, kNumPhosFx = kNumFx + 2;
+using PhosFxChain = std::array<int, kNumPhosFx>;
+PhosFxChain phosFxChain (int orderCode, int eqSlot, int limSlot) noexcept;
+// The inverse: the order code and both slots of an eleven-long chain.
+void phosFxSlots (const PhosFxChain& chain, int& orderCode, int& eqSlot, int& limSlot) noexcept;
 
 // The arp's key (ArpKey: 0 off, 1..12 C..B) and scale. With a key the arp
 // plays every note in that scale, and generated lines are written in it.

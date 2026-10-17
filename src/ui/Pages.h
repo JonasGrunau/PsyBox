@@ -1,6 +1,7 @@
 #pragma once
 
 #include "KickPanels.h"
+#include "PhosPanels.h"
 #include "SynthPanels.h"
 
 // The editor's pages (the views picked in the top bar). Each fills the area
@@ -56,6 +57,24 @@ private:
     KickClickPanel click;
     KickDrivePanel drive;
     KickWavePanel wave;
+};
+
+// The Phoscyon engine's main view, laid out like the original's front panel:
+//   the 303 row (the knobs, with the couple LEDs), the filter and the
+//   distortion, the calibration trims; then our macros and modulators.
+class PhosPage : public Page
+{
+public:
+    explicit PhosPage (PsyBoxProcessor&);
+    void resized() override;
+
+private:
+    PhosSynthPanel synth;
+    PhosFilterPanel filter;
+    PhosDistortionPanel distortion;
+    PhosCalibrationPanel calibration;
+    MacroPanel macros;
+    ModPanel mod;
 };
 
 // ---------------------------------------------------------------------------

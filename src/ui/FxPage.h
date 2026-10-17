@@ -7,16 +7,20 @@
 // in signal order (click a row to switch it on or off, drag it up or down to
 // move it in the chain); the rack on the right holds one strip per effect, in
 // the same order: a badge, the controls, a display, the mix and the power
-// switch. Switched-off strips grey out.
+// switch. Switched-off strips grey out. The Phoscyon engine gets its own rack:
+// the original's distortion, chorus, delay and reverb in ours' places, its EQ
+// and limiter added, eleven strips that scroll.
 // ---------------------------------------------------------------------------
 class FxPage : public Page
 {
 public:
-    explicit FxPage (PsyBoxProcessor&);
+    explicit FxPage (PsyBoxProcessor&, bool phoscyon = false);
     void resized() override;
+    void showStrip (int effect);   // scrolls the Phoscyon rack to a strip
     void paintOverChildren (juce::Graphics&) override;
 
-    enum class Glyph { Distortion, Crush, Shift, Phaser, Chorus, Compressor, Delay, Reverb, Width };
+    enum class Glyph { Distortion, Crush, Shift, Phaser, Chorus, Compressor, Delay, Reverb, Width, Eq, Limiter };
+    using Order = std::vector<int>;   // effect ids, first to last
 
     // The square power switch on the right of every strip.
     class Power : public juce::Component, public juce::SettableTooltipClient
@@ -46,8 +50,9 @@ public:
         // Controls sit in one row of cells (two for a tall strip) after the
         // badge, or after the selector when there is one.
         ParamKnob* knob (psy::P, int col, int row = 0, const juce::String& label = {});
-        void segmented (psy::P, int col, int span, const juce::String& caption);
-        void toggle (psy::P, int col, const juce::String& text);
+        void segmented (psy::P, int col, int span, const juce::String& caption, int row = 0);
+        void combo (psy::P, int col, int span, const juce::String& caption, int row = 0);
+        void toggle (psy::P, int col, const juce::String& text, int row = 0);
         void selector (psy::P);                                    // stacked choice before the cells
         ParamKnob* mix (psy::P, const juce::String& label = {});   // the knob in the mix column
         void display (std::unique_ptr<juce::Component>, int width = -1);   // -1: fill up to the mix column
@@ -103,9 +108,9 @@ public:
         void mouseMove (const juce::MouseEvent&) override;
         void mouseExit (const juce::MouseEvent&) override { setHover (-1); }
         void setHover (int effect);
-        void setOrder (const psy::FxChain& o);
-        std::function<void (int)> onHover;                      // effect under the mouse, -1 when none
-        std::function<void (const psy::FxChain&)> onReorder;   // a row was dragged somewhere else
+        void setOrder (const Order& o);
+        std::function<void (int)> onHover;                 // effect under the mouse, -1 when none
+        std::function<void (const Order&)> onReorder;     // a row was dragged somewhere else
 
         static constexpr int kRowH = 30;
 
@@ -117,24 +122,38 @@ public:
             std::unique_ptr<juce::ParameterAttachment> attachment;
         };
         std::vector<Row> rows;                // by effect
-        psy::FxChain order = psy::fxChain (0);   // effects, top to bottom
+        Order order;                          // effects, top to bottom
         int hover = -1;                       // effect
         int pressed = -1, slot = -1;          // row the drag started on, place it would land in
         bool dragging = false, placed = false;
         float dragY = 0.f, grabOffset = 0.f;  // mouse y, and where on the row it grabbed
-        std::array<float, psy::kNumFx> rowY {};   // where each effect's row is drawn, easing to its place
+        std::vector<float> rowY;              // where each effect's row is drawn, easing to its place
         juce::Rectangle<int> rowArea (int i) const;
         int rowAt (juce::Point<int>) const;   // row (place in the chain) under the point
         int slotAt (float rowTop) const;      // place for a row whose top is at rowTop
-        psy::FxChain shown() const;           // the order as it would be if dropped now
+        Order shown() const;                  // the order as it would be if dropped now
         void timerCallback() override;        // eases the rows
         void paintRow (juce::Graphics&, int effect, juce::Rectangle<int>, int place, bool lit, bool band = true) const;
     };
 
 private:
+    PsyBoxProcessor& proc;
+    const bool phos;
     std::vector<std::unique_ptr<Strip>> strips;   // by effect
     std::unique_ptr<Chain> chain;
-    Strip* tall = nullptr;   // the compressor: two rows and a bigger display
-    psy::FxChain order = psy::fxChain (0);
+    Strip* tall = nullptr;   // our page: the compressor, two rows and a bigger display
+    Order order;
     juce::ParameterAttachment orderAttachment;
+    std::unique_ptr<juce::ParameterAttachment> eqSlot, limSlot;   // the Phoscyon rack's own two slots
+    // The Phoscyon rack scrolls; its strips sit in here, hairlines between them.
+    struct RackContent : juce::Component
+    {
+        std::function<void (juce::Graphics&)> over;
+        void paintOverChildren (juce::Graphics& g) override { if (over) over (g); }
+    };
+    juce::Viewport rack;
+    RackContent rackContent;
+    int lastHovered = -1;
+    Order currentOrder() const;
+    void orderChanged();
 };

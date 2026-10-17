@@ -1739,6 +1739,7 @@ Recipe recipeFor (Category c) noexcept
         case Category::Grid:        return grid;
         case Category::GhostStab:   return ghostStabRecipe;
         case Category::GhostBass:   return ghostBassRecipe;
+        case Category::Phoscyon:    return phoscyonRecipe;
         case Category::KickFullOn:
         case Category::KickGoa:
         case Category::KickDarkForest:

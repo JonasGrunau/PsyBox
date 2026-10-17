@@ -35,6 +35,9 @@ void Engine::prepare (double sampleRate, int maxBlockSize)
         v.prepare ((float) fs, (float) fs * 4.f);
     for (auto& k : kicks)
         k.prepare ((float) fs, (float) fs * 2.f);
+    phos.prepare ((float) fs, (float) fs * 2.f);
+    phosModEnv.setSampleRate ((float) fs);
+    phosFx.prepare ((float) fs, (float) fs * 2.f);
 
     for (int i = 0; i < kNumLfos; ++i)
     {
@@ -74,6 +77,8 @@ void Engine::applyQuality()
         v.setRates ((float) fs, osRate);
     for (auto& k : kicks)
         k.setRates ((float) fs, osRate);
+    phos.setRates ((float) fs, osRate);
+    phosFx.setOsRate (osRate);
     ctx.baseRate = (float) fs;
     ctx.osRate = osRate;
     ctx.osFactor = osFactor;
@@ -88,6 +93,9 @@ void Engine::reset()
     leadVoice = -1;
     for (auto& v : voices) v.kill();
     for (auto& k : kicks) k.kill();
+    phos.kill();
+    phosModEnv.kill();
+    phosFx.reset();
     engineMode = -1;
     numHeld = 0;
     sustained.fill (false);
@@ -112,6 +120,25 @@ void Engine::reset()
 
 void Engine::getModView (ModView& out) const noexcept
 {
+    if (phosMode())
+    {
+        // the 303 voice: its amp and filter envelopes, the free LFOs
+        out.numVoices = phos.isActive() ? 1 : 0;
+        if (out.numVoices > 0)
+        {
+            using Stage = dsp::Adsr::Stage;
+            auto& o = out.voices[0];
+            o.env[0] = { (uint8_t) (phos.isGateOn() ? Stage::Decay : Stage::Release), 0.f };
+            o.env[1] = { (uint8_t) Stage::Decay, 1.f - phos.filterEnv() };
+            o.env[2] = { (uint8_t) phosModEnv.getStage(), phosModEnv.stageProgress() };
+            o.env[3] = {};
+            for (int i = 0; i < kNumLfos; ++i)
+                o.lfo[(size_t) i] = globalLfos[(size_t) i].phase2();
+            o.filter = {};
+            o.filter[0].cutoff = phos.cutoffHz();
+        }
+        return;
+    }
     std::array<int, kMaxVoices> order {};
     int n = 0;
     for (int i = 0; i < kMaxVoices; ++i)
@@ -144,7 +171,7 @@ int Engine::activeVoices() const noexcept
         n += v.isActive() ? 1 : 0;
     for (const auto& k : kicks)
         n += k.isActive() ? 1 : 0;
-    return n;
+    return n + (phos.isActive() ? 1 : 0);
 }
 
 void Engine::smoothParams (int numSamples) noexcept
@@ -326,6 +353,28 @@ void Engine::fireArp() noexcept
 // retriggering, in every voice mode.
 void Engine::voiceSlide (int from, int to, float velocity) noexcept
 {
+    if (phosMode())
+    {
+        if (! phos.isGateOn())
+        {
+            voiceNoteOff (from);
+            voiceNoteOn (to, velocity);
+            return;
+        }
+        const bool accent = velocity >= kPhosAccentVelocity;
+        for (int i = numHeld - 1; i >= 0; --i)
+            if (held[(size_t) i] == from)
+            {
+                held[(size_t) i] = to;
+                heldAccent[(size_t) i] = accent;
+                break;
+            }
+        phos.slideTo (to, accent);
+        lastNote = to;
+        lastPitch = (float) to;
+        return;
+    }
+
     Voice* v = nullptr;
     if ((VoiceMode) cur.geti (P::VoiceMode) == VoiceMode::Poly)
     {
@@ -359,7 +408,7 @@ void Engine::voiceSlide (int from, int to, float velocity) noexcept
 void Engine::voiceNoteOn (int note, float velocity) noexcept
 {
     const auto mode = (VoiceMode) cur.geti (P::VoiceMode);
-    const bool accent = velocity >= 100.f / 127.f;
+    const bool accent = velocity >= (phosMode() ? kPhosAccentVelocity : 100.f / 127.f);
     const bool glideAlways = cur.geti (P::GlideMode) == 0;
     const bool hasGlide = cur.get (P::Glide) > 0.5f;
     const uint64_t seed = ++noteSeed * 2654435761u;
@@ -379,6 +428,13 @@ void Engine::voiceNoteOn (int note, float velocity) noexcept
     if (kickMode())
     {
         kickNoteOn (note, velocity);
+        lastNote = note;
+        lastPitch = (float) note;
+        return;
+    }
+    if (phosMode())
+    {
+        phosNoteOn (note, velocity);
         lastNote = note;
         lastPitch = (float) note;
         return;
@@ -440,6 +496,25 @@ void Engine::voiceNoteOff (int note) noexcept
     dropHeld (note);
     if (kickMode())
         return;   // kicks are one-shots
+    if (phosMode())
+    {
+        // like the original in External mode: a held note under the released
+        // one takes over with a slide, the last one up ends the note
+        if (phos.isGateOn() && phos.getNote() == note)
+        {
+            if (numHeld > 0)
+            {
+                phos.slideTo (held[(size_t) numHeld - 1], heldAccent[(size_t) numHeld - 1]);
+                lastPitch = (float) held[(size_t) numHeld - 1];
+            }
+            else
+            {
+                phos.release();
+                phosModEnv.noteOff();
+            }
+        }
+        return;
+    }
     if (cur.on (P::EnergyOneShot))
         return;   // so is a One Shot sound: it plays its whole length and stops there
 
@@ -492,8 +567,75 @@ void Engine::kickNoteOn (int note, float velocity) noexcept
     lastKick = next;
 }
 
-// Synth and kick voices never sound together: a mode change (a new patch)
-// releases the synth voices and fades out the kicks.
+// A note on the 303: a second key down while one is held slides to it (the
+// envelopes run on), anything else starts the envelopes again.
+void Engine::phosNoteOn (int note, float velocity) noexcept
+{
+    const bool accent = velocity >= kPhosAccentVelocity;
+    if (phos.isGateOn() && numHeld > 1)
+    {
+        phos.slideTo (note, accent);
+        return;
+    }
+    phos.trigger (note, accent, PhosSettings::from (cur));
+    phosVelocity = velocity;
+    phosRandom = phosRng.bipolar();
+    phosModEnv.set (cur.get (P::MenvA), cur.get (P::MenvD), cur.get (P::MenvS), cur.get (P::MenvR));
+    phosModEnv.noteOn();
+    for (int i = 0; i < kNumLfos; ++i)
+        if (cur.on (lfoParam (i, 4)))
+            globalLfos[(size_t) i].reset (cur.get (lfoParam (i, 5)));
+}
+
+std::array<float, (size_t) ModSrc::Count> Engine::phosSources (int sampleInChunk) const noexcept
+{
+    std::array<float, (size_t) ModSrc::Count> src {};
+    src[(size_t) ModSrc::AmpEnv] = phos.ampEnv();
+    src[(size_t) ModSrc::FilterEnv] = phos.filterEnv();
+    src[(size_t) ModSrc::ModEnv] = phosModEnv.value();
+    for (int i = 0; i < kNumLfos; ++i)
+        src[(size_t) ModSrc::Lfo1 + (size_t) i] = ctx.globalLfo[(size_t) i] != nullptr ? ctx.globalLfo[(size_t) i][sampleInChunk] : 0.f;
+    src[(size_t) ModSrc::Velocity] = phosVelocity;
+    src[(size_t) ModSrc::Note] = ((float) phos.getNote() - 60.f) / 60.f;
+    src[(size_t) ModSrc::ModWheel] = ctx.modWheel;
+    src[(size_t) ModSrc::Aftertouch] = ctx.aftertouch;
+    src[(size_t) ModSrc::PitchBend] = ctx.pitchBend;
+    src[(size_t) ModSrc::Random] = phosRandom;
+    for (int m = 0; m < 4; ++m)
+        src[(size_t) ModSrc::Macro1 + (size_t) m] = cur.get ((P) ((int) P::Macro1 + m));
+    return src;
+}
+
+PhosMods Engine::phosMods() const noexcept
+{
+    PhosMods m;
+    m.wheel = ctx.modWheel;
+    m.pitch = ctx.pitchBend * (float) cur.geti (P::BendRange);
+    if (ctx.numSlots == 0)
+        return m;
+    const auto src = phosSources (0);
+    for (int s = 0; s < ctx.numSlots; ++s)
+    {
+        const auto& slot = ctx.slots[(size_t) s];
+        const float v = slot.amt * src[(size_t) slot.src];
+        switch ((ModDst) slot.dst)
+        {
+            case ModDst::PhosCutoff: m.cutoff += v; break;
+            case ModDst::PhosReso:   m.reso += v; break;
+            case ModDst::PhosEnvMod: m.envmod += v; break;
+            case ModDst::PhosDecay:  m.decay += v; break;
+            case ModDst::PhosAccent: m.accent += v; break;
+            case ModDst::PhosTune:   m.pitch += v * 24.f; break;
+            case ModDst::PitchAll:   m.pitch += v * 24.f; break;
+            case ModDst::Amp:        m.level *= std::max (0.f, 1.f + v); break;
+            default: break;
+        }
+    }
+    return m;
+}
+
+// Synth, kick and Phoscyon voices never sound together: a mode change (a
+// new patch) releases the synth voices and fades out the kicks and the 303.
 void Engine::followEngineMode() noexcept
 {
     const int mode = cur.geti (P::EngineMode);
@@ -503,6 +645,8 @@ void Engine::followEngineMode() noexcept
     {
         for (auto& v : voices) v.release();
         for (auto& k : kicks) k.choke();
+        phos.fadeOut();
+        phosModEnv.kill();
     }
     engineMode = mode;
 }
@@ -513,6 +657,8 @@ void Engine::allNotesOff() noexcept
     numHeld = 0;
     for (auto& v : voices)
         v.release();
+    phos.release();
+    phosModEnv.noteOff();
 }
 
 void Engine::handleEvent (const MidiEvent& e) noexcept
@@ -554,6 +700,13 @@ void Engine::renderVoices (int offset, int n) noexcept
     for (auto& k : kicks)
         if (k.isActive())
             k.render (osL.data(), osR.data(), offset, n, ctx);
+    if (phos.isActive())
+    {
+        const auto mods = phosMods();
+        phos.render (osL.data(), osR.data(), offset, n, PhosSettings::from (cur), mods);
+        for (int i = 0; i < n; ++i)
+            phosModEnv.process();
+    }
 }
 
 void Engine::process (float* left, float* right, int numSamples, const MidiEvent* events, int numEvents, const Transport& transport) noexcept
@@ -625,7 +778,12 @@ void Engine::process (float* left, float* right, int numSamples, const MidiEvent
         const bool fxMod = numFxSlots > 0 && ! kickMode();
         if (fxMod) modulateFx (0);
         const ParamState& fp = fxMod ? fxParams : cur;
-        if (fp.on (P::DistOn) && distFirst (fp))
+        if (phosMode())
+        {
+            if (fp.on (P::PhosDistOn) && phosDistFirst (fp))
+                phosFx.distortionOs (osL.data(), osR.data(), blockN * osFactor, fp);
+        }
+        else if (fp.on (P::DistOn) && distFirst (fp))
             dist.process (osL.data(), osR.data(), blockN * osFactor, fp.geti (P::DistType), fp.get (P::DistDrive),
                           fp.get (P::DistTone), fp.get (P::DistMix), fp.get (P::DistLowCut), fp.on (P::DistAuto));
 
@@ -685,7 +843,9 @@ void Engine::modulateFx (int sampleInBlock) noexcept
     // Per-voice sources come from the newest note while it sounds; macros,
     // controllers and free-running LFOs are the same for every voice.
     std::array<float, (size_t) ModSrc::Count> src {};
-    if (leadVoice >= 0 && voices[(size_t) leadVoice].isActive())
+    if (phosMode())
+        src = phosSources (sampleInBlock);
+    else if (leadVoice >= 0 && voices[(size_t) leadVoice].isActive())
         src = voices[(size_t) leadVoice].sources();
     for (int i = 0; i < kNumLfos; ++i)
         if (! cur.on (lfoParam (i, 4)))
@@ -704,7 +864,7 @@ void Engine::modulateFx (int sampleInBlock) noexcept
     fxParams = cur;
     for (int i = 0; i < kNum; ++i)
     {
-        if (sum[(size_t) i] == 0.f) continue;
+        if (sum[(size_t) i] == 0.f || ! isFxTarget ((ModDst) (kFirst + i))) continue;
         const P prm = modTargetParam ((ModDst) (kFirst + i));
         const auto& d = def (prm);
         const float n = std::clamp (d.toNorm (cur.get (prm)) + sum[(size_t) i], 0.f, 1.f);
@@ -714,53 +874,18 @@ void Engine::modulateFx (int sampleInBlock) noexcept
 
 void Engine::processFx (float* l, float* r, int n, double bpm, const ParamState& p) noexcept
 {
-    const auto chain = fxChain (p.geti (P::FxOrder));
-    for (int fx : chain)
-        switch ((Fx) fx)
-        {
-            case Fx::Distortion:
-                if (p.on (P::DistOn) && chain[0] != (int) Fx::Distortion)
-                    distLate.process (l, r, n, p.geti (P::DistType), p.get (P::DistDrive), p.get (P::DistTone), p.get (P::DistMix),
-                                      p.get (P::DistLowCut), p.on (P::DistAuto));
-                break;
-            case Fx::Crush:
-                if (p.on (P::CrushOn))
-                    crush.process (l, r, n, p.get (P::CrushBits), p.get (P::CrushRate), p.get (P::CrushMix));
-                break;
-            case Fx::Shift:
-                if (p.on (P::FshiftOn))
-                    fshift.process (l, r, n, p.get (P::FshiftHz), p.get (P::FshiftFb), p.get (P::FshiftSpread), p.get (P::FshiftMix));
-                break;
-            case Fx::Phaser:
-                if (p.on (P::PhaserOn))
-                    phaser.process (l, r, n, p.get (P::PhaserRate), p.get (P::PhaserDepth), p.get (P::PhaserFb), p.get (P::PhaserCenter), p.get (P::PhaserMix));
-                break;
-            case Fx::Chorus:
-                if (p.on (P::ChorusOn))
-                    chorus.process (l, r, n, p.geti (P::ChorusMode) == 1, p.get (P::ChorusRate), p.get (P::ChorusDepth), p.get (P::ChorusFb), p.get (P::ChorusMix));
-                break;
-            case Fx::Compressor:
-                if (comp.isActive (p.on (P::CompOn)))
-                    comp.process (l, r, n, compSettings (p));
-                break;
-            case Fx::Delay:
-                if (p.on (P::DelayOn))
-                {
-                    const float ms = p.on (P::DelaySync) ? (float) (60000.0 / bpm) * syncDivBeats (p.geti (P::DelayDiv)) : p.get (P::DelayMs);
-                    delay.process (l, r, n, std::min (ms, 2000.f), p.get (P::DelayFb), p.on (P::DelayPing), p.get (P::DelayLowCut), p.get (P::DelayHighCut), p.get (P::DelayMix));
-                }
-                break;
-            case Fx::Reverb:
-                if (p.on (P::ReverbOn))
-                    reverb.process (l, r, n, p.get (P::ReverbSize), p.get (P::ReverbDecay), p.get (P::ReverbDamp), p.get (P::ReverbPre), p.get (P::ReverbMix));
-                break;
-            case Fx::Width:   // last by default, so Low Mono also cleans the delay and reverb lows
-                if (width.isActive (p.on (P::WidthOn)))
-                    width.process (l, r, n, p.on (P::WidthOn), p.get (P::WidthAmount), p.get (P::WidthStereo), p.get (P::WidthTime), p.get (P::WidthMonoHz));
-                break;
-            case Fx::Count:
-                break;
-        }
+    if (phosMode())
+    {
+        const auto chain = phosChain (p);
+        for (int fx : chain)
+            processFxSlot (fx, fx == chain[0], l, r, n, bpm, p);
+    }
+    else
+    {
+        const auto chain = fxChain (p.geti (P::FxOrder));
+        for (int fx : chain)
+            processFxSlot (fx, fx == chain[0], l, r, n, bpm, p);
+    }
 
     // the patch's own level (set when it is generated, so every patch plays
     // about as loud), then the user's volume
@@ -780,6 +905,83 @@ void Engine::processFx (float* l, float* r, int n, double bpm, const ParamState&
         pk = std::max (pk, std::max (std::abs (a), std::abs (b)));
     }
     peak = pk;
+}
+
+// One effect of the chain. In Phoscyon mode the original's distortion,
+// chorus, delay and reverb take our effects' places, and its EQ and limiter
+// sit in their own slots.
+void Engine::processFxSlot (int fx, bool first, float* l, float* r, int n, double bpm, const ParamState& p) noexcept
+{
+    if (phosMode())
+        switch (fx)
+        {
+            case (int) Fx::Distortion:
+                if (p.on (P::PhosDistOn) && ! first) phosFx.distortion (l, r, n, p);
+                return;
+            case (int) Fx::Chorus:
+                if (p.on (P::PhosChoOn)) phosFx.chorus (l, r, n, p);
+                return;
+            case (int) Fx::Delay:
+                if (p.on (P::PhosDlyOn)) phosFx.delay (l, r, n, bpm, p);
+                return;
+            case (int) Fx::Reverb:
+                if (p.on (P::PhosRevOn)) phosFx.reverb (l, r, n, p);
+                return;
+            case kPhosEq:
+                if (p.on (P::PhosEqOn)) phosFx.eq (l, r, n, p);
+                return;
+            case kPhosLimiter:
+                if (p.on (P::PhosLimOn)) phosFx.limiter (l, r, n, p);
+                return;
+            default:
+                break;
+        }
+
+    switch ((Fx) fx)
+    {
+        case Fx::Distortion:
+            if (p.on (P::DistOn) && ! first)
+                distLate.process (l, r, n, p.geti (P::DistType), p.get (P::DistDrive), p.get (P::DistTone), p.get (P::DistMix),
+                                  p.get (P::DistLowCut), p.on (P::DistAuto));
+            break;
+        case Fx::Crush:
+            if (p.on (P::CrushOn))
+                crush.process (l, r, n, p.get (P::CrushBits), p.get (P::CrushRate), p.get (P::CrushMix));
+            break;
+        case Fx::Shift:
+            if (p.on (P::FshiftOn))
+                fshift.process (l, r, n, p.get (P::FshiftHz), p.get (P::FshiftFb), p.get (P::FshiftSpread), p.get (P::FshiftMix));
+            break;
+        case Fx::Phaser:
+            if (p.on (P::PhaserOn))
+                phaser.process (l, r, n, p.get (P::PhaserRate), p.get (P::PhaserDepth), p.get (P::PhaserFb), p.get (P::PhaserCenter), p.get (P::PhaserMix));
+            break;
+        case Fx::Chorus:
+            if (p.on (P::ChorusOn))
+                chorus.process (l, r, n, p.geti (P::ChorusMode) == 1, p.get (P::ChorusRate), p.get (P::ChorusDepth), p.get (P::ChorusFb), p.get (P::ChorusMix));
+            break;
+        case Fx::Compressor:
+            if (comp.isActive (p.on (P::CompOn)))
+                comp.process (l, r, n, compSettings (p));
+            break;
+        case Fx::Delay:
+            if (p.on (P::DelayOn))
+            {
+                const float ms = p.on (P::DelaySync) ? (float) (60000.0 / bpm) * syncDivBeats (p.geti (P::DelayDiv)) : p.get (P::DelayMs);
+                delay.process (l, r, n, std::min (ms, 2000.f), p.get (P::DelayFb), p.on (P::DelayPing), p.get (P::DelayLowCut), p.get (P::DelayHighCut), p.get (P::DelayMix));
+            }
+            break;
+        case Fx::Reverb:
+            if (p.on (P::ReverbOn))
+                reverb.process (l, r, n, p.get (P::ReverbSize), p.get (P::ReverbDecay), p.get (P::ReverbDamp), p.get (P::ReverbPre), p.get (P::ReverbMix));
+            break;
+        case Fx::Width:   // last by default, so Low Mono also cleans the delay and reverb lows
+            if (width.isActive (p.on (P::WidthOn)))
+                width.process (l, r, n, p.on (P::WidthOn), p.get (P::WidthAmount), p.get (P::WidthStereo), p.get (P::WidthTime), p.get (P::WidthMonoHz));
+            break;
+        case Fx::Count:
+            break;
+    }
 }
 
 } // namespace psy

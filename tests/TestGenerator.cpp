@@ -361,8 +361,10 @@ TEST_CASE ("The sidebar tabs hold the sounds they are named for", "[generator][c
         const auto& l = categoriesIn (g);
         return std::find (l.begin(), l.end(), c) != l.end();
     };
-    for (auto c : { Acid, GhostStab, Grid, Jilax, PsyLead, Stab, Pluck }) CHECK (in (CategoryGroup::Main, c));
-    CHECK (categoriesIn (CategoryGroup::Main).size() == 7);
+    for (auto c : { GhostStab, Grid, Jilax, PsyLead, Stab, Pluck }) CHECK (in (CategoryGroup::Main, c));
+    CHECK (categoriesIn (CategoryGroup::Main).size() == 6);
+    for (auto c : { Acid, Phoscyon }) CHECK (in (CategoryGroup::Acid, c));
+    CHECK (categoriesIn (CategoryGroup::Acid).size() == 2);
     for (auto c : { Squelch, Zap, Laser, Screech, AlienVoice, Bubble, Gurgle, Wobble, Metallic, Glitch }) CHECK (in (CategoryGroup::Fx, c));
     for (auto c : { Riser, Downlifter, NoiseFx, Uplifter, Impact, Reverse }) CHECK (in (CategoryGroup::Energy, c));
     for (auto c : { Atmos, Drone, Gate }) CHECK (in (CategoryGroup::Background, c));
@@ -381,7 +383,8 @@ TEST_CASE ("The engine mode always follows the category, even when locked", "[ge
     for (int c = 0; c < kNumCategories; ++c)
     {
         const auto cat = (Category) c;
-        const int want = familyOf (cat) == Family::Kick ? (int) EngineMode::Kick : (int) EngineMode::Synth;
+        const int want = familyOf (cat) == Family::Kick ? (int) EngineMode::Kick
+                       : isPhoscyon (cat)              ? (int) EngineMode::Phoscyon : (int) EngineMode::Synth;
         INFO (categoryInfo()[(size_t) c].name);
         CHECK (g.generate (cat, 5, kickNow, locks).geti (P::EngineMode) == want);
         CHECK (g.generate (cat, 5, synthNow, locks).geti (P::EngineMode) == want);

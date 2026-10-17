@@ -15,6 +15,8 @@
 // PSYSNAP_PARAMS="comp_on=1,comp_mode=0" sets plain parameter values after Generate.
 // PSYSNAP_UNISON=1 opens Osc A's unison settings (the gear), =2 holds Osc A's
 // voice lines up as if the mouse were on its UNISON field.
+// PSYSNAP_STRIP=n scrolls the Phoscyon FX rack to effect n (use with
+// PSYSNAP_VIEW=1), e.g. 10 for the Phoscyon Limiter.
 // PSYSNAP_CHAINDRAG=n holds the FX chain's first row dragged to row n (use
 // with PSYSNAP_VIEW=1): the rows make room and its landing place stays empty.
 
@@ -238,6 +240,16 @@ int main (int argc, char** argv)
                 if (*u == '2' && box->onActive) box->onActive (true);
             }
         juce::MessageManager::getInstance()->runDispatchLoopUntil (400);
+        if (auto* st = std::getenv ("PSYSNAP_STRIP"))
+            if (auto* fx = findChild<FxPage> (*editor, [&] (FxPage& f) {
+                    for (juce::Component* c = &f; c != editor.get(); c = c->getParentComponent())
+                        if (! c->isVisible()) return false;
+                    return true;
+                }))
+            {
+                fx->showStrip (juce::String (st).getIntValue());
+                juce::MessageManager::getInstance()->runDispatchLoopUntil (100);
+            }
         if (std::getenv ("PSYSNAP_DNDTEST") != nullptr)
             return runDragAndDropTest (proc, *editor);
 

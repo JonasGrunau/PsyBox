@@ -284,10 +284,11 @@ void PsyBoxProcessor::copyScope (float* dest, int num) const noexcept
 void PsyBoxProcessor::applyState (const ParamState& state)
 {
     // Whatever the source (recipe, init, preset, undo), a kick category plays
-    // the kick engine and every other category the synth, and only synth
-    // categories keep an arp (old basses and kicks may have one switched on).
+    // the kick engine, Phoscyon the 303 and every other category the synth,
+    // and only synth categories keep an arp (old basses and kicks may have
+    // one switched on).
     auto s = state;
-    s.set (P::EngineMode, (float) (isKickCategory() ? EngineMode::Kick : EngineMode::Synth));
+    s.set (P::EngineMode, (float) categoryEngine());
     // the qualities are global settings, not part of a sound (init and undo keep them too)
     s.set (P::Quality, plain (P::Quality));
     s.set (P::RenderQuality, plain (P::RenderQuality));
@@ -841,7 +842,7 @@ void PsyBoxProcessor::setStateInformation (const void* data, int sizeInBytes)
 
 void PsyBoxProcessor::normaliseFamily()
 {
-    const float want = (float) (isKickCategory() ? EngineMode::Kick : EngineMode::Synth);
+    const float want = (float) categoryEngine();
     if (std::abs (plain (P::EngineMode) - want) > 0.5f)
         params[(size_t) P::EngineMode]->setValueNotifyingHost (def (P::EngineMode).toNorm (want));
     if (! hasArp (category) && plain (P::ArpOn) > 0.5f)

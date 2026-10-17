@@ -58,6 +58,12 @@ public:
     bool getKickKeyGeneration() const noexcept { return kickKeyGeneration; }
     void setKickKeyGeneration (bool on);
     bool isKickCategory() const noexcept { return psy::familyOf (category) == psy::Family::Kick; }
+    bool isPhoscyonCategory() const noexcept { return psy::isPhoscyon (category); }
+    // The engine a category plays: kicks the kick engine, Phoscyon the 303, the rest the synth.
+    psy::EngineMode categoryEngine() const noexcept
+    {
+        return isKickCategory() ? psy::EngineMode::Kick : isPhoscyonCategory() ? psy::EngineMode::Phoscyon : psy::EngineMode::Synth;
+    }
     bool hasLength() const noexcept { return psy::hasLength (category); }   // Length panel: energy sounds, reverse basses
     bool categoryHasArp() const noexcept { return psy::hasArp (category); }
     double getBpm() const noexcept { return lastBpm.load (std::memory_order_relaxed); }

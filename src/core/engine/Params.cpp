@@ -37,12 +37,15 @@ namespace choices
                                             "Amp", "Pan", "LFO 1 Rate", "LFO 2 Rate", "LFO 3 Rate", "Env 3 Amt",
                                             "F1 Env Amt", "F2 Drive", "F2 Env Amt",
                                             "Dist Drive", "Dist Mix", "Crush Mix", "Shift Freq", "Shift Mix", "Phaser Mix",
-                                            "Chorus Mix", "Delay Feedback", "Delay Mix", "Reverb Size", "Reverb Mix", "Width" };
+                                            "Chorus Mix", "Delay Feedback", "Delay Mix", "Reverb Size", "Reverb Mix", "Width",
+                                            "Phoscyon Cutoff", "Phoscyon Reso", "Phoscyon Envmod", "Phoscyon Decay",
+                                            "Phoscyon Accent", "Phoscyon Tuning", "Phoscyon Drive", "Phoscyon Color",
+                                            "Phoscyon Chorus Mix", "Phoscyon Delay Fb", "Phoscyon Delay Mix", "Phoscyon Reverb Mix" };
     const std::vector<std::string> distType { "Soft", "Hard", "Fold", "Tube", "Rectify" };
     const std::vector<std::string> chorusMode { "Chorus", "Flanger" };
     const std::vector<std::string> compMode { "Normal", "Multi" };
     const std::vector<std::string> arpMode { "Up", "Down", "Up/Down", "Random", "Order" };
-    const std::vector<std::string> engineMode { "Synth", "Kick" };
+    const std::vector<std::string> engineMode { "Synth", "Kick", "Phoscyon" };
     const std::vector<std::string> kickClick { "Noise", "Tick", "Blip" };
     const std::vector<std::string> kickDrive { "Soft", "Tube", "Hard" };
     const std::vector<std::string> energyMode { "Bars", "Time" };
@@ -51,6 +54,15 @@ namespace choices
     const std::vector<std::string> uniMode { "Linear", "Super", "Exp", "Inv", "Random" };
     const std::vector<std::string> uniStack { "Off", "12", "12+7", "24", "Center -12", "Center -24" };
     const std::vector<std::string> energyBars { "1/4 bar", "1/2 bar", "1 bar", "2 bars", "4 bars", "8 bars", "16 bars", "32 bars" };
+    const std::vector<std::string> phosWave { "Saw", "Square" };
+    const std::vector<std::string> phosDistModel {
+        "Diode + Bias", "Diode + Low-Boost", "Diode + Low-Cut Extreme", "Diode + Low-Cut Medium", "Diode + Mid-Punch",
+        "Diode + Tilt", "Diode Clean", "Diode Whistle", "Fuzzy Overdrive", "Overdrive + Bias", "Overdrive + Low-Cut Extreme",
+        "Overdrive + Low-Cut Medium", "Overdrive + Tilt Strong", "Overdrive + Tilt Subtle", "Overdrive Clean",
+        "Overdrive Colorized", "Overdrive Dirty", "RAT + Low-Cut", "RAT Clean" };
+    const std::vector<std::string> phosDistOrder { "Pre", "Post" };
+    const std::vector<std::string> phosDelayFilter { "Off", "LP", "BP", "HP" };
+    const std::vector<std::string> phosDelayScale { "Full", "Dotted", "Triplet" };
 } // namespace choices
 
 float syncDivBeats (int index) noexcept
@@ -100,6 +112,34 @@ int fxOrderCode (const FxChain& chain) noexcept
         code = code * (kNumFx - i) + smaller;
     }
     return code;
+}
+
+PhosFxChain phosFxChain (int orderCode, int eqSlot, int limSlot) noexcept
+{
+    const auto base = fxChain (orderCode);
+    eqSlot = std::clamp (eqSlot, 0, kNumPhosFx - 1);
+    limSlot = std::clamp (limSlot, 0, kNumPhosFx - 1);
+    if (limSlot == eqSlot)
+        limSlot = eqSlot == kNumPhosFx - 1 ? eqSlot - 1 : eqSlot + 1;
+    PhosFxChain out {};
+    size_t b = 0;
+    for (int i = 0; i < kNumPhosFx; ++i)
+        out[(size_t) i] = i == eqSlot ? kPhosEq : i == limSlot ? kPhosLimiter : base[b++];
+    return out;
+}
+
+void phosFxSlots (const PhosFxChain& chain, int& orderCode, int& eqSlot, int& limSlot) noexcept
+{
+    FxChain base {};
+    size_t b = 0;
+    for (int i = 0; i < kNumPhosFx; ++i)
+    {
+        const int fx = chain[(size_t) i];
+        if (fx == kPhosEq) eqSlot = i;
+        else if (fx == kPhosLimiter) limSlot = i;
+        else if (b < base.size()) base[b++] = fx;
+    }
+    orderCode = std::max (0, fxOrderCode (base));
 }
 
 const std::array<int, 7>& arpScaleSteps (int scale) noexcept
@@ -187,6 +227,18 @@ namespace
         { ModDst::ReverbSize,   P::ReverbSize,  1.f },
         { ModDst::ReverbMix,    P::ReverbMix,   1.f },
         { ModDst::WidthAmount,  P::WidthAmount, 1.f },
+        { ModDst::PhosCutoff,   P::PhosCutoff,  1.f },
+        { ModDst::PhosReso,     P::PhosReso,    1.f },
+        { ModDst::PhosEnvMod,   P::PhosEnvMod,  1.f },
+        { ModDst::PhosDecay,    P::PhosDecay,   1.f },
+        { ModDst::PhosAccent,   P::PhosAccent,  1.f },
+        { ModDst::PhosTune,     P::PhosTune,    1.f },
+        { ModDst::PhosDistDrive,P::PhosDistDrive, 1.f },
+        { ModDst::PhosDistColor,P::PhosDistColor, 1.f },
+        { ModDst::PhosChorusMix,P::PhosChoMix,  1.f },
+        { ModDst::PhosDelayFb,  P::PhosDlyFb,   1.f },
+        { ModDst::PhosDelayMix, P::PhosDlyMix,  1.f },
+        { ModDst::PhosReverbMix,P::PhosRevMix,  1.f },
     };
 } // namespace
 
@@ -226,6 +278,7 @@ float ParamDef::toPlain (float n) const noexcept
         }
         case Mapping::Choice:
         case Mapping::Toggle:  return std::round (min + (max - min) * n);
+        case Mapping::Inverse: return min / std::max (n, min / max);
     }
     return min;
 }
@@ -245,6 +298,7 @@ float ParamDef::toNorm (float p) const noexcept
             const float b = p / max;
             return 0.5f + 0.5f * std::copysign (std::pow (std::abs (b), 1.f / skew), b);
         }
+        case Mapping::Inverse: return min / p;
     }
     return 0.f;
 }
@@ -292,6 +346,15 @@ std::string ParamDef::format (float p) const
             break;
         case Unit::Int:     std::snprintf (buf, sizeof buf, "%d", (int) std::lround (p)); break;
         case Unit::None:    std::snprintf (buf, sizeof buf, "%.2f", p); break;
+        case Unit::Mv:      std::snprintf (buf, sizeof buf, "%+.0f mV", p); break;
+        case Unit::Volt:    std::snprintf (buf, sizeof buf, "%.2f V", p); break;
+        case Unit::NanoFarad:
+            if (p >= 1.0e6f) std::snprintf (buf, sizeof buf, "%.2f mF", p * 1.0e-6f);
+            else if (p >= 1000.f) std::snprintf (buf, sizeof buf, "%.2f uF", p * 0.001f);
+            else std::snprintf (buf, sizeof buf, "%.1f nF", p);
+            break;
+        case Unit::OctPerVolt: std::snprintf (buf, sizeof buf, "%.3f oct/V", 1.f + p); break;
+        case Unit::Meter:   std::snprintf (buf, sizeof buf, "%.1f m", p); break;
     }
     return buf;
 }

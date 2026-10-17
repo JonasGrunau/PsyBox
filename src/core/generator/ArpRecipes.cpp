@@ -64,6 +64,18 @@ namespace
         swing (b, 0.2f);
     }
 
+    // Phoscyon: the original's sequencer at 1/16, step length 46-60 %, in
+    // played order; a shuffle in one pattern of ten.
+    void phoscyon (B& b)
+    {
+        b.pick (P::ArpDiv, { D1_16 });
+        b.pick (P::ArpMode, { Order });
+        b.pick (P::ArpOctaves, { 1 });
+        gate (b, 0.46f, 0.6f);
+        if (b.chance (0.1f)) b.uni (P::ArpSwing, 0.05f, 0.3f);
+        else b.set (P::ArpSwing, 0.f);
+    }
+
     void squelch (B& b)
     {
         b.pick (P::ArpDiv, { D1_16, D1_16T }, { 0.7f, 0.3f });
@@ -792,6 +804,55 @@ namespace
         write (b, p);
     }
 
+    // Phoscyon: lines like the original's own factory patterns. Dense 16ths
+    // (most play every step), about a third of the notes accented and a
+    // quarter sliding, a fifth of them repeating the note before; the line
+    // sits on the key and jumps an octave down or up (two up now and then),
+    // with the b2, third, fifth and seventh between. Mostly 16 steps, an 8-,
+    // 12- or 10-step loop now and then.
+    void phoscyonPattern (B& b)
+    {
+        const char* motifs[] = { "xxxxxxxx", "xxx-xxxx", "xxxxx-xx", "xx-xxxxx", "xxxxxxx-", "x-xxxxxx", "xxxx-xxx",
+                                 "xx-xx-xx", "xxx-xx-x" };
+        const float w[] = { 3.f, 1.f, 1.f, 1.f, 0.8f, 0.8f, 0.8f, 0.6f, 0.6f };
+        const std::string a = choose (b, motifs, w);
+        const int shape = b.weighted ({ 0.35f, 0.25f, 0.25f, 0.15f });
+        const std::string second = shape == 0 ? vary (b, a)
+                                 : shape == 1 ? otherThan (b, motifs, w, a)
+                                 : shape == 2 ? a : fill (b, a);
+        auto p = ArpPattern::parse (a + second);
+        const int lengths[] = { 16, 8, 12, 10 };
+        p.length = choose (b, lengths, { 0.75f, 0.12f, 0.08f, 0.05f });
+
+        const float accents = b.rnd (0.13f, 0.47f), slides = b.rnd (0.12f, 0.38f);
+        bool any = false;
+        for (int i = 0; i < p.length; ++i)
+        {
+            const bool acc = b.chance (accents), sl = b.chance (slides);
+            if (! p.has (i, On)) continue;
+            p.setFlag (i, Accent, acc);
+            p.setFlag (i, Slide, sl);
+            any = any || acc;
+        }
+        if (! any) p.setFlag (0, Accent, true);
+
+        const Motion m { 0.22f, 0.18f, { { 0, 3.f }, { -7, 2.6f }, { 7, 2.2f }, { 14, 0.5f }, { 1, 0.7f }, { 2, 0.7f },
+                                         { 4, 0.8f }, { -3, 0.6f }, { 6, 0.6f }, { 9, 0.5f }, { 3, 0.5f } }, -7, 14 };
+        const Scale s = scale (b);
+        const int period = p.length == 16 ? 8 : p.length;
+        auto d = line (b, p, period, m);
+        if (period == 8)
+        {
+            const int shifts[] = { 1, -1, 3, 4 };
+            answer (b, p, d, 8, m, answerOf (b, 0.3f, 0.4f, 0.3f), choose (b, shifts, { 0.3f, 0.3f, 0.2f, 0.2f }));
+        }
+        enliven (b, p, d, 3, m);
+        for (auto& x : d)
+            while (semitones (s, x) > kArpNoteRange) x -= 7;
+        setNotes (p, s, d);
+        write (b, p);
+    }
+
     // Offbeat-heavy mid-bass figures, answered once per bar. Mostly the key,
     // with a turn to a neighbour or the fifth.
     void squelchPattern (B& b)
@@ -1411,6 +1472,7 @@ Recipe arpPatternRecipeFor (Category c) noexcept
         case Category::Stab:        return stabPattern;
         case Category::Grid:        return gridPattern;
         case Category::GhostStab:   return ghostStabPattern;
+        case Category::Phoscyon:    return phoscyonPattern;
         case Category::Screech:     return screechPattern;
         case Category::AlienVoice:  return alienVoicePattern;
         case Category::Bubble:      return bubblePattern;
@@ -1458,6 +1520,7 @@ Recipe arpRecipeFor (Category c) noexcept
         case Category::Stab:        return stab;
         case Category::Grid:        return grid;
         case Category::GhostStab:   return ghostStab;
+        case Category::Phoscyon:    return phoscyon;
         case Category::Screech:     return screech;
         case Category::AlienVoice:  return alienVoice;
         case Category::Bubble:      return bubble;

@@ -1,6 +1,9 @@
 #include "FxPage.h"
+#include "PhosPanels.h"
 
+#include "dsp/PhosEffects.h"
 #include "dsp/Shapers.h"
+#include "engine/PhosFx.h"
 
 #include <complex>
 
@@ -53,7 +56,8 @@ namespace
     class FxDisplay : public DisplayBase
     {
     public:
-        enum class Kind { Distortion, Crush, Shift, Phaser, Chorus, Delay, Reverb, Width };
+        enum class Kind { Distortion, Crush, Shift, Phaser, Chorus, Delay, Reverb, Width,
+                          PhosDistortion, PhosEq, PhosChorus, PhosDelay, PhosReverb, PhosLimiter };
         FxDisplay (PsyBoxProcessor& p, Kind k) : DisplayBase (p), kind (k) { setInterceptsMouseClicks (false, false); }
 
     private:
@@ -74,6 +78,19 @@ namespace
                 case Kind::Delay:      return hashParams ({ P::DelaySync, P::DelayDiv, P::DelayMs, P::DelayFb, P::DelayPing, P::DelayMix }) ^ (uint64_t) (bpm() * 100.0);
                 case Kind::Reverb:     return hashParams ({ P::ReverbSize, P::ReverbDecay, P::ReverbDamp, P::ReverbPre });
                 case Kind::Width:      return hashParams ({ P::WidthAmount, P::WidthStereo, P::WidthMonoHz });
+                case Kind::PhosDistortion: return hashParams ({ P::PhosDistModel, P::PhosDistDrive });
+                case Kind::PhosEq:
+                {
+                    uint64_t h = 0;
+                    for (int i = 0; i < 12; ++i) h = h * 31 + (uint64_t) std::llround (v ((P) ((int) P::PhosEqLowGain + i)) * 100.f);
+                    return h;
+                }
+                case Kind::PhosChorus: return hashParams ({ P::PhosChoOffset, P::PhosChoDepth, P::PhosChoRate, P::PhosChoSpatial, P::PhosChoFat });
+                case Kind::PhosDelay:  return hashParams ({ P::PhosDlySync, P::PhosDlyTime, P::PhosDlyLNum, P::PhosDlyLDen, P::PhosDlyLScale,
+                                                            P::PhosDlyRNum, P::PhosDlyRDen, P::PhosDlyRScale, P::PhosDlyFb, P::PhosDlyMix })
+                                              ^ (uint64_t) (bpm() * 100.0);
+                case Kind::PhosReverb: return hashParams ({ P::PhosRevPre, P::PhosRevESize, P::PhosRevLSize, P::PhosRevFb, P::PhosRevBlend, P::PhosRevLBright });
+                case Kind::PhosLimiter: return hashParams ({ P::PhosLimThresh, P::PhosLimRatio, P::PhosLimKnee, P::PhosLimGain, P::PhosLimClip });
             }
             return 0;
         }
@@ -90,7 +107,194 @@ namespace
                 case Kind::Delay:      paintDelay (g, r); break;
                 case Kind::Reverb:     paintReverb (g, r); break;
                 case Kind::Width:      paintWidth (g, r); break;
+                case Kind::PhosDistortion: paintPhosDistortion (g, r); break;
+                case Kind::PhosEq:     paintPhosEq (g, r); break;
+                case Kind::PhosChorus: paintPhosChorus (g, r); break;
+                case Kind::PhosDelay:  paintPhosDelay (g, r); break;
+                case Kind::PhosReverb: paintPhosReverb (g, r); break;
+                case Kind::PhosLimiter: paintPhosLimiter (g, r); break;
             }
+        }
+
+        // ---- the Phoscyon rack -------------------------------------------------
+
+        // two cycles of a -20 dBFS sine through the model's preamp and clipper
+        void paintPhosDistortion (juce::Graphics& g, juce::Rectangle<float> r)
+        {
+            drawGrid (g, r, 4, 2);
+            const auto a = r.reduced (sp::sm, sp::sm);
+            const int model = (int) std::lround (v (P::PhosDistModel));
+            strokePath (g, phosDriveWave (a, model, 0.f, true), col::lineStrong, 1.f);
+            strokePath (g, phosDriveWave (a, model, v (P::PhosDistDrive), false), accent());
+        }
+
+        // the four bands' summed response, +-24 dB, a dot on each band
+        void paintPhosEq (juce::Graphics& g, juce::Rectangle<float> r)
+        {
+            const auto a = r.reduced (sp::sm, sp::sm);
+            drawDecades (g, r, a);
+            constexpr float range = 24.f;
+            const auto yOf = [&] (float db) { return a.getCentreY() - a.getHeight() * 0.5f * juce::jlimit (-1.f, 1.f, db / range); };
+            g.setColour (col::grid);
+            g.fillRect (a.getX(), yOf (0.f), a.getWidth(), 1.f);
+            std::array<psy::dsp::Biquad, 4> bands;
+            for (int b = 0; b < 4; ++b)
+            {
+                const int base = (int) P::PhosEqLowGain + b * 3;
+                bands[(size_t) b].peakQ (48000.0, v ((P) (base + 1)), v ((P) base), psy::dsp::PhosEq::qFor (v ((P) (base + 2))));
+            }
+            const auto dbAt = [&] (float hz) {
+                const std::complex<double> z = std::polar (1.0, -2.0 * juce::MathConstants<double>::pi * hz / 48000.0);
+                double sum = 0.0;
+                for (const auto& q : bands)
+                {
+                    const auto h = ((double) q.b0 + (double) q.b1 * z + (double) q.b2 * z * z) / (1.0 + (double) q.a1 * z + (double) q.a2 * z * z);
+                    sum += 20.0 * std::log10 (std::max (std::abs (h), 1e-6));
+                }
+                return (float) sum;
+            };
+            juce::Path p;
+            const int n = juce::jmax (64, (int) a.getWidth());
+            for (int i = 0; i <= n; ++i)
+            {
+                const float hz = 20.f * std::pow (1000.f, (float) i / (float) n);
+                const juce::Point<float> pt (a.getX() + a.getWidth() * (float) i / (float) n, yOf (dbAt (hz)));
+                if (i == 0) p.startNewSubPath (pt);
+                else p.lineTo (pt);
+            }
+            juce::Path fill (p);
+            fill.lineTo (a.getRight(), yOf (0.f));
+            fill.lineTo (a.getX(), yOf (0.f));
+            fill.closeSubPath();
+            g.setColour (accent().withAlpha (0.12f));
+            g.fillPath (fill);
+            strokePath (g, p, accent());
+            for (int b = 0; b < 4; ++b)
+            {
+                const int base = (int) P::PhosEqLowGain + b * 3;
+                const float hz = v ((P) (base + 1));
+                g.setColour (v ((P) base) != 0.f ? accent() : col::textFaint);
+                g.fillEllipse (juce::Rectangle<float> (5.f, 5.f).withCentre ({ logX (a, hz), yOf (dbAt (hz)) }));
+            }
+        }
+
+        // four seconds of each side's delay time: offset, depth, rate, spatial,
+        // scaled to the deepest swing
+        void paintPhosChorus (juce::Graphics& g, juce::Rectangle<float> r)
+        {
+            drawGrid (g, r, 4, 2);
+            const auto a = r.reduced (sp::sm, sp::sm);
+            const float base = 1.5f + 8.4f * v (P::PhosChoOffset), swing = 4.6f * v (P::PhosChoDepth);
+            const float rate = psy::dsp::PhosChorus::rateHz (v (P::PhosChoRate)), shift = 0.25f * v (P::PhosChoSpatial);
+            const float lo = 0.f, hi = std::max (4.f, 1.25f * (base + swing));
+            const int n = juce::jmax (64, (int) a.getWidth());
+            for (int c = 1; c >= 0; --c)
+            {
+                juce::Path p;
+                for (int i = 0; i <= n; ++i)
+                {
+                    const float t = 4.f * (float) i / (float) n;
+                    const float ms = base + swing * std::sin (juce::MathConstants<float>::twoPi * (rate * t + shift * (float) c));
+                    const juce::Point<float> pt (a.getX() + a.getWidth() * (float) i / (float) n, a.getBottom() - a.getHeight() * (ms - lo) / (hi - lo));
+                    if (i == 0) p.startNewSubPath (pt);
+                    else p.lineTo (pt);
+                }
+                if (c == 0) fillUnder (g, p, a, 0.12f);
+                strokePath (g, p, c == 0 ? accent() : accent().withAlpha (0.45f));
+            }
+        }
+
+        // one bar: the left line's echoes above the centre, the right's below
+        void paintPhosDelay (juce::Graphics& g, juce::Rectangle<float> r)
+        {
+            drawGrid (g, r, 4, 2);
+            const auto a = r.reduced (sp::sm, sp::sm);
+            const double bar = 4.0 * 60000.0 / bpm();
+            const bool sync = v (P::PhosDlySync) > 0.5f;
+            const auto ms = [&] (P num, P den, P scale) {
+                return sync ? (double) psy::PhosFx::delayMs ((int) std::lround (v (num)), (int) std::lround (v (den)), (int) std::lround (v (scale)), bpm())
+                            : (double) v (P::PhosDlyTime) * 1000.0;
+            };
+            const double ml = ms (P::PhosDlyLNum, P::PhosDlyLDen, P::PhosDlyLScale), mr = ms (P::PhosDlyRNum, P::PhosDlyRDen, P::PhosDlyRScale);
+            const float fb = v (P::PhosDlyFb), mix = v (P::PhosDlyMix);
+            const float cy = a.getCentreY(), half = a.getHeight() * 0.5f;
+            g.setColour (col::grid);
+            g.fillRect (a.getX(), cy, a.getWidth(), 1.f);
+            const auto tick = [&] (double t, float amp, bool up, juce::Colour c) {
+                const float x = a.getX() + a.getWidth() * (float) (t / bar);
+                const float h = half * std::pow (amp, 0.6f);
+                g.setColour (c);
+                g.fillRoundedRectangle (juce::Rectangle<float>::leftTopRightBottom (x - 1.25f, up ? cy - h : cy, x + 1.25f, up ? cy : cy + h), 1.25f);
+            };
+            tick (0.0, 1.f, true, col::textFaint);
+            tick (0.0, 1.f, false, col::textFaint);
+            for (int side = 0; side < 2; ++side)
+            {
+                const double step = side == 0 ? ml : mr;
+                float amp = 0.4f + 0.6f * mix;
+                for (int k = 1; step > 1.0 && k * step <= bar && amp > 0.03f; ++k, amp *= std::max (fb, 0.f))
+                    tick (k * step, amp, side == 0, accent());
+            }
+        }
+
+        // pre-delay, the early reflections over the early room, the tail
+        // falling at the late room's feedback; brightness fades its colour
+        void paintPhosReverb (juce::Graphics& g, juce::Rectangle<float> r)
+        {
+            const auto a = r.reduced (sp::sm, sp::sm);
+            const float pre = v (P::PhosRevPre) * 0.001f, early = v (P::PhosRevESize) / 343.f;
+            const float decay = juce::jlimit (0.05f, 30.f, psy::dsp::PhosReverb::decaySeconds ((v (P::PhosRevLSize) - 5.1f) / 46.f, v (P::PhosRevFb)));
+            const float blend = v (P::PhosRevBlend), bright = v (P::PhosRevLBright);
+            const float window = juce::jlimit (0.3f, 20.f, (pre + early + decay) * 1.1f);
+            const float cy = a.getCentreY(), half = a.getHeight() * 0.5f;
+            g.setColour (col::grid);
+            g.fillRect (a.getX(), cy, a.getWidth(), 1.f);
+            g.setColour (col::textFaint);
+            g.fillRect (a.getX(), a.getY(), 2.f, a.getHeight());
+            juce::Random rnd (0x5eed);
+            juce::Path env;
+            bool started = false;
+            for (float x = a.getX() + 3.f; x < a.getRight(); x += 2.f)
+            {
+                const float t = window * (x - a.getX()) / a.getWidth() - pre;
+                const float noise = rnd.nextFloat();
+                if (t < 0.f) continue;
+                float amp;
+                if (t < early) amp = (1.f - blend) * (noise > 0.55f ? 1.f : 0.3f) + blend * 0.4f;
+                else amp = (0.3f + 0.7f * blend) * std::sqrt (std::pow (10.f, -3.f * (t - early) / decay));
+                const float h = half * juce::jmin (1.f, amp) * (0.4f + 0.6f * noise);
+                g.setColour (accent().withAlpha (0.25f + 0.5f * bright));
+                g.fillRect (x, cy - h, 1.f, 2.f * h);
+                const juce::Point<float> pt (x, cy - half * juce::jmin (1.f, amp));
+                if (! started) { env.startNewSubPath (pt); started = true; }
+                else env.lineTo (pt);
+            }
+            strokePath (g, env, accent(), 1.2f);
+        }
+
+        // output over input in dB (-48..0): threshold, knee, ratio, gain, soft clip
+        void paintPhosLimiter (juce::Graphics& g, juce::Rectangle<float> r)
+        {
+            drawGrid (g, r, 4, 4);
+            const auto a = r.reduced (sp::sm, sp::sm);
+            constexpr float lo = -48.f, hi = 6.f;
+            const auto px = [&] (float db) { return a.getX() + a.getWidth() * (db - lo) / (hi - lo); };
+            const auto py = [&] (float db) { return a.getBottom() - a.getHeight() * (juce::jlimit (lo, hi, db) - lo) / (hi - lo); };
+            g.setColour (col::lineStrong);
+            g.drawLine (px (lo), py (lo), px (hi), py (hi), 1.f);
+            const float thr = v (P::PhosLimThresh);
+            juce::Path p;
+            for (int i = 0; i <= 120; ++i)
+            {
+                const float in = lo + (hi - lo) * (float) i / 120.f;
+                const float out = psy::dsp::PhosLimiter::curveDb (in, v (P::PhosLimKnee), v (P::PhosLimRatio), thr, v (P::PhosLimGain),
+                                                                  v (P::PhosLimClip) > 0.5f);
+                if (i == 0) p.startNewSubPath (px (in), py (out));
+                else p.lineTo (px (in), py (out));
+            }
+            g.setColour (col::grid);
+            g.fillRect (px (thr), a.getY(), 1.f, a.getHeight());
+            strokePath (g, p, accent());
         }
 
         // input -1..1 across, output up; the dry diagonal underneath
@@ -437,6 +641,28 @@ namespace
                 }
                 break;
             }
+            case G::Eq:
+                strokePath (g, curve ([] (float u) {
+                    return 0.15f + 0.55f * std::exp (-std::pow ((u - 0.3f) / 0.12f, 2.f)) - 0.6f * std::exp (-std::pow ((u - 0.68f) / 0.1f, 2.f));
+                }), c);
+                break;
+            case G::Limiter:
+            {
+                juce::Path one;
+                one.startNewSubPath (X (0.2f), Y (-0.9f));
+                one.lineTo (X (0.8f), Y (0.9f));
+                strokePath (g, one, c.withAlpha (c.getFloatAlpha() * 0.35f), 1.f);
+                juce::Path p;
+                p.startNewSubPath (X (0.2f), Y (-0.9f));
+                p.lineTo (X (0.5f), Y (0.3f));
+                p.lineTo (X (0.8f), Y (0.3f));
+                strokePath (g, p, c);
+                juce::Path ceilingLine;
+                ceilingLine.startNewSubPath (X (0.12f), Y (0.3f));
+                ceilingLine.lineTo (X (0.88f), Y (0.3f));
+                strokePath (g, ceilingLine, c.withAlpha (c.getFloatAlpha() * 0.35f), 1.f);
+                break;
+            }
             case G::Width:
             {
                 juce::Path p;
@@ -520,20 +746,28 @@ ParamKnob* FxPage::Strip::knob (P prm, int col, int row, const juce::String& l)
     return k;
 }
 
-void FxPage::Strip::segmented (P prm, int col, int span, const juce::String& caption)
+void FxPage::Strip::segmented (P prm, int col, int span, const juce::String& caption, int row)
 {
     auto s = std::make_unique<Segmented> (proc, prm);
     addAndMakeVisible (*s);
-    items.push_back ({ s.get(), col, 0, span, true, caption });
+    items.push_back ({ s.get(), col, row, span, true, caption });
     owned.push_back (std::move (s));
 }
 
-void FxPage::Strip::toggle (P prm, int col, const juce::String& text)
+void FxPage::Strip::combo (P prm, int col, int span, const juce::String& caption, int row)
+{
+    auto c = std::make_unique<ParamCombo> (proc, prm);
+    addAndMakeVisible (*c);
+    items.push_back ({ c.get(), col, row, span, true, caption });
+    owned.push_back (std::move (c));
+}
+
+void FxPage::Strip::toggle (P prm, int col, const juce::String& text, int row)
 {
     auto t = std::make_unique<ToggleDot> (proc, prm, text);
     t->setStacked (true);
     addAndMakeVisible (*t);
-    items.push_back ({ t.get(), col, 0, 1, false, {} });
+    items.push_back ({ t.get(), col, row, 1, false, {} });
     owned.push_back (std::move (t));
 }
 
@@ -636,12 +870,23 @@ void FxPage::Strip::paint (juce::Graphics& g)
     g.setColour (col::textFaint);
     g.setFont (mono (9.f));
     g.drawText (juce::String (index), badge.reduced (sp::sm, sp::xs + 2).removeFromTop (10), juce::Justification::topLeft, false);
-    constexpr int glyphH = 20, nameH = 12, gap = sp::sm;
-    const int top = badge.getCentreY() - (glyphH + gap + nameH) / 2 + 2;
+    // the original's effects carry its name on a line of its own
+    const bool prefixed = name.startsWith ("Phoscyon ");
+    const auto shownName = prefixed ? name.fromFirstOccurrenceOf (" ", false, false) : name;
+    constexpr int glyphH = 20, nameH = 12, gap = sp::sm, prefixH = 10;
+    const int stack = glyphH + gap + nameH + (prefixed ? prefixH + 2 : 0);
+    const int top = badge.getCentreY() - stack / 2 + 2;
     drawGlyph (g, glyph, juce::Rectangle<float> ((float) badge.getCentreX() - 26.f, (float) top, 52.f, (float) glyphH),
                active ? accent() : col::textFaint);
-    drawHeading (g, name, { badge.getX(), top + glyphH + gap, badge.getWidth(), nameH }, juce::Justification::centred,
-                 active ? col::text : col::textDim);
+    if (prefixed)
+    {
+        g.setColour (active ? accent().withAlpha (0.8f) : col::textFaint);
+        g.setFont (mono (8.5f));
+        g.drawText ("PHOSCYON", juce::Rectangle<int> (badge.getX(), top + glyphH + gap - 1, badge.getWidth(), prefixH),
+                    juce::Justification::centred, false);
+    }
+    drawHeading (g, shownName, { badge.getX(), top + glyphH + gap + (prefixed ? prefixH + 2 : 0), badge.getWidth(), nameH },
+                 juce::Justification::centred, active ? col::text : col::textDim);
 
     g.setColour (col::line);
     g.fillRect (mixColumn.getX(), sp::md, 1, getHeight() - 2 * sp::md);
@@ -728,26 +973,24 @@ int FxPage::Chain::slotAt (float rowTop) const
     return juce::jlimit (0, (int) rows.size() - 1, (int) std::lround ((rowTop - top) / (float) kRowH));
 }
 
-psy::FxChain FxPage::Chain::shown() const
+FxPage::Order FxPage::Chain::shown() const
 {
     if (! dragging || pressed < 0 || slot < 0) return order;
     // the dragged effect taken out and put back in at its slot
-    psy::FxChain out {};
+    Order out = order;
     const int effect = order[(size_t) pressed];
-    int n = 0;
-    for (int i = 0; i < psy::kNumFx; ++i)
-        if (i != pressed) out[(size_t) n++] = order[(size_t) i];
-    for (int i = psy::kNumFx - 1; i > slot; --i) out[(size_t) i] = out[(size_t) i - 1];
-    out[(size_t) slot] = effect;
+    out.erase (out.begin() + pressed);
+    out.insert (out.begin() + slot, effect);
     return out;
 }
 
-void FxPage::Chain::setOrder (const psy::FxChain& o)
+void FxPage::Chain::setOrder (const Order& o)
 {
     order = o;
+    rowY.resize (rows.size());
     if (! placed)
     {
-        for (int i = 0; i < psy::kNumFx; ++i) rowY[(size_t) order[(size_t) i]] = (float) rowArea (i).getY();
+        for (size_t i = 0; i < order.size(); ++i) rowY[(size_t) order[i]] = (float) rowArea ((int) i).getY();
         placed = true;
     }
     startTimerHz (60);   // rows slide to their new places
@@ -759,7 +1002,7 @@ void FxPage::Chain::timerCallback()
     const auto target = shown();
     const int lifted = dragging && pressed >= 0 ? order[(size_t) pressed] : -1;
     bool moving = false;
-    for (int i = 0; i < psy::kNumFx; ++i)
+    for (int i = 0; i < (int) target.size(); ++i)
     {
         const int fx = target[(size_t) i];
         if (fx == lifted) continue;   // under the mouse
@@ -859,7 +1102,17 @@ void FxPage::Chain::paintRow (juce::Graphics& g, int effect, juce::Rectangle<int
     g.drawText (juce::String (place + 1), a.removeFromLeft (sp::lg), juce::Justification::centredLeft, false);
     Power::drawIcon (g, a.removeFromRight (12).withSizeKeepingCentre (11, 11).toFloat(),
                      r.on ? accent() : (lit ? col::textDim : col::textFaint));
-    drawHeading (g, r.name, a, juce::Justification::centredLeft, r.on ? col::text : (lit ? col::textDim : col::textFaint));
+    const auto nameCol = r.on ? col::text : (lit ? col::textDim : col::textFaint);
+    if (r.name.startsWith ("Phoscyon "))
+    {
+        // the original's effects: its name small over the effect's
+        g.setColour (r.on ? accent().withAlpha (0.8f) : col::textFaint);
+        g.setFont (mono (8.f));
+        g.drawText ("PHOSCYON", a.withHeight (10).withY (a.getCentreY() - 11), juce::Justification::centredLeft, false);
+        drawHeading (g, r.name.fromFirstOccurrenceOf (" ", false, false), a.withY (a.getY() + 5), juce::Justification::centredLeft, nameCol);
+    }
+    else
+        drawHeading (g, r.name, a, juce::Justification::centredLeft, nameCol);
 }
 
 void FxPage::Chain::paint (juce::Graphics& g)
@@ -873,7 +1126,10 @@ void FxPage::Chain::paint (juce::Graphics& g)
     g.drawText (juce::String (count) + " ON", head, juce::Justification::centredRight, false);
 
     if (! placed)
-        for (int i = 0; i < psy::kNumFx; ++i) rowY[(size_t) order[(size_t) i]] = (float) rowArea (i).getY();
+    {
+        rowY.resize (rows.size());
+        for (size_t i = 0; i < order.size(); ++i) rowY[(size_t) order[i]] = (float) rowArea ((int) i).getY();
+    }
 
     const auto now = shown();
     const int lifted = dragging && pressed >= 0 ? order[(size_t) pressed] : -1;
@@ -891,7 +1147,7 @@ void FxPage::Chain::paint (juce::Graphics& g)
         juce::PathStrokeType (1.f).createDashedStroke (dashed, outline, dashes, 2);
         g.fillPath (dashed);
     }
-    for (int i = 0; i < (int) rows.size(); ++i)
+    for (int i = 0; i < (int) now.size(); ++i)
     {
         const int fx = now[(size_t) i];
         if (fx == lifted) continue;
@@ -911,43 +1167,50 @@ void FxPage::Chain::paint (juce::Graphics& g)
 
     g.setColour (col::textFaint);
     g.setFont (label (10.5f));
-    g.drawFittedText ("Signal runs from 1 to 9.\nClick a row to switch it,\ndrag it to move it.",
+    g.drawFittedText ("Signal runs from 1 to " + juce::String ((int) rows.size()) + ".\nClick a row to switch it,\ndrag it to move it.",
                       getLocalBounds().reduced (kPad).removeFromBottom (48), juce::Justification::bottomLeft, 3);
 }
 
 // ---------------------------------------------------------------------------
 // FxPage
 // ---------------------------------------------------------------------------
-FxPage::FxPage (PsyBoxProcessor& p)
-    : orderAttachment (*p.param (P::FxOrder), [this] (float code) {
-          // the chain and the rack follow the order (also on undo or a preset)
-          order = psy::fxChain ((int) std::lround (code));
-          if (chain == nullptr) return;
-          chain->setOrder (order);
-          for (int i = 0; i < psy::kNumFx; ++i)
-              strips[(size_t) order[(size_t) i]]->setIndex (i + 1);
-          resized();
-          repaint();
-      })
+FxPage::FxPage (PsyBoxProcessor& p, bool phoscyon)
+    : proc (p), phos (phoscyon),
+      orderAttachment (*p.param (P::FxOrder), [this] (float) { orderChanged(); })
 {
     using K = FxDisplay::Kind;
     std::vector<std::pair<juce::String, P>> effects;
+    juce::Component& holder = phos ? (juce::Component&) rackContent : (juce::Component&) *this;
     const auto add = [&] (const char* n, Glyph gl, P onParam) {
         strips.push_back (std::make_unique<Strip> (p, (int) strips.size() + 1, n, gl, onParam));
         effects.emplace_back (n, onParam);
-        addAndMakeVisible (*strips.back());
+        holder.addAndMakeVisible (*strips.back());
         return strips.back().get();
     };
     const auto picture = [&p] (K k) { return std::make_unique<FxDisplay> (p, k); };
 
-    auto* dist = add ("Distortion", Glyph::Distortion, P::DistOn);
-    dist->knob (P::DistDrive, 0);
-    dist->knob (P::DistTone, 1);
-    dist->knob (P::DistType, 2, 0, "Type");   // a stepped knob, like the delay's division: the strip has no room for five buttons
-    dist->knob (P::DistLowCut, 3);
-    dist->toggle (P::DistAuto, 4, "Auto");
-    dist->mix (P::DistMix);
-    dist->display (picture (K::Distortion), kDisplayW);
+    // Strips by effect id (psy::Fx, then the Phoscyon rack's EQ and limiter).
+    if (phos)
+    {
+        auto* dist = add ("Phoscyon Distortion", Glyph::Distortion, P::PhosDistOn);
+        dist->selector (P::PhosDistOrder);   // dynamics before or after the clipper
+        dist->combo (P::PhosDistModel, 0, 3, "Model");
+        dist->knob (P::PhosDistDyn, 3, 0, "Dynamics");
+        dist->knob (P::PhosDistColor, 4, 0, "Color");
+        dist->mix (P::PhosDistDrive, "Drive");
+        dist->display (picture (K::PhosDistortion), kDisplayW);
+    }
+    else
+    {
+        auto* dist = add ("Distortion", Glyph::Distortion, P::DistOn);
+        dist->knob (P::DistDrive, 0);
+        dist->knob (P::DistTone, 1);
+        dist->knob (P::DistType, 2, 0, "Type");   // a stepped knob, like the delay's division: the strip has no room for five buttons
+        dist->knob (P::DistLowCut, 3);
+        dist->toggle (P::DistAuto, 4, "Auto");
+        dist->mix (P::DistMix);
+        dist->display (picture (K::Distortion), kDisplayW);
+    }
 
     auto* crush = add ("Crush", Glyph::Crush, P::CrushOn);
     crush->knob (P::CrushBits, 0);
@@ -970,18 +1233,34 @@ FxPage::FxPage (PsyBoxProcessor& p)
     phaser->mix (P::PhaserMix);
     phaser->display (picture (K::Phaser), kDisplayW);
 
-    auto* chorus = add ("Chorus", Glyph::Chorus, P::ChorusOn);
-    chorus->selector (P::ChorusMode);
-    chorus->knob (P::ChorusRate, 0);
-    chorus->knob (P::ChorusDepth, 1);
-    chorus->knob (P::ChorusFb, 2);
-    chorus->mix (P::ChorusMix);
-    chorus->display (picture (K::Chorus), kDisplayW);
+    if (phos)
+    {
+        auto* chorus = add ("Phoscyon Chorus", Glyph::Chorus, P::PhosChoOn);
+        chorus->knob (P::PhosChoOffset, 0, 0, "Offset");
+        chorus->knob (P::PhosChoDepth, 1, 0, "Depth");
+        chorus->knob (P::PhosChoRate, 2, 0, "Rate");
+        chorus->knob (P::PhosChoSpatial, 3, 0, "Spatial");
+        chorus->knob (P::PhosChoFat, 4, 0, "Fatness");
+        chorus->knob (P::PhosChoHp, 5, 0, "HP Cut");
+        chorus->knob (P::PhosChoOut, 6, 0, "Output");
+        chorus->mix (P::PhosChoMix);
+        chorus->display (picture (K::PhosChorus), kDisplayW);
+    }
+    else
+    {
+        auto* chorus = add ("Chorus", Glyph::Chorus, P::ChorusOn);
+        chorus->selector (P::ChorusMode);
+        chorus->knob (P::ChorusRate, 0);
+        chorus->knob (P::ChorusDepth, 1);
+        chorus->knob (P::ChorusFb, 2);
+        chorus->mix (P::ChorusMix);
+        chorus->display (picture (K::Chorus), kDisplayW);
+    }
 
     // Compressor: Normal  Thresh Ratio Knee Output / Attack Release
     //             Multi   Low Mid High Output / Attack Release Down Up
     auto* comp = add ("Compressor", Glyph::Compressor, P::CompOn);
-    tall = comp;
+    tall = phos ? nullptr : comp;
     comp->selector (P::CompMode);
     const auto multi = [&p] { return p.plain (P::CompMode) > 0.5f; };
     const auto normal = [multi] { return ! multi(); };
@@ -997,25 +1276,64 @@ FxPage::FxPage (PsyBoxProcessor& p)
     comp->showWhen (comp->mix (P::CompMix, "Depth"), multi);
     comp->display (std::make_unique<CompDisplay> (p));
 
-    auto* delay = add ("Delay", Glyph::Delay, P::DelayOn);
-    const auto synced = [&p] { return p.plain (P::DelaySync) > 0.5f; };
-    delay->showWhen (delay->knob (P::DelayMs, 0), [synced] { return ! synced(); });
-    delay->showWhen (delay->knob (P::DelayDiv, 0, 0, "Division"), synced);
-    delay->knob (P::DelayFb, 1);
-    delay->knob (P::DelayLowCut, 2);
-    delay->knob (P::DelayHighCut, 3);
-    delay->toggle (P::DelaySync, 4, "Sync");
-    delay->toggle (P::DelayPing, 5, "Ping-Pong");
-    delay->mix (P::DelayMix);
-    delay->display (picture (K::Delay), kDisplayW);
+    if (phos)
+    {
+        // Delay: Sync, the left and right lines' steps, divisions and scales (or
+        // the free time) / Feedback, its filter, cutoff, resonance, spread
+        auto* delay = add ("Phoscyon Delay", Glyph::Delay, P::PhosDlyOn);
+        const auto synced = [&p] { return p.plain (P::PhosDlySync) > 0.5f; };
+        const auto free = [synced] { return ! synced(); };
+        delay->toggle (P::PhosDlySync, 0, "Sync");
+        delay->showWhen (delay->knob (P::PhosDlyTime, 1, 0, "Time"), free);
+        for (auto [prm, col, l] : { std::tuple { P::PhosDlyLNum, 1, "L Steps" }, std::tuple { P::PhosDlyLDen, 2, "L Div" },
+                                    std::tuple { P::PhosDlyLScale, 3, "L Scale" }, std::tuple { P::PhosDlyRNum, 4, "R Steps" },
+                                    std::tuple { P::PhosDlyRDen, 5, "R Div" }, std::tuple { P::PhosDlyRScale, 6, "R Scale" } })
+            delay->showWhen (delay->knob (prm, col, 0, l), synced);
+        delay->knob (P::PhosDlyFb, 0, 1, "Feedback");
+        delay->segmented (P::PhosDlyFilter, 1, 3, "FB Filter", 1);
+        delay->knob (P::PhosDlyCut, 4, 1, "Cutoff");
+        delay->knob (P::PhosDlyReso, 5, 1, "Reso");
+        delay->knob (P::PhosDlySpread, 6, 1, "Spread");
+        delay->mix (P::PhosDlyMix);
+        delay->display (picture (K::PhosDelay), kDisplayW);
 
-    auto* reverb = add ("Reverb", Glyph::Reverb, P::ReverbOn);
-    reverb->knob (P::ReverbSize, 0);
-    reverb->knob (P::ReverbDecay, 1);
-    reverb->knob (P::ReverbDamp, 2);
-    reverb->knob (P::ReverbPre, 3);
-    reverb->mix (P::ReverbMix);
-    reverb->display (picture (K::Reverb), kDisplayW);
+        auto* reverb = add ("Phoscyon Reverb", Glyph::Reverb, P::PhosRevOn);
+        // early room over the late room, column by column
+        reverb->knob (P::PhosRevESize, 0, 0, "E. Size");
+        reverb->knob (P::PhosRevEDiff, 1, 0, "E. Diff");
+        reverb->knob (P::PhosRevEBright, 2, 0, "E. Bright");
+        reverb->knob (P::PhosRevPre, 3, 0, "Predelay");
+        reverb->knob (P::PhosRevBlend, 4, 0, "Early/Late");
+        reverb->knob (P::PhosRevLSize, 0, 1, "L. Size");
+        reverb->knob (P::PhosRevLDiff, 1, 1, "L. Diff");
+        reverb->knob (P::PhosRevLBright, 2, 1, "L. Bright");
+        reverb->knob (P::PhosRevFb, 3, 1, "Feedback");
+        reverb->knob (P::PhosRevMod, 4, 1, "Tail Mod");
+        reverb->mix (P::PhosRevMix);
+        reverb->display (picture (K::PhosReverb), kDisplayW);
+    }
+    else
+    {
+        auto* delay = add ("Delay", Glyph::Delay, P::DelayOn);
+        const auto synced = [&p] { return p.plain (P::DelaySync) > 0.5f; };
+        delay->showWhen (delay->knob (P::DelayMs, 0), [synced] { return ! synced(); });
+        delay->showWhen (delay->knob (P::DelayDiv, 0, 0, "Division"), synced);
+        delay->knob (P::DelayFb, 1);
+        delay->knob (P::DelayLowCut, 2);
+        delay->knob (P::DelayHighCut, 3);
+        delay->toggle (P::DelaySync, 4, "Sync");
+        delay->toggle (P::DelayPing, 5, "Ping-Pong");
+        delay->mix (P::DelayMix);
+        delay->display (picture (K::Delay), kDisplayW);
+
+        auto* reverb = add ("Reverb", Glyph::Reverb, P::ReverbOn);
+        reverb->knob (P::ReverbSize, 0);
+        reverb->knob (P::ReverbDecay, 1);
+        reverb->knob (P::ReverbDamp, 2);
+        reverb->knob (P::ReverbPre, 3);
+        reverb->mix (P::ReverbMix);
+        reverb->display (picture (K::Reverb), kDisplayW);
+    }
 
     auto* width = add ("Width", Glyph::Width, P::WidthOn);
     width->knob (P::WidthStereo, 0);
@@ -1024,11 +1342,58 @@ FxPage::FxPage (PsyBoxProcessor& p)
     width->mix (P::WidthAmount);
     width->display (picture (K::Width), kDisplayW);
 
+    if (phos)
+    {
+        // EQ: low and low-mid bands on top, high-mid and high under them
+        auto* eq = add ("Phoscyon EQ", Glyph::Eq, P::PhosEqOn);
+        const char* bands[] = { "Low", "Lo-Mid", "Hi-Mid", "High" };
+        for (int b = 0; b < 4; ++b)
+        {
+            const int base = (int) P::PhosEqLowGain + b * 3, col = (b % 2) * 3, row = b / 2;
+            eq->knob ((P) base, col, row, bands[b]);
+            eq->knob ((P) (base + 1), col + 1, row, "Freq");
+            eq->knob ((P) (base + 2), col + 2, row, "Width");
+        }
+        eq->display (picture (K::PhosEq), kDisplayW);
+
+        auto* lim = add ("Phoscyon Limiter", Glyph::Limiter, P::PhosLimOn);
+        lim->knob (P::PhosLimThresh, 0, 0, "Threshold");
+        lim->knob (P::PhosLimRatio, 1, 0, "Ratio");
+        lim->knob (P::PhosLimKnee, 2, 0, "Knee");
+        lim->knob (P::PhosLimAttack, 3, 0, "Attack");
+        lim->knob (P::PhosLimRelease, 4, 0, "Release");
+        lim->toggle (P::PhosLimClip, 5, "Soft Clip");
+        lim->mix (P::PhosLimGain, "Gain");
+        lim->display (picture (K::PhosLimiter), kDisplayW);
+
+        rack.setViewedComponent (&rackContent, false);
+        rack.setScrollBarsShown (true, false);
+        rack.setScrollBarThickness (6);
+        rack.getVerticalScrollBar().setColour (juce::ScrollBar::thumbColourId, col::lineStrong);
+        addAndMakeVisible (rack);
+        rackContent.over = [this] (juce::Graphics& g) {
+            g.setColour (col::line);
+            for (size_t i = 0; i + 1 < order.size(); ++i)
+            {
+                const auto b = strips[(size_t) order[i]]->getBounds();
+                g.fillRect (b.getX(), b.getBottom() - 1, b.getWidth(), 1);
+            }
+        };
+        const auto watch = [this, &p] (P prm) {
+            auto a = std::make_unique<juce::ParameterAttachment> (*p.param (prm), [this] (float) { orderChanged(); });
+            return a;
+        };
+        eqSlot = watch (P::PhosEqSlot);
+        limSlot = watch (P::PhosLimSlot);
+    }
+
     // hovering a chain row lights its strip and the other way round
     chain = std::make_unique<Chain> (p, effects);
     addAndMakeVisible (*chain);
     chain->onHover = [this] (int row) {
         for (size_t i = 0; i < strips.size(); ++i) strips[i]->setHighlight ((int) i == row);
+        if (row >= 0 && row != lastHovered) showStrip (row);
+        lastHovered = row;
     };
     for (size_t i = 0; i < strips.size(); ++i)
         strips[i]->onHover = [this, i] (bool in) {
@@ -1036,11 +1401,63 @@ FxPage::FxPage (PsyBoxProcessor& p)
             if (in) chain->setHover ((int) i);
             else if (! chain->isMouseOver()) chain->setHover (-1);
         };
-    chain->onReorder = [this] (const psy::FxChain& moved) {
-        const int code = psy::fxOrderCode (moved);
-        if (code >= 0) orderAttachment.setValueAsCompleteGesture ((float) code);
+    chain->onReorder = [this] (const Order& moved) {
+        if (! phos)
+        {
+            psy::FxChain c {};
+            std::copy (moved.begin(), moved.end(), c.begin());
+            const int code = psy::fxOrderCode (c);
+            if (code >= 0) orderAttachment.setValueAsCompleteGesture ((float) code);
+            return;
+        }
+        psy::PhosFxChain c {};
+        std::copy (moved.begin(), moved.end(), c.begin());
+        int code = 0, eq = 1, lim = 10;
+        psy::phosFxSlots (c, code, eq, lim);
+        orderAttachment.setValueAsCompleteGesture ((float) code);
+        eqSlot->setValueAsCompleteGesture ((float) eq);
+        limSlot->setValueAsCompleteGesture ((float) lim);
     };
-    orderAttachment.sendInitialUpdate();
+    orderChanged();
+}
+
+FxPage::Order FxPage::currentOrder() const
+{
+    // from the parameters themselves: an attachment's callback runs before
+    // the processor's raw values catch up
+    const auto now = [this] (P id) {
+        const auto* prm = proc.param (id);
+        return (int) std::lround (prm->convertFrom0to1 (prm->getValue()));
+    };
+    const int code = now (P::FxOrder);
+    if (! phos)
+    {
+        const auto c = psy::fxChain (code);
+        return { c.begin(), c.end() };
+    }
+    const auto c = psy::phosFxChain (code, now (P::PhosEqSlot), now (P::PhosLimSlot));
+    return { c.begin(), c.end() };
+}
+
+// The chain and the rack follow the order (also on undo or a preset).
+void FxPage::orderChanged()
+{
+    order = currentOrder();
+    if (chain == nullptr) return;
+    chain->setOrder (order);
+    for (size_t i = 0; i < order.size(); ++i)
+        strips[(size_t) order[i]]->setIndex ((int) i + 1);
+    resized();
+    repaint();
+}
+
+void FxPage::showStrip (int effect)
+{
+    if (! phos || effect < 0 || effect >= (int) strips.size()) return;
+    const auto b = strips[(size_t) effect]->getBounds();
+    const int top = rack.getViewPositionY(), h = rack.getHeight();
+    if (b.getY() < top) rack.setViewPosition (0, b.getY());
+    else if (b.getBottom() > top + h) rack.setViewPosition (0, b.getBottom() - h);
 }
 
 void FxPage::resized()
@@ -1048,6 +1465,22 @@ void FxPage::resized()
     const int h = getHeight();
     chain->setBounds (0, 0, kChainW, h);
     const int x = kChainW + 1, w = getWidth() - x;
+    if (phos)
+    {
+        // our strips' height; two-row strips (EQ, delay, reverb, compressor) are taller
+        constexpr int rowH = 78, tallH = rowH + kTallExtra;
+        int y = 0;
+        for (int fx : order)
+        {
+            auto& s = strips[(size_t) fx];
+            const int sh = s->rows() > 1 ? tallH : rowH;
+            s->setBounds (0, y, w - rack.getScrollBarThickness(), sh);
+            y += sh;
+        }
+        rackContent.setSize (w - rack.getScrollBarThickness(), y);
+        rack.setBounds (x, 0, w, h);
+        return;
+    }
     const int rowH = (h - kTallExtra) / (int) strips.size();
     int y = 0;
     for (int fx : order)   // in chain order
@@ -1063,6 +1496,7 @@ void FxPage::paintOverChildren (juce::Graphics& g)
 {
     g.setColour (col::line);
     g.fillRect (kChainW, 0, 1, getHeight());
+    if (phos) return;   // the rack draws its own hairlines
     for (size_t i = 0; i + 1 < order.size(); ++i)
     {
         const auto b = strips[(size_t) order[i]]->getBounds();

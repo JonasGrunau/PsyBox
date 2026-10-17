@@ -27,6 +27,8 @@ add_library(psybox_core STATIC
     src/core/engine/Voice.cpp
     src/core/engine/Arpeggiator.cpp
     src/core/engine/KickVoice.cpp
+    src/core/engine/PhosVoice.cpp
+    src/core/engine/PhosFx.cpp
     src/core/dsp/Wavetable.cpp
     src/core/generator/Generator.cpp
     src/core/generator/Recipes.cpp
@@ -35,6 +37,7 @@ add_library(psybox_core STATIC
     src/core/generator/KickRecipes.cpp
     src/core/generator/JilaxRecipes.cpp
     src/core/generator/GhostRecipes.cpp
+    src/core/generator/PhosRecipes.cpp
     src/core/generator/Loudness.cpp
 )
 target_include_directories(psybox_core PUBLIC src/core)
@@ -88,7 +91,8 @@ if(PSYBOX_BUILD_PLUGIN)
         src/ui/Pages.cpp
         src/ui/FxPage.cpp
         src/ui/Displays.cpp
-        src/ui/KickPanels.cpp)
+        src/ui/KickPanels.cpp
+        src/ui/PhosPanels.cpp)
 
     target_include_directories(PsyBox PRIVATE src)
 
@@ -123,7 +127,8 @@ if(PSYBOX_BUILD_PLUGIN)
         src/ui/Pages.cpp
         src/ui/FxPage.cpp
         src/ui/Displays.cpp
-        src/ui/KickPanels.cpp)
+        src/ui/KickPanels.cpp
+        src/ui/PhosPanels.cpp)
     target_include_directories(psybox_snapshot PRIVATE src)
     target_compile_definitions(psybox_snapshot PRIVATE
         JucePlugin_Name="PsyBox"
@@ -153,7 +158,8 @@ if(PSYBOX_BUILD_TESTS)
         tests/TestGenerator.cpp
         tests/TestArp.cpp
         tests/TestKick.cpp
-        tests/TestLoudness.cpp)
+        tests/TestLoudness.cpp
+        tests/TestPhoscyon.cpp)
     target_link_libraries(psybox_tests PRIVATE psybox_core Catch2::Catch2WithMain)
 
     add_executable(psybox_render tools/RenderCategories.cpp)

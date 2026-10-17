@@ -43,19 +43,21 @@ private:
 
     private:
         PsyBoxProcessor& proc;
-        bool kickLayout = false;
+        bool kickLayout = false, phosLayout = false;
         int lastMode = -1;
         View view = View::Main;
         TopBar top;
         Sidebar side;
         OscPage osc;
         KickPage kick;
-        FxPage fx;
+        PhosPage phos;
+        FxPage fx, phosFx;   // our rack, and the Phoscyon engine's
         MatrixPage matrix;
         GlobalPage global;
         ArpPage arp;
         std::vector<View> available() const;
         juce::Component* pageFor (View) const;
+        std::vector<juce::Component*> pages();
         void timerCallback() override { updateMode(); }   // automation / state loads
     };
 

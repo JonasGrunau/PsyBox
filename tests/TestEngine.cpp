@@ -733,9 +733,11 @@ TEST_CASE ("Reverse Bass stays in its references' family and varies from patch t
         startLo = std::min (startLo, start);
         startHi = std::max (startHi, start);
 
+        // the window runs past the beat's end: zero-padded there
         std::vector<std::complex<double>> a (1 << 14);
         const auto from = (size_t) (0.7 * beat * fs);
-        for (size_t i = 0; i < a.size(); ++i) a[i] = out.l[from + i] * (0.5 - 0.5 * std::cos (2.0 * M_PI * (double) i / (double) a.size()));
+        for (size_t i = 0; i < a.size(); ++i)
+            a[i] = (from + i < out.l.size() ? out.l[from + i] : 0.f) * (0.5 - 0.5 * std::cos (2.0 * M_PI * (double) i / (double) a.size()));
         testutil::fft (a);
         double hi = 0.0, all = 0.0;
         for (size_t i = 1; i < a.size() / 2; ++i)

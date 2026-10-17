@@ -3,11 +3,11 @@
 using namespace theme;
 
 PsyBoxEditor::Root::Root (PsyBoxProcessor& p)
-    : proc (p), top (p), side (p), osc (p), kick (p), fx (p), matrix (p), global (p), arp (p)
+    : proc (p), top (p), side (p), osc (p), kick (p), phos (p), fx (p), phosFx (p, true), matrix (p), global (p), arp (p)
 {
     addAndMakeVisible (top);
     addAndMakeVisible (side);
-    for (juce::Component* c : std::initializer_list<juce::Component*> { &osc, &kick, &fx, &matrix, &global, &arp })
+    for (juce::Component* c : pages())
         addChildComponent (c);
     top.views.onChange = [this] (View v) { showView (v); };
     updateMode();
@@ -22,12 +22,17 @@ std::vector<View> PsyBoxEditor::Root::available() const
     return { View::Main, View::Fx, View::Matrix, View::Global };
 }
 
+std::vector<juce::Component*> PsyBoxEditor::Root::pages()
+{
+    return { &osc, &kick, &phos, &fx, &phosFx, &matrix, &global, &arp };
+}
+
 juce::Component* PsyBoxEditor::Root::pageFor (View v) const
 {
     switch (v)
     {
-        case View::Main:   return kickLayout ? (juce::Component*) &kick : (juce::Component*) &osc;
-        case View::Fx:     return (juce::Component*) &fx;
+        case View::Main:   return kickLayout ? (juce::Component*) &kick : phosLayout ? (juce::Component*) &phos : (juce::Component*) &osc;
+        case View::Fx:     return phosLayout ? (juce::Component*) &phosFx : (juce::Component*) &fx;
         case View::Matrix: return (juce::Component*) &matrix;
         case View::Arp:    return (juce::Component*) &arp;
         case View::Global: return (juce::Component*) &global;
@@ -43,21 +48,23 @@ void PsyBoxEditor::Root::showView (View v)
         v = View::Main;   // e.g. the arp page, after switching to a bass
     view = v;
     auto* page = pageFor (v);
-    for (juce::Component* c : std::initializer_list<juce::Component*> { &osc, &kick, &fx, &matrix, &global, &arp })
+    for (juce::Component* c : pages())
         c->setVisible (c == page);
     top.views.setSelected (v);
 }
 
 void PsyBoxEditor::Root::updateMode()
 {
-    // 0 melodic synth (arp page), 1 energy and reverse basses (length), 2 bass, 3 kick
-    const bool kickMode = proc.plain (psy::P::EngineMode) > 0.5f;
-    const int mode = kickMode ? 3 : (proc.categoryHasArp() ? 0 : (proc.hasLength() ? 1 : 2));
+    // 0 melodic synth (arp page), 1 energy and reverse basses (length), 2 bass, 3 kick, 4 Phoscyon
+    const int engine = juce::roundToInt (proc.plain (psy::P::EngineMode));
+    const bool kickMode = engine == (int) psy::EngineMode::Kick, phosMode = engine == (int) psy::EngineMode::Phoscyon;
+    const int mode = kickMode ? 3 : phosMode ? 4 : (proc.categoryHasArp() ? 0 : (proc.hasLength() ? 1 : 2));
     if (mode == lastMode) return;
     lastMode = mode;
     kickLayout = kickMode;
-    osc.setExtra (mode == 0 ? OscPage::Extra::None : (mode == 1 ? OscPage::Extra::Length : OscPage::Extra::Knock));
-    top.views.setViews (available(), kickLayout ? "Kick" : "Osc");
+    phosLayout = phosMode;
+    osc.setExtra (mode == 0 || mode == 4 ? OscPage::Extra::None : (mode == 1 ? OscPage::Extra::Length : OscPage::Extra::Knock));
+    top.views.setViews (available(), kickLayout ? "Kick" : phosLayout ? "Phoscyon" : "Osc");
     top.resized();
     showView (view);
     repaint();
@@ -73,7 +80,7 @@ void PsyBoxEditor::Root::resized()
     top.setBounds (0, 0, kW, kTopH);
     side.setBounds (0, kTopH, kSideW, kH - kTopH);
     const juce::Rectangle<int> area (kSideW, kTopH, kW - kSideW, kH - kTopH);
-    for (juce::Component* c : std::initializer_list<juce::Component*> { &osc, &kick, &fx, &matrix, &global, &arp })
+    for (juce::Component* c : pages())
         c->setBounds (area);
 }
 

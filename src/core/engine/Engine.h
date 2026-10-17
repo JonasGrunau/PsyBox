@@ -3,6 +3,8 @@
 #include "Arpeggiator.h"
 #include "KickVoice.h"
 #include "Params.h"
+#include "PhosFx.h"
+#include "PhosVoice.h"
 #include "Voice.h"
 #include "dsp/Dynamics.h"
 #include "dsp/Effects.h"
@@ -95,6 +97,15 @@ private:
     int lastKick = 0;
     int engineMode = -1;   // last mode seen; -1 after a reset
 
+    // Phoscyon mode: one 303 voice (it slides, so it never retriggers in a
+    // second slot), the note's Env 2 and its velocity and random value for
+    // the matrix, and the original's effects.
+    PhosVoice phos;
+    dsp::Adsr phosModEnv;
+    float phosVelocity = 0.f, phosRandom = 0.f;
+    dsp::Rng phosRng { 909 };
+    PhosFx phosFx;
+
     // mono / legato note stack
     std::array<int, 32> held {};
     std::array<bool, 32> heldAccent {};
@@ -151,7 +162,13 @@ private:
     void voiceSlide (int from, int to, float velocity) noexcept;
     void allNotesOff() noexcept;
     bool kickMode() const noexcept { return cur.geti (P::EngineMode) == (int) EngineMode::Kick; }
+    bool phosMode() const noexcept { return cur.geti (P::EngineMode) == (int) EngineMode::Phoscyon; }
     void kickNoteOn (int note, float velocity) noexcept;
+    void phosNoteOn (int note, float velocity) noexcept;
+    // The matrix sources while the Phoscyon voice plays (its envelopes stand
+    // in for the amp env and Env 1), and the knob offsets they add up to.
+    std::array<float, (size_t) ModSrc::Count> phosSources (int sampleInChunk) const noexcept;
+    PhosMods phosMods() const noexcept;
     void followEngineMode() noexcept;
     Voice& allocateVoice (bool& stolen) noexcept;
     // A voice that still sounds would click if it restarted in place (its
@@ -164,6 +181,12 @@ private:
     // oversampled signal before the decimator instead (see process).
     void processFx (float* l, float* r, int n, double bpm, const ParamState& p) noexcept;
     bool distFirst (const ParamState& p) const noexcept { return fxChain (p.geti (P::FxOrder))[0] == (int) Fx::Distortion; }
+    static PhosFxChain phosChain (const ParamState& p) noexcept
+    {
+        return phosFxChain (p.geti (P::FxOrder), p.geti (P::PhosEqSlot), p.geti (P::PhosLimSlot));
+    }
+    bool phosDistFirst (const ParamState& p) const noexcept { return phosChain (p)[0] == (int) Fx::Distortion; }
+    void processFxSlot (int fx, bool first, float* l, float* r, int n, double bpm, const ParamState& p) noexcept;
     void modulateFx (int sampleInBlock) noexcept;   // fills fxParams
 };
 

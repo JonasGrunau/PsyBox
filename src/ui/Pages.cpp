@@ -91,6 +91,33 @@ void KickPage::resized()
 }
 
 // ---------------------------------------------------------------------------
+// PhosPage
+// ---------------------------------------------------------------------------
+PhosPage::PhosPage (PsyBoxProcessor& p)
+    : synth (p), filter (p), distortion (p), calibration (p), macros (p), mod (p, true)
+{
+    for (juce::Component* c : std::initializer_list<juce::Component*> { &synth, &filter, &distortion, &calibration, &macros, &mod })
+        addAndMakeVisible (c);
+}
+
+void PhosPage::resized()
+{
+    // one row of cells for the 303 row and the calibration, two for the
+    // filter and distortion; the modulation gets the rest
+    constexpr int kOneRow = kPad + kHeaderH + kHeaderGap + kCellH + kPad;   // 122
+    constexpr int kFilterW = 360, kMacroW = 208;
+    const int w = getWidth(), h = getHeight();
+    synth.setBounds (0, 0, w, kOneRow);
+    filter.setBounds (0, kOneRow, kFilterW, kRowH);
+    distortion.setBounds (kFilterW, kOneRow, w - kFilterW, kRowH);
+    const int calY = kOneRow + kRowH;
+    calibration.setBounds (0, calY, w, kOneRow);
+    const int modY = calY + kOneRow;
+    macros.setBounds (0, modY, kMacroW, h - modY);
+    mod.setBounds (kMacroW, modY, w - kMacroW, h - modY);
+}
+
+// ---------------------------------------------------------------------------
 // MatrixPage
 // ---------------------------------------------------------------------------
 MatrixPage::MatrixPage (PsyBoxProcessor& p) : panel (p)
@@ -147,8 +174,9 @@ void MatrixPage::Panel::paint (juce::Graphics& g)
     auto h = header().withTrimmedLeft (titleWidth());
     g.setColour (col::textFaint);
     g.setFont (label (10.5f));
-    g.drawText ("Drag a source's arrows onto any knob on the OSC page to add a route, or set one up here.", h,
-                juce::Justification::centredRight, false);
+    const bool phos = juce::roundToInt (proc.plain (P::EngineMode)) == (int) psy::EngineMode::Phoscyon;
+    g.drawText ("Drag a source's arrows onto any knob on the " + juce::String (phos ? "Phoscyon" : "OSC")
+                    + " page to add a route, or set one up here.", h, juce::Justification::centredRight, false);
 
     g.setFont (label (10.f));
     g.setColour (col::textDim);

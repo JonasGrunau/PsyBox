@@ -112,7 +112,9 @@ private:
 class ModPanel : public Section, private juce::Timer
 {
 public:
-    explicit ModPanel (PsyBoxProcessor&);
+    // phoscyon: the 303's envelopes take the first two tabs (VCA and MEG, shown
+    // with the knobs that shape them), and it has no Env 3
+    explicit ModPanel (PsyBoxProcessor&, bool phoscyon = false);
     void paint (juce::Graphics&) override;
     void resized() override;
     void show (int page);
@@ -131,6 +133,8 @@ private:
     int current = 0;
     std::array<bool, 3> lastSync {};
     juce::Rectangle<int> stripCaption;
+    bool phos = false;
+    std::unique_ptr<juce::Component> vcaDisplay, megDisplay;   // the Phoscyon envelopes
     void timerCallback() override;
 };
 

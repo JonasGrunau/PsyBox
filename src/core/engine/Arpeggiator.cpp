@@ -26,6 +26,9 @@ ArpSettings ArpSettings::from (const ParamState& p) noexcept
         for (int i = 0; i < kArpSteps; ++i)
             s.pattern.setFlag (i, ArpPattern::Slide, false);
     }
+    // The Phoscyon engine accents from velocity 64 up, like the original.
+    if (p.geti (P::EngineMode) == (int) EngineMode::Phoscyon)
+        s.plainVelocity = 0.4f;
     return s;
 }
 

@@ -11,13 +11,14 @@ Builds as **VST3**, **Audio Unit** and **Standalone** (macOS).
 
 ## Categories
 
-38 kinds of sound, each with its own recipe, in six groups in the sidebar.
+39 kinds of sound, each with its own recipe, in seven groups in the sidebar.
 Each group is a header; click one to open it and its sounds fold out under
 it, while closed groups show a dot per sound. The accents run as one rainbow
 down the whole list: red at the first sound of the first group, through
 every group, to magenta at the last kick.
 
-- **Main**: Acid · Ghost Stab · Grid · Jilax · Pluck · Psy Lead · Stab
+- **Main**: Ghost Stab · Grid · Jilax · Pluck · Psy Lead · Stab
+- **Acid**: Acid · Phoscyon
 - **FX**: Alien Voice · Bubble · Glitch · Gurgle · Laser · Metallic · Screech · Squelch · Wobble · Zap
 - **Energy**: Downlifter · Impact · Noise FX · Reverse · Riser · Uplifter
 - **Background**: Atmos · Drone · Gate
@@ -43,6 +44,29 @@ cut, more resonance, a tube or soft drive, a phaser and a dotted delay. With
 **Arp** ticked the psy line plays straight and rolls on (a rest or two a bar,
 few slides), a pedal on the key leaping an octave or two up to the octave,
 b2, third, fifth or seventh.
+
+### Phoscyon
+
+A clean-room rewrite of D16 Phoscyon 2's 303, built by measuring the original
+as a black box: hundreds of renders through a test host, fitted parameter by
+parameter (harmonic levels for the filter, spectrograms for the envelopes and
+accents, dry-against-wet renders for each effect). No code or artwork from the
+original is used.
+
+Picking it switches PsyBox to a dedicated 303 engine and a PHOSCYON page in
+place of OSC: the 303 row (Wave, Tuning, Cutoff, Resonance, Envmod, Decay,
+Accent, then Slide Time, Sweep Amt., Env. Attack, Acc. Decay, Acc. Vol., Vib.
+Speed, Vib. Depth) with the two Couple switches, a live filter curve, the
+distortion (19 diode, overdrive and RAT models), the calibration trimmers
+with the original's calibration presets, macros and modulators. Accents come
+from velocity 64 and up; overlapping notes slide.
+
+The FX page becomes an eleven-slot rack: Phoscyon Distortion, Phoscyon EQ,
+Phoscyon Chorus, Phoscyon Delay, Phoscyon Reverb and Phoscyon Limiter work
+like the original's, and Crush, Freq Shift, Phaser, Compressor and Width are
+PsyBox's own. Every slot can be dragged anywhere in the chain. The ARP, MATRIX
+and GLOBAL pages are the usual ones; generated lines are 1/16 acid patterns
+with accents and slides.
 
 ### Ghost Stab
 

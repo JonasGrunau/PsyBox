@@ -30,6 +30,7 @@ struct ArpSettings
     bool hold = false;
     int key = -1, scale = 0;   // key 0..11: every note is moved into the scale; -1 plays them as they come
     ArpPattern pattern = ArpPattern::parse ("x");
+    float plainVelocity = 0.75f;   // the most an unaccented step plays at (under the accent threshold)
 
     static ArpSettings from (const ParamState& p) noexcept;
 };
@@ -142,7 +143,7 @@ private:
             note = std::clamp (quantizeToScale (note, set.key, set.scale), 0, 127);
         // The pattern owns the accent: accented steps hit full velocity, the
         // others stay under the engine's accent threshold.
-        vel = set.pattern.has (pos, ArpPattern::Accent) ? 1.f : std::min (vel, 0.75f);
+        vel = set.pattern.has (pos, ArpPattern::Accent) ? 1.f : std::min (vel, set.plainVelocity);
 
         // Still sounding means the last step was tied (slide flag, or a gate of
         // 100 % or more). The voice slides to the new note with its envelopes

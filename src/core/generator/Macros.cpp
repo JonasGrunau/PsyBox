@@ -67,6 +67,13 @@ namespace
             case D::DelayFb: case D::DelayMix:    return s.on (P::DelayOn);
             case D::ReverbSize: case D::ReverbMix: return s.on (P::ReverbOn);
             case D::WidthAmount:                  return s.on (P::WidthOn);
+            case D::PhosCutoff: case D::PhosReso: case D::PhosDecay: case D::PhosTune: return true;
+            case D::PhosEnvMod:                   return true;
+            case D::PhosAccent:                   return s.get (P::PhosAccent) > 0.05f;
+            case D::PhosDistDrive: case D::PhosDistColor: return s.on (P::PhosDistOn);
+            case D::PhosChorusMix:                return s.on (P::PhosChoOn);
+            case D::PhosDelayFb: case D::PhosDelayMix: return s.on (P::PhosDlyOn);
+            case D::PhosReverbMix:                return s.on (P::PhosRevOn);
             case D::PitchAll: case D::PitchA: case D::PitchB: case D::Amp: case D::Pan: return true;
             case D::None: case D::Count:          return false;
         }
@@ -156,6 +163,18 @@ namespace
             case D::ReverbSize:   return { "Room", Kind::Space };
             case D::ReverbMix:    return { "Reverb", Kind::Space };
             case D::WidthAmount:  return { "Width", Kind::Space };
+            case D::PhosCutoff:   return { "Cutoff", Kind::Filter };
+            case D::PhosReso:     return { "Resonance", Kind::Filter };
+            case D::PhosEnvMod:   return { "Envmod", Kind::Filter };
+            case D::PhosDecay:    return { "Decay", Kind::Filter };
+            case D::PhosAccent:   return { "Accent", Kind::Filter };
+            case D::PhosTune:     return { "Tuning", Kind::Pitch };
+            case D::PhosDistDrive: return { "Distortion", Kind::Grit };
+            case D::PhosDistColor: return { "Color", Kind::Colour };
+            case D::PhosChorusMix: return { "Chorus", Kind::Colour };
+            case D::PhosDelayFb:  return { "Feedback", Kind::Space };
+            case D::PhosDelayMix: return { "Delay", Kind::Space };
+            case D::PhosReverbMix: return { "Reverb", Kind::Space };
             case D::None: case D::Count: break;
         }
         return { "", Kind::None };
@@ -261,7 +280,7 @@ void RecipeBuilder::macros (std::initializer_list<ModDst> targets)
                 first = (ModDst) s.geti (modDstParam (i));
         if (first == ModDst::None) continue;
 
-        const bool cutoff = first == ModDst::F1Cutoff || first == ModDst::F2Cutoff;
+        const bool cutoff = first == ModDst::F1Cutoff || first == ModDst::F2Cutoff || first == ModDst::PhosCutoff;
         std::pair<float, float> range { 0.f, 0.f };
         switch (labelOf (first).kind)
         {
@@ -284,14 +303,17 @@ void RecipeBuilder::macros (std::initializer_list<ModDst> targets)
         for (int i = 0; i < kNumModSlots; ++i)
         {
             const int dst = s.geti (modDstParam (i));
-            if (s.geti (modSrcParam (i)) != (int) macroSource (m) || (dst != (int) ModDst::F1Cutoff && dst != (int) ModDst::F2Cutoff))
+            if (s.geti (modSrcParam (i)) != (int) macroSource (m)
+                || (dst != (int) ModDst::F1Cutoff && dst != (int) ModDst::F2Cutoff && dst != (int) ModDst::PhosCutoff))
                 continue;
-            const P knobP = dst == (int) ModDst::F1Cutoff ? P::F1Cutoff : P::F2Cutoff;
+            const P knobP = dst == (int) ModDst::F1Cutoff ? P::F1Cutoff : dst == (int) ModDst::F2Cutoff ? P::F2Cutoff : P::PhosCutoff;
             if (locked (knobP)) continue;
-            // the voice moves cutoff by 8 octaves per unit of macro x amount
+            // the voice moves cutoff by 8 octaves per unit of macro x amount;
+            // the Phoscyon cutoff moves by its knob's own travel
             const float octaves = 8.f * s.get (modAmtParam (i)) * v * share;
             const auto& d = def (knobP);
-            const float shift = octaves / std::log2 (d.max / d.min);   // in the knob's (log) range
+            const float shift = knobP == P::PhosCutoff ? s.get (modAmtParam (i)) * v * share
+                                                       : octaves / std::log2 (d.max / d.min);   // in the knob's (log) range
             auto& r = ranges.e[(size_t) knobP];
             s.set (knobP, d.toPlain (std::max (0.f, d.toNorm (s.get (knobP)) - shift)));
             if (r.touched) { r.lo = std::max (0.f, r.lo - shift); r.hi = std::max (0.f, r.hi - shift); }

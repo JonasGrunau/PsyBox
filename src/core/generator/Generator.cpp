@@ -161,8 +161,10 @@ ParamState Generator::generate (Category c, uint32_t seed, const ParamState& cur
         arpPatternRecipeFor (c) (arp);
     }
 
-    // Not the recipe's to decide and not lockable: a kick category is a kick.
-    out.set (P::EngineMode, (float) (familyOf (c) == Family::Kick ? EngineMode::Kick : EngineMode::Synth));
+    // Not the recipe's to decide and not lockable: a kick category is a kick,
+    // the Phoscyon category plays the 303 engine.
+    out.set (P::EngineMode, (float) (familyOf (c) == Family::Kick ? EngineMode::Kick
+                                     : isPhoscyon (c)            ? EngineMode::Phoscyon : EngineMode::Synth));
     return out;
 }
 
