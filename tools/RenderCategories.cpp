@@ -85,6 +85,7 @@ namespace
             }
             case Category::ProgBass:   // the roll, E1 E1 G1 D1 by the bar (octave -1 in the recipe)
             case Category::GhostBass:
+            case Category::JilaxBass:
             {
                 static const int bars[4] = { 40, 40, 43, 38 };
                 for (int b = 0; b < 16; ++b)

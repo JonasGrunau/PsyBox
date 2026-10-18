@@ -694,4 +694,142 @@ void jilaxRecipe (RecipeBuilder& b)
         b.settle (d);
 }
 
+// ---- Jilax Bass ---------------------------------------------------------------
+//
+// His rolling psy basses, from his Serum patches: the main basses of his
+// packs and his Bass Essentials, played through Serum as a roll (the three
+// 16ths after each kick) and measured against the same roll from here,
+// octave bands in windows over the note, level over the note, width, crest.
+// Translated setting by setting first, which pinned down the conversions:
+//  - Serum's MG Low 24 is this Ladder 24 (within 0.5 dB on every harmonic
+//    from 60 to 480 Hz), so its cutoffs carry over as they are.
+//  - A mod amount of 1 on Serum's cutoff is 11.4 octaves; 8 here.
+//  - Serum's decays fall about half as steeply: at its default curve a
+//    Serum decay of 100 ms is 215 ms here. Its sustain knob is in dB: the
+//    level is the knob squared.
+// Translated that way his plain patches land within a dB or two of his
+// renders from 15 ms on. What his patches share:
+//  - One saw, no unison (the low end stays put), three octaves down.
+//  - The ladder low, an envelope closing it over the note, and a second
+//    one snapping it open at the start: either a low cutoff, a deep
+//    envelope and a short, strong snap, or the cutoff up at 250-330 Hz with
+//    a gentle envelope and a slow, small snap (and the amp fading).
+//  - The amp a gate with a long release (100-200 ms here), so each note
+//    rings into the next and the roll never drops more than about 4 dB.
+//  - A tube or soft clip in two of three, a compressor in most.
+// The Bass Essentials play a bounced bass of his from Serum's noise slot (a
+// saw only ticks in); that bounce drops from three octaves up over 30-60 ms,
+// fundamental last, and is a little wide. The knock kind rebuilds it with
+// the pitch envelope.
+// Left out: every Serum note starts with a 0 ms edge, a tick above 2 kHz in
+// the first 2 ms; the basses here keep their 1.5 ms soft start.
+void jilaxBassRecipe (RecipeBuilder& b)
+{
+    // closed, open, knock (the Bass Essentials)
+    const int kind = b.weighted ({ 0.5f, 0.2f, 0.3f });
+    const bool open = kind == 1, knock = kind == 2;
+
+    const bool legato = b.chance (0.5f);
+    b.set (P::VoiceMode, (float) (legato ? VoiceMode::Legato : VoiceMode::Mono));
+    b.set (P::Glide, 0.f);
+    b.set (P::GlideMode, 1.f);
+    b.set (P::Octave, -1.f);
+    b.set (P::VelSens, 0.15f);
+    b.set (P::Accent, 0.f);
+
+    osc (b, false, OscType::Analog);
+    b.set (P::OscAShape, kSaw);
+    b.set (P::OscALevel, 0.85f);
+
+    // Env 1 closes the ladder over the note, Env 2 snaps it open at the start
+    b.pick (P::F1Type, { ft (FilterType::Ladder24), ft (FilterType::LadderLP12) }, { 0.75f, 0.25f });
+    b.uni (P::F1Reso, 0.f, 0.1f);
+    b.set (P::F1Key, 0.f);
+    b.uni (P::F1Drive, 0.f, 0.12f);
+    b.set (P::FenvA, 0.f);
+    b.set (P::MenvA, 0.f);
+    b.set (P::MenvS, 0.f);
+    b.uni (P::MenvR, 20.f, 40.f);
+    b.uni (P::FenvR, 30.f, 150.f);
+    if (open)
+    {
+        b.uni (P::F1Cutoff, 240.f, 340.f);
+        b.uni (P::F1Env, 0.35f, 0.6f);
+        b.uni (P::FenvD, 180.f, 320.f);
+        b.set (P::FenvS, 0.f);
+        b.uni (P::MenvD, 90.f, 170.f);
+        b.route (S::ModEnv, D::F1Cutoff, 0.12f, 0.25f);
+    }
+    else
+    {
+        b.uni (P::F1Cutoff, knock ? 140.f : 65.f, knock ? 260.f : 140.f);
+        b.uni (P::F1Env, 0.2f, 0.9f);
+        b.uni (P::FenvD, 140.f, 550.f);
+        b.uni (P::FenvS, 0.f, b.chance (0.3f) ? 0.35f : 0.12f);
+        b.uni (P::MenvD, knock ? 4.f : 10.f, knock ? 10.f : 75.f);
+        b.route (S::ModEnv, D::F1Cutoff, knock ? 0.5f : 0.17f, knock ? 0.85f : 0.9f);
+    }
+    if (knock)
+    {
+        b.set (P::PenvAttack, 0.f);
+        b.set (P::PenvDest, 0.f);
+        b.uni (P::PenvAmt, 28.f, 36.f);
+        b.uni (P::PenvDecay, 30.f, 65.f);
+        b.uni (P::PenvCurve, 0.f, 0.4f);
+    }
+
+    // a gate (the open kind fades now and then); the knock's body falls
+    // about 3 dB by 50 ms and its notes stop shorter
+    b.uni (P::AenvA, 1.5f, 3.f);
+    if (knock)
+    {
+        b.uni (P::AenvD, 150.f, 400.f);
+        b.uni (P::AenvS, 0.45f, 0.75f);
+    }
+    else if (open && b.chance (0.6f))
+    {
+        b.uni (P::AenvD, 100.f, 2000.f);
+        b.uni (P::AenvS, 0.15f, 0.65f);
+    }
+    else
+    {
+        b.uni (P::AenvD, 300.f, 3000.f);
+        b.uni (P::AenvS, 0.85f, 1.f);
+    }
+    b.uni (P::AenvR, knock ? 25.f : 90.f, knock ? 60.f : 220.f);
+
+    // the knock clipped hard: his bounce is as dense as a limited bass
+    if (knock || b.chance (0.6f))
+    {
+        b.on (P::DistOn, true);
+        b.pick (P::DistType, { (int) DistType::Tube, (int) DistType::Soft }, { 0.6f, 0.4f });
+        b.uni (P::DistDrive, knock ? 12.f : 4.f, knock ? 22.f : 14.f);
+        b.uni (P::DistMix, knock ? 0.9f : 0.35f, knock ? 1.f : 0.9f);
+        b.uni (P::DistTone, 6000.f, 16000.f);
+    }
+    if (knock && b.chance (0.7f))
+    {
+        b.on (P::WidthOn, true);
+        b.uni (P::WidthStereo, 0.15f, 0.55f);
+        b.uni (P::WidthTime, 6.f, 18.f);
+        b.uni (P::WidthMonoHz, 150.f, 250.f);
+    }
+    fxCompBass (b);
+    // The knock is the loudest moment. Compressed, it gets through after
+    // every kick (the comp lets go in the gap) and the first 16th sticks
+    // out 2-4 dB; his roll is even, so there the comp is only a gain stage,
+    // its make-up the 10 dB less it no longer takes off.
+    if (knock)
+    {
+        b.set (P::CompThresh, -6.f);
+        b.set (P::CompRatio, 2.f);
+        b.uni (P::CompOut, 0.f, 3.f);
+    }
+
+    b.route (S::Macro1, D::F1Cutoff, 0.2f, 0.35f);
+    b.route (S::Macro2, D::FilterEnvAmt, 0.2f, 0.3f);
+    if (knock) b.macros ({ D::PitchEnvAmt, D::F1Reso, D::DistDrive });
+    else b.macros ({ D::F1Reso, D::F1Drive, D::DistDrive });
+}
+
 } // namespace psy

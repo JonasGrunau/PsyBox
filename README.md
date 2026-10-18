@@ -11,7 +11,7 @@ Builds as **VST3**, **Audio Unit** and **Standalone** (macOS).
 
 ## Categories
 
-43 kinds of sound, each with its own recipe, in seven groups in the sidebar.
+44 kinds of sound, each with its own recipe, in seven groups in the sidebar.
 Each group is a header; click one to open it and its sounds fold out under
 it, while closed groups show a dot per sound. The accents run as one rainbow
 down the whole list: red at the first sound of the first group, through
@@ -220,9 +220,9 @@ opens upward.
 
 ### Basses
 
-Seven bass styles, under the **Bass** tab:
+Eight bass styles, under the **Bass** tab:
 
-Bass Shot · Ghost Bass · Offbeat Bass · Prog Bass · Psy Bass · Reverse Bass · Reverse Sub
+Bass Shot · Ghost Bass · Jilax Bass · Offbeat Bass · Prog Bass · Psy Bass · Reverse Bass · Reverse Sub
 
 Basses play on the synth engine, mono and dry, and have no arp: you play their
 rhythm. Their **Knock** panel (under Voicing) holds the pitch drop at the start
@@ -240,6 +240,16 @@ knock, envelope, loudness, stereo):
   harmonic's level (his kick owns the sub), with a slight filter flick at
   every note. Within 0.7 dB of his notes over the first twelve harmonics.
   Roll it on the "e", "and" and "a", or hold longer notes as bass stabs.
+- **Jilax Bass**: Jilax's rolling psy basses, rebuilt from his own Serum
+  patches (the main basses of his packs and his Bass Essentials, played
+  through Serum as a roll and measured against the same roll from here).
+  One saw three octaves down through a Moog-style ladder: either low, with a
+  deep envelope and a short snap open at every note, or up near 300 Hz with
+  a gentle one. A long release lets each 16th ring into the next, and two in
+  three get a tube or soft clip. A third are the Bass Essentials kind: a
+  knock that falls from three octaves up over 30-60 ms, clipped hard and a
+  little wide. Serum starts every note with a 0 ms edge, a tick; this one
+  keeps the basses' soft 1.5 ms start.
 - **Offbeat Bass**: one note between the kicks. A big pitch knock, then a
   low-pass that closes from a bright pluck to almost a sine, and a slow tail
   after the key is let go.

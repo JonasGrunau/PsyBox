@@ -2503,6 +2503,7 @@ Recipe recipeFor (Category c) noexcept
         case Category::Fm:          return fm;
         case Category::Pad:         return pad;
         case Category::Perc:        return perc;
+        case Category::JilaxBass:   return jilaxBassRecipe;
         case Category::KickFullOn:
         case Category::KickGoa:
         case Category::KickDarkForest:

@@ -315,7 +315,7 @@ TEST_CASE ("Every category has a name, a short name and a blurb", "[generator]")
         listed += (int) categoriesIn (f).size();
     }
     CHECK (listed == kNumCategories);
-    CHECK (familySize (Family::Bass) == 7);
+    CHECK (familySize (Family::Bass) == 8);
     CHECK (familySize (Family::Kick) == 5);
 }
 
@@ -721,7 +721,7 @@ TEST_CASE ("Leads and pads get unison now and then, basses never", "[generator][
         leads += lead.geti (P::OscAUnison) > 1 || lead.geti (P::OscBUnison) > 1 ? 1 : 0;
         pads += pad.geti (P::OscAUnison) > 1 || pad.geti (P::OscBUnison) > 1 ? 1 : 0;
         for (auto c : { Category::PsyBass, Category::ProgBass, Category::OffbeatBass, Category::BassShot, Category::ReverseBass, Category::ReverseSub,
-                        Category::GhostBass })
+                        Category::GhostBass, Category::JilaxBass })
         {
             const auto b = g.generate (c, seed, ParamState(), LockSet(), false);
             CHECK (b.geti (P::OscAUnison) == 1);
@@ -893,6 +893,64 @@ TEST_CASE ("Ghost basses roll without a knock, their fundamental thinned for the
     CHECK (familyOf (Category::GhostBass) == Family::Bass);
     CHECK (groupOf (Category::GhostBass) == CategoryGroup::Bass);
     CHECK_FALSE (hasArp (Category::GhostBass));
+}
+
+TEST_CASE ("Jilax basses roll one saw through a low ladder, snapped open at every note", "[generator][jilax]")
+{
+    Generator g;
+    const int n = 300;
+    int knocks = 0, open = 0, driven = 0;
+    for (uint32_t seed = 1; seed <= (uint32_t) n; ++seed)
+    {
+        INFO ("seed " << seed);
+        const auto p = g.generate (Category::JilaxBass, seed, ParamState(), LockSet(), true);
+        CHECK_FALSE (p.on (P::ArpOn));
+        CHECK (p.geti (P::VoiceMode) != (int) VoiceMode::Poly);
+        CHECK (p.geti (P::Octave) == -1);
+        CHECK (p.geti (P::OscAType) == (int) OscType::Analog);
+        CHECK (p.get (P::OscAShape) == 2.f);   // a saw
+        CHECK_FALSE (p.on (P::OscBOn));
+        CHECK (p.geti (P::OscAUnison) == 1);
+        const int f1 = p.geti (P::F1Type);
+        CHECK ((f1 == (int) FilterType::Ladder24 || f1 == (int) FilterType::LadderLP12));
+        // where the cutoff sits with the macros where they start (the cutoff
+        // macro takes the knob down by what it opens)
+        float oct = 0.f;
+        for (int s = 0; s < kNumModSlots; ++s)
+            for (int m = 0; m < 4; ++m)
+                if (p.geti (modSrcParam (s)) == (int) ModSrc::Macro1 + m && p.geti (modDstParam (s)) == (int) ModDst::F1Cutoff)
+                    oct += 8.f * p.get (modAmtParam (s)) * p.get ((P) ((int) P::Macro1 + m));
+        const float cutoff = p.get (P::F1Cutoff) * std::exp2 (oct);
+        CHECK (cutoff >= 64.f);
+        CHECK (cutoff <= 345.f);
+        CHECK (p.get (P::F1Key) == 0.f);   // Serum's filter keytrack was off on all of them
+        CHECK (p.get (P::F1Env) > 0.f);
+        int snaps = 0;
+        for (int s = 0; s < kNumModSlots; ++s)
+            if (p.geti (modSrcParam (s)) == (int) ModSrc::ModEnv && p.geti (modDstParam (s)) == (int) ModDst::F1Cutoff
+                && p.get (modAmtParam (s)) > 0.f)
+                ++snaps;
+        CHECK (snaps == 1);
+        CHECK (p.get (P::AenvA) >= 1.5f);   // no click at the note start
+        for (auto fx : { P::DelayOn, P::ReverbOn, P::ChorusOn })
+            CHECK_FALSE (p.on (fx));
+        CHECK (p.on (P::CompOn));
+        const bool knock = p.get (P::PenvAmt) >= 28.f;
+        if (! knock) CHECK (p.get (P::PenvAmt) == 0.f);
+        if (! knock) CHECK_FALSE (p.on (P::WidthOn));   // the main basses are mono
+        if (knock) CHECK (p.on (P::DistOn));
+        knocks += knock ? 1 : 0;
+        open += cutoff >= 239.f && ! knock ? 1 : 0;
+        driven += p.on (P::DistOn) && ! knock ? 1 : 0;
+    }
+    CHECK (knocks > n / 5);
+    CHECK (knocks < n * 2 / 5);
+    CHECK (open > n / 10);          // the open kind, cutoff up at 250-330 Hz
+    CHECK (driven > n * 7 / 20);    // a clip in two of three
+    CHECK (familyOf (Category::JilaxBass) == Family::Bass);
+    CHECK (groupOf (Category::JilaxBass) == CategoryGroup::Bass);
+    CHECK_FALSE (hasArp (Category::JilaxBass));
+    CHECK_FALSE (hasLength (Category::JilaxBass));
 }
 
 TEST_CASE ("Grids are short hits on a 16th arp that leaves most beats to the kick", "[generator][grid]")

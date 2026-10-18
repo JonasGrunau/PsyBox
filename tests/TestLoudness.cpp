@@ -234,7 +234,8 @@ TEST_CASE ("A leveled patch measures the target on an independent BS.1770 meter"
 {
     Generator g;
     for (Category c : { Category::Acid, Category::Phoscyon, Category::PsyLead, Category::Atmos, Category::PsyBass, Category::ProgBass,
-                        Category::KickFullOn, Category::Jilax, Category::ReverseSub, Category::Riser, Category::Grid, Category::Gate })
+                        Category::KickFullOn, Category::Jilax, Category::JilaxBass, Category::ReverseSub, Category::Riser, Category::Grid,
+                        Category::Gate })
         for (uint32_t seed : { 11u, 12u })
         {
             INFO (categoryInfo()[(size_t) c].name << " seed " << seed);

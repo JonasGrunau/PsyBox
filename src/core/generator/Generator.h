@@ -100,6 +100,7 @@ Recipe arpRecipeFor (Category c) noexcept;          // arp settings (ArpRecipes.
 Recipe arpPatternRecipeFor (Category c) noexcept;   // the arp's 16 steps
 Recipe kickRecipeFor (Category c) noexcept;         // kick categories (KickRecipes.cpp)
 void jilaxRecipe (RecipeBuilder& b);                // Jilax shots (JilaxRecipes.cpp)
+void jilaxBassRecipe (RecipeBuilder& b);            // Jilax's rolling basses (JilaxRecipes.cpp)
 void ghostStabRecipe (RecipeBuilder& b);            // Ghost Rider's offbeat stab (GhostRecipes.cpp)
 void ghostBassRecipe (RecipeBuilder& b);            // Ghost Rider's rolling bass (GhostRecipes.cpp)
 void phoscyonRecipe (RecipeBuilder& b);             // TB-303 patches on the Phoscyon engine (PhosRecipes.cpp)

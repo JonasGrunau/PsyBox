@@ -1677,6 +1677,7 @@ Recipe arpPatternRecipeFor (Category c) noexcept
         case Category::ReverseBass:
         case Category::ReverseSub:
         case Category::GhostBass:
+        case Category::JilaxBass:
         case Category::Jilax:
         case Category::KickFullOn:
         case Category::KickGoa:
@@ -1729,6 +1730,7 @@ Recipe arpRecipeFor (Category c) noexcept
         case Category::ReverseBass:
         case Category::ReverseSub:
         case Category::GhostBass:
+        case Category::JilaxBass:
         case Category::Jilax:
         case Category::KickFullOn:
         case Category::KickGoa:
