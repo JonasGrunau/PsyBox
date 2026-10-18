@@ -1,5 +1,6 @@
 #include "generator/Generator.h"
 
+#include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
@@ -758,6 +759,67 @@ TEST_CASE ("Jilax shots last a beat or two, cut at the end, high-passed in the b
     CHECK (bassRoot > n * 6 / 10);        // most roots two octaves under the key
     CHECK (highPassed > n * 3 / 4);       // and the fundamental taken out
     CHECK (clippedLast > n * 3 / 4);      // a clipper at the end of the chain
+}
+
+TEST_CASE ("Jilax shots start where the recipe draws them: tuned air, gentle drive, a clipper that follows a rising and falling filter", "[generator][jilax][macro]")
+{
+    // The macros start part way up; on Jilax they add nothing to the detune
+    // or the drives at that start (settle()), so the macro turns both ways
+    // around the drawn value. The noise is tuned (or pink through the
+    // filter), and a filter envelope that rises and falls drives the clipper.
+    Generator g;
+    int settled = 0, follows = 0, noisy = 0;
+    for (uint32_t seed = 1; seed <= 300; ++seed)
+    {
+        INFO ("seed " << seed);
+        const auto p = g.generate (Category::Jilax, seed, ParamState(), LockSet());
+        if (p.get (P::NoiseLevel) > 0.f)
+        {
+            ++noisy;
+            CHECK ((p.geti (P::NoiseType) == 4 || p.geti (P::NoiseType) == 1));
+            if (p.on (P::NoiseDirect)) CHECK (p.geti (P::NoiseType) == 4);
+        }
+        float detune = p.get (P::OscADetune), drive = p.get (P::F1Drive), dist = def (P::DistDrive).toNorm (p.get (P::DistDrive));
+        float distSwing = 0.f;
+        for (int i = 0; i < kNumModSlots; ++i)
+        {
+            const int src = p.geti (modSrcParam (i)), dst = p.geti (modDstParam (i));
+            const float amt = p.get (modAmtParam (i));
+            if (src == (int) ModSrc::FilterEnv && dst == (int) ModDst::DistDrive) distSwing += amt;
+            if (src < (int) ModSrc::Macro1 || src > (int) ModSrc::Macro4) continue;
+            const float v = p.get ((P) ((int) P::Macro1 + src - (int) ModSrc::Macro1)) * amt;
+            if (dst == (int) ModDst::DetuneA) { detune += v; ++settled; }
+            if (dst == (int) ModDst::F1Drive) { drive += v; ++settled; }
+            if (dst == (int) ModDst::DistDrive) { dist += v; ++settled; }
+        }
+        // what plays at the start stays in the recipe's ranges
+        CHECK (detune <= (p.geti (P::OscAType) == (int) OscType::Supersaw ? 0.18f : 0.16f) + 1e-4f);
+        CHECK (drive <= 0.14f + 1e-4f);
+        if (p.on (P::DistOn) && p.on (P::DistAuto))
+        {
+            CHECK (def (P::DistDrive).toPlain (std::min (1.f, dist + distSwing)) <= 20.f + 1e-3f);
+            if (distSwing > 0.f)
+            {
+                ++follows;
+                CHECK (p.get (P::F1Env) > 0.f);
+                CHECK (p.get (P::FenvA) >= 150.f);   // a rise and fall, not a close
+                CHECK (distSwing == Catch::Approx (13.f / 36.f).margin (1e-4));
+            }
+        }
+        // Mutate keeps the settled knobs inside their (moved) ranges
+        for (P k : { P::OscADetune, P::F1Drive, P::DistDrive })
+        {
+            const auto& r = g.lastRanges().e[(size_t) k];
+            if (! r.touched) continue;
+            const float n = def (k).toNorm (p.get (k));
+            CHECK (r.lo <= r.hi);
+            CHECK (n >= r.lo - 1e-4f);
+            CHECK (n <= r.hi + 1e-4f);
+        }
+    }
+    CHECK (settled > 50);
+    CHECK (follows > 5);
+    CHECK (noisy > 60);
 }
 
 TEST_CASE ("Ghost stabs start off the beat and stop before the next kick", "[generator][ghost]")

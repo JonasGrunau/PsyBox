@@ -108,26 +108,40 @@ Psytrance synth shots: one hit of a beat (sometimes two) at the tempo, the way
 sample packs sell them. Every recipe value was fitted to 500 reference shots by
 rendering hundreds of generated ones the same way and comparing level over the
 shot, brightness and how it moves, octave bands, harmonics, stereo width and
-density. The way each part is built follows Jilax's own Serum patches. A shot
-is:
+density. The way each part is built follows Jilax's own Serum patches (250
+decoded presets, his 126 one-shots also played through Serum and measured the
+same way). A shot is:
 
 - **A bass-register saw stack, high-passed.** The root sits two octaves under
   the key (E3 plays an E1 root, like the reference "E" shots), and a steep,
   slightly resonant high-pass at 160-330 Hz takes out the fundamental, so the
   energy sits in a dense comb of harmonics from the 4th up. Often a second
-  stack an octave and a fifth up (+19), sometimes a noise layer. Some shots are
+  stack an octave and a fifth up (+19), sometimes a layer of **Tuned** noise
+  for air that stays on the harmonics (now and then pink through the
+  filter). Some shots are
   supersaws, wavetables (scanned over the hit), squares, FM tones or minor and
   major chords (a unison stack of octave and fifth plus a third on osc B), an
   octave or two higher.
-- **Wide and thick**: up to sixteen unison voices at a moderate detune with
-  free-running phases and full width, plus stereoize and chorus, so the side is
-  about as loud as the mid and the gaps between the harmonics fill in. About
-  one shot in five is close to mono instead.
-- **Dense**: a clipper at the end of the chain (Distortion, mostly hard, with
-  **Auto Level** and **Low Cut**), after OTT-style multiband compression. On
-  the brightest third the compressor's high band lifts the upper mids.
-- **One gesture**: a hold that slides down a few dB, a decay, a swell, a hit
-  that rings out through the next beat (reverb and release), or a trance gate;
+- **Wide and thick**: up to sixteen unison voices with free-running phases
+  and full width, plus stereoize and chorus, so the side is about as loud as
+  the mid. The detune spreads the way his stacks do: a third nearly in unison
+  (thick without hiss), most a few cents apart, a quarter wide. That keeps the
+  top tonal like the references', where one gentle detune on every stack
+  made it hiss. About one shot in five is close to mono instead.
+- **Dense, not chewed**: a clipper at the end of the chain (Distortion, mostly
+  soft or tube, 13-20 dB over the sound's own level with **Auto Level**, and
+  **Low Cut**), after OTT-style multiband compression. The shots are as dense
+  as the references (about 8 dB crest where they are loudest) with a tenth of
+  their energy distortion products, where the old hard clip at 19-27 dB made
+  a quarter of it (three quarters of the top octaves). Where the filter rises
+  and falls, the clipper's drive follows the filter envelope, so the dark ends
+  aren't made of the clipper's harmonics. The macros start part way up but add
+  no detune or drive at their start: the shot sounds as drawn, and turning a
+  macro either way moves it from there. On the brightest third the
+  compressor's high band lifts the upper mids.
+- **One gesture**: in almost half the shots a one-beat hit that rings out
+  through the next beat (release and reverb), like half the references;
+  otherwise a hold that slides down a few dB, a decay, a swell, or a trance gate;
   the low-pass (often a ladder) closes over the hit in about half the shots, by
   an envelope or by an LFO synced to the beat (the hit then often starts thin
   and bright, the high-pass coming down with the filter), stays open, opens or

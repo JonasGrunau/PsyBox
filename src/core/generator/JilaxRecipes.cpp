@@ -12,24 +12,29 @@
 //    higher, a sixth higher still (leads, FM tones, the odd minor chord).
 //  - Very wide: the side is about as loud as the mid above 300 Hz.
 //  - Dense: about 7.5 dB crest where they are loudest (clipped, compressed).
-//  - One beat (about two in three) or two, cut at the end, often fading over
-//    the last tenth. The level slides about 5 dB over a beat in the typical
-//    shot; a third fall 15-25 dB, a fifth swell, a fifth hit for a beat and
-//    ring out through the next, a few are trance-gated.
+//  - One beat or two, about half each. Nearly every two-beat shot is a
+//    one-beat hit and its tail: the dry sound stops (10 dB down within a
+//    tenth of a beat) and a reverb rings out through the second beat (about
+//    80 dB a second). The one-beat shots are cut at the end, often fading
+//    over the last tenth; the level slides about 5 dB over the beat in the
+//    typical one, some fall 15-25 dB, some swell, a few are trance-gated.
 //  - Half close their filter over the hit (the brightness halves in about
 //    85 ms), the rest stay bright, open, or rise and fall. One in ten moves
 //    in pitch (zaps, falls, rises), a few are flanged or phased.
 // Every shot is played two octaves (sometimes one, or none) below the key, so
 // E3 plays the E1 root the reference "E" shots have.
 //
-// Jilax's own Serum patches (22 of them, decoded from their .fxp files) show
-// how he builds such a sound, and the recipe follows them where the
-// references agree:
-//  - Saws (Serum's default table) with all sixteen unison voices at a
-//    moderate detune (0.2-0.5 on Serum's knob, a 10-50 cent spread) and
-//    random start phases, often a second saw stack an octave and a fifth
-//    up (+19), sometimes an octave up or the same pitch on another table.
-//  - A noise layer through the filter in about half the patches.
+// Jilax's own Serum patches (250 of them, decoded from their .fxp files; the
+// 126 one-shots among them also rendered through Serum and measured like the
+// references) show how he builds such a sound, and the recipe follows them
+// where the references agree:
+//  - Saws or tables, often with all sixteen unison voices and random start
+//    phases, at a spread that varies widely from patch to patch (see
+//    unison()). Rendered, his shots have the references' tonal top. Often a
+//    second stack: the same pitch on another table, an octave up, or an
+//    octave and a fifth up (+19).
+//  - A noise layer in about a third, half of it through the filter: mostly
+//    Serum's default noise, a bright hiss over a 60 Hz hum.
 //  - A Moog-style ladder low-pass with its cutoff low, opened by an LFO
 //    synced to the beat and drawn as an envelope: a jump and a fall over an
 //    eighth or a quarter, a rise and fall, a ramp. The amp envelope stays a
@@ -58,21 +63,32 @@ namespace
     // syncDiv indices
     enum Bars { B1_4, B1_2, B1 };
 
+    // noise types (choices::noiseType)
+    constexpr int kPinkNoise = 1, kTunedNoise = 4;
+
 
     // ---- the body -----------------------------------------------------------
 
-    // One unison oscillator, spread like Jilax's Serum patches: all sixteen
-    // voices in most, at a moderate detune (Serum's 0.3-0.4, a spread of
-    // about 15-30 cents). That is what fills the gaps between the harmonics
-    // the way the references do (their harmonics about 8 cents wide at
-    // -6 dB, the valleys between them 13 dB down); a stack barely detuned
-    // leaves a comb 20 dB deep. The width comes from the voices' pans.
-    void unison (B& b, bool isB, float nLo, float nHi)
+    // How far apart the unison voices sit, the same for a patch's two
+    // stacks. Our detune is about Serum's knob squared (on a 16-voice saw,
+    // Serum's 0.2 sounds like 0.045 here, its 0.3 like 0.1). Jilax's
+    // one-shot stacks spread widely: a third nearly in unison (thick without
+    // hiss), most a few cents apart, a quarter wide. One gentle detune on
+    // every stack (0.04-0.1) made the top hiss (spectral flatness 0.22 from 6
+    // to 16 kHz, his rendered shots 0.12, the references 0.10); his spread
+    // takes it to 0.19 and the clipper's products down with it.
+    enum class Spread { Unison, Few, Wide };
+
+    Spread spread (B& b) { return (Spread) b.weighted ({ 0.3f, 0.45f, 0.25f }); }
+
+    // One unison oscillator. The width comes from the voices' pans.
+    void unison (B& b, bool isB, float nLo, float nHi, Spread sp)
     {
         const P count = isB ? P::OscBUnison : P::OscAUnison;
         if (nHi >= 8.f && b.chance (0.6f)) b.set (count, 16.f);
         else b.uni (count, nLo, nHi);
-        b.uni (isB ? P::OscBDetune : P::OscADetune, 0.07f, 0.16f);
+        static constexpr float lo[] = { 0.002f, 0.015f, 0.06f }, hi[] = { 0.012f, 0.06f, 0.16f };
+        b.uni (isB ? P::OscBDetune : P::OscADetune, lo[(int) sp], hi[(int) sp]);
         b.uni (isB ? P::OscBBlend : P::OscABlend, 0.7f, 1.f);
         b.uni (isB ? P::OscBUniWidth : P::OscAUniWidth, 0.9f, 1.f);
         b.pick (isB ? P::OscBUniMode : P::OscAUniMode, { (int) UniMode::Linear, (int) UniMode::Super }, { 0.5f, 0.5f });
@@ -97,16 +113,17 @@ namespace
     Body body (B& b, int& octave)
     {
         const auto kind = (Body) b.weighted ({ 0.47f, 0.14f, 0.17f, 0.07f, 0.07f, 0.08f });
+        const Spread sp = spread (b);
         switch (kind)
         {
             case Body::Saw:
                 osc (b, false, OscType::Analog);
                 b.set (P::OscAShape, kSaw);
-                unison (b, false, 7.f, 16.f);
+                unison (b, false, 7.f, 16.f, sp);
                 break;
             case Body::Supersaw:
                 osc (b, false, OscType::Supersaw);
-                b.uni (P::OscADetune, 0.08f, 0.3f);
+                b.uni (P::OscADetune, 0.048f, 0.18f);
                 break;
             case Body::Table:
             {
@@ -116,7 +133,7 @@ namespace
                 // root and its high-pass nothing would be left of that end
                 const bool sineEnd = wt == 0 || wt == 4;
                 b.uni (P::OscAWtPos, sineEnd ? 0.55f : 0.1f, sineEnd ? 1.f : 0.9f);
-                unison (b, false, 7.f, 16.f);
+                unison (b, false, 7.f, 16.f, sp);
                 // the table scanned over the hit, like Jilax's LFOs on the position
                 if (b.chance (0.45f))
                 {
@@ -133,20 +150,20 @@ namespace
                 osc (b, false, OscType::Analog);
                 b.set (P::OscAShape, kSquare);
                 b.uni (P::OscAPw, 0.25f, 0.5f);
-                unison (b, false, 7.f, 16.f);
+                unison (b, false, 7.f, 16.f, sp);
                 break;
             case Body::Fm:
                 osc (b, false, OscType::FM);
                 b.among (P::OscAFmRatio, { 1.f, 2.f, 3.f, 0.5f, 4.f });
                 b.uni (P::OscAFm, 1.f, 5.f);
                 b.uni (P::OscAFmFb, 0.f, 0.3f);
-                unison (b, false, 1.f, 4.f);
+                unison (b, false, 1.f, 4.f, sp);
                 break;
             case Body::Chord:
                 // root, fifth and octave from the stack, the third from osc B
                 osc (b, false, OscType::Analog);
                 b.set (P::OscAShape, kSaw);
-                unison (b, false, 9.f, 16.f);
+                unison (b, false, 9.f, 16.f, sp);
                 b.set (P::OscAUniStack, (float) UniStack::OctFifth);
                 break;
         }
@@ -157,16 +174,18 @@ namespace
         else if (kind == Body::Chord) octave = b.pick (P::Octave, { -1, 0 }, { 0.4f, 0.6f });
         else octave = b.pick (P::Octave, { -2, -1, 0 }, { 0.78f, 0.17f, 0.05f });
 
-        // A second stack. Jilax's favourite is an octave and a fifth up (+19,
-        // the 3rd harmonic's pitch, so it thickens the comb rather than
-        // adding a note), then the same pitch on another shape, an octave up,
-        // a fifth, an octave down; 4-12 dB under the first.
+        // A second stack: an octave and a fifth up (+19, the 3rd harmonic's
+        // pitch, so it thickens the comb rather than adding a note), the same
+        // pitch on another shape, an octave up, a fifth, an octave down; 4-12
+        // dB under the first. (Jilax's basses favour +19, his one-shots the
+        // same pitch at about the first's level; their mix measured no closer
+        // to the references.)
         if (kind == Body::Chord)
         {
             osc (b, true, OscType::Analog);
             b.set (P::OscBShape, kSaw);
             b.among (P::OscBCoarse, { 3.f, 4.f, 3.f });   // minor twice as often
-            unison (b, true, 5.f, 9.f);
+            unison (b, true, 5.f, 9.f, sp);
             b.uni (P::OscBLevel, 0.55f, 0.75f);
         }
         else if (kind != Body::Fm && b.chance (0.65f))
@@ -180,21 +199,25 @@ namespace
             static constexpr float semis[5] = { 19.f, 12.f, 0.f, 7.f, -12.f };
             b.set (P::OscBCoarse, semis[interval]);
             b.uni (P::OscBFine, -8.f, 8.f);
-            unison (b, true, 7.f, 16.f);
+            unison (b, true, 7.f, 16.f, sp);
             b.uni (P::OscBLevel, 0.2f, 0.5f);
         }
         // A noise layer (half of Jilax's patches have one), through the
         // filter or after it: the air the references keep at 10 kHz while
-        // their filters close.
+        // their filters close. Tuned noise, on the note's harmonics: their
+        // air is tonal (spectral flatness 0.1 from 6 to 16 kHz), and white
+        // noise on top of the stack made it hiss (0.37); tuned keeps it at
+        // 0.18. Now and then pink through the filter.
         if (b.chance (0.4f))
         {
-            b.pick (P::NoiseType, { 0, 1 }, { 0.6f, 0.4f });
+            b.pick (P::NoiseType, { kTunedNoise, kPinkNoise }, { 0.85f, 0.15f });
             if (b.chance (0.5f))
             {
+                b.set (P::NoiseType, (float) kTunedNoise);   // pink only through the filter
                 b.on (P::NoiseDirect, true);
-                b.uni (P::NoiseLevel, 0.03f, 0.09f);
+                b.uni (P::NoiseLevel, 0.045f, 0.135f);
             }
-            else b.uni (P::NoiseLevel, 0.04f, 0.13f);
+            else b.uni (P::NoiseLevel, 0.06f, 0.195f);
         }
         return kind;
     }
@@ -217,10 +240,12 @@ namespace
 
     Amp amp (B& b)
     {
-        const auto shape = (Amp) b.weighted ({ 0.24f, 0.32f, 0.18f, 0.2f, 0.06f });
-        // most shots are one beat; a held two-beat shot still fades through its second beat
+        // Half the references are a one-beat hit with its tail ringing
+        // through a second beat (Tail: the note is one beat, the release
+        // and the reverb ring on); the rest one beat, a few held for two.
+        const auto shape = (Amp) b.weighted ({ 0.16f, 0.2f, 0.11f, 0.45f, 0.04f });
         if (shape == Amp::Tail) length (b, B1_4);
-        else length (b, b.weighted ({ 0.82f, 0.16f, 0.02f }));
+        else length (b, b.weighted ({ 0.9f, 0.08f, 0.02f }));
 
         switch (shape)
         {
@@ -296,9 +321,9 @@ namespace
             b.uni (P::F2Env, 0.1f, 0.22f);
         if (b.chance (0.4f))
         {
-            b.set (P::NoiseType, 0.f);
+            b.set (P::NoiseType, (float) kTunedNoise);
             b.on (P::NoiseDirect, true);
-            b.uni (P::NoiseLevel, 0.02f, 0.06f);
+            b.uni (P::NoiseLevel, 0.03f, 0.09f);
         }
     }
 
@@ -322,7 +347,9 @@ namespace
         // a Moog-style ladder in most of Jilax's patches
         b.pick (P::F1Type, { ft (FilterType::LP12), ft (FilterType::LP18), ft (FilterType::LP24),
                              ft (FilterType::LadderLP12), ft (FilterType::Ladder24) }, { 0.3f, 0.1f, 0.1f, 0.3f, 0.2f });
-        b.uni (P::F1Drive, 0.f, 0.35f);
+        // a touch of drive: above 0.25 it saturated the stack in front of the
+        // filter (up to a fifth of the shot's energy distortion products)
+        b.uni (P::F1Drive, 0.f, 0.14f);
         switch (motion)
         {
             case Motion::Static:
@@ -525,22 +552,39 @@ namespace
         // about one reference in five is close to mono: the side 10-25 dB
         // under the mid, where the rest have it about level
         const bool narrow = b.chance (0.2f);
-        // The references are clipped hard (about 7.5 dB crest where they are
-        // loudest, against 12-15 dB for a high-passed saw stack): a clipper
-        // at the very end of the chain, after the compressor and the tails.
+        // The references are dense (about 7.5 dB crest where they are
+        // loudest, against 12-15 dB for a high-passed saw stack) but not
+        // chewed: their samples spread like a body that is only limited
+        // (kurtosis 2.5; 3.5 unclipped, 2.1 for the hard clip at 19-27 dB
+        // this used to be, which clipped 70 % of the loudest samples and made
+        // a quarter of the shot distortion products, three quarters of its
+        // top octaves). A clipper at the very end of the chain, after the
+        // compressor and the tails, mostly soft, 13-20 dB over the sound's
+        // own level: crest 8, kurtosis 2.5, a tenth of the shot products.
         // Auto Level makes it bite the same on every patch and lets a decay
         // fall through it. Otherwise the odd shot gets its grit early.
         if (b.chance (0.9f))
         {
             b.on (P::DistOn, true);
-            b.pick (P::DistType, { (int) DistType::Hard, (int) DistType::Soft, (int) DistType::Tube }, { 0.86f, 0.07f, 0.07f });
+            b.pick (P::DistType, { (int) DistType::Hard, (int) DistType::Soft, (int) DistType::Tube }, { 0.3f, 0.45f, 0.25f });
             b.on (P::DistAuto, true);
-            b.uni (P::DistDrive, 19.f, 27.f);
+            b.uni (P::DistDrive, 13.f, 20.f);
             b.uni (P::DistMix, 0.92f, 1.f);
             // A shut filter would come out bright again: the clipper adds back
             // the top it took away. Its tone keeps a shut shot dark.
             if (motion == Motion::Shut) b.uni (P::DistTone, 2500.f, 7000.f);
             else b.uni (P::DistTone, 19000.f, 20000.f);
+            // A filter envelope that rises and falls leaves the shot dark at
+            // both ends, where Auto Level still drives it as hard as in the
+            // bright middle: up to two thirds of such a shot was the
+            // clipper's harmonics. The drive follows the envelope instead,
+            // 13 dB under the drawn drive while the filter is shut.
+            if (motion == Motion::RiseFall && b.state().get (P::F1Env) > 0.f)
+            {
+                constexpr float kFollowDb = 13.f;
+                b.set (P::DistDrive, b.state().get (P::DistDrive) - kFollowDb);
+                b.route (S::FilterEnv, D::DistDrive, kFollowDb / 36.f, kFollowDb / 36.f);
+            }
             // Clipping brings a high-passed root back as a difference tone.
             // The clipper's low cut takes it out again, a little under the
             // voice's high-pass: the references keep the octave around 80 Hz
@@ -643,6 +687,11 @@ void jilaxRecipe (RecipeBuilder& b)
     endFade (b, shape, pitchSweep || motion == Motion::Open);
     effects (b, kind, shape, motion, highPassHz);
     b.macros ({ D::F1Cutoff, D::F2Cutoff, D::F1Drive, D::F1Reso, D::DetuneA, D::ReverbMix, D::DelayMix, D::ChorusMix });
+    // The macros start part way up, so they add to what they move: the
+    // detune and the drives start where the recipe drew them (in a sixth of
+    // the shots a macro on the clipper added 3-5 dB of drive).
+    for (const auto d : { D::DetuneA, D::F1Drive, D::DistDrive })
+        b.settle (d);
 }
 
 } // namespace psy

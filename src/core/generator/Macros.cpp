@@ -210,6 +210,53 @@ namespace
     constexpr size_t kMaxLabel = 14;
 } // namespace
 
+void RecipeBuilder::settle (ModDst target)
+{
+    const P knobP = modTargetParam (target);
+    if (knobP == P::Count || locked (knobP)) return;
+    const auto macroOf = [this] (int slot) {
+        const int src = s.geti (modSrcParam (slot));
+        return s.geti (modDstParam (slot)) == 0 || src < (int) ModSrc::Macro1 || src > (int) ModSrc::Macro4 ? -1 : src - (int) ModSrc::Macro1;
+    };
+    float add = 0.f;
+    for (int i = 0; i < kNumModSlots; ++i)
+        if (const int m = macroOf (i); m >= 0 && s.geti (modDstParam (i)) == (int) target)
+            add += s.get (modAmtParam (i)) * s.get ((P) ((int) P::Macro1 + m));
+    if (add <= 0.f) return;
+    const auto& d = def (knobP);
+    auto& r = ranges.e[(size_t) knobP];
+    // effects move in their knob's normalised range, voice targets add to its value
+    const bool fx = isFxTarget (target);
+    const float room = fx ? d.toNorm (s.get (knobP)) : s.get (knobP) - d.min;
+    const float shift = std::min (add, room);
+    if (fx) s.set (knobP, d.toPlain (d.toNorm (s.get (knobP)) - shift));
+    else s.set (knobP, s.get (knobP) - shift);
+    if (r.touched)
+    {
+        if (fx) { r.lo = std::max (0.f, r.lo - shift); r.hi = std::max (0.f, r.hi - shift); }
+        else
+        {
+            r.lo = d.toNorm (std::max (d.min, d.toPlain (r.lo) - shift));
+            r.hi = d.toNorm (std::max (d.min, d.toPlain (r.hi) - shift));
+        }
+    }
+    if (add <= room) return;
+    // The knob can't go down far enough: it sits at its bottom, and the
+    // macros start lower instead, so knob + macros land where the recipe drew.
+    const float scale = room / add;
+    for (int i = 0; i < kNumModSlots; ++i)
+    {
+        const int m = macroOf (i);
+        if (m < 0 || s.geti (modDstParam (i)) != (int) target) continue;
+        const P knob = (P) ((int) P::Macro1 + m);
+        if (locked (knob)) continue;
+        const float v = s.get (knob) * scale;
+        s.set (knob, v);
+        auto& mr = ranges.e[(size_t) knob];
+        mr.lo = std::min (mr.lo, def (knob).toNorm (v));
+    }
+}
+
 void RecipeBuilder::macros (std::initializer_list<ModDst> targets)
 {
     const auto drives = [this] (int m, ModDst d) {

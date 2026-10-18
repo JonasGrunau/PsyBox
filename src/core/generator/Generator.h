@@ -62,6 +62,14 @@ public:
     // order of preference). Targets whose module is off or that a macro
     // already drives are skipped. Run it last: it draws one number per macro.
     void macros (std::initializer_list<ModDst> targets);
+    // The macros start part way up (see macros()), so they add to what they
+    // move. settle() takes what they add to `target` at their start back off
+    // its knob (as far as the knob goes down), so the patch starts where the
+    // recipe drew it and the macro still turns both ways. For targets a
+    // macro moves by its knob's own travel: effects, and voice targets added
+    // to the knob's value (detune, drive, levels, resonance...); not cutoffs
+    // (macros() handles those) or pitch.
+    void settle (ModDst target);
 
     // Tempo-synced LFO setup helpers.
     void lfo (int index, LfoShape shape, float hzLo, float hzHi, bool retrig);
