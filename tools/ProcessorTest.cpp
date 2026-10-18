@@ -4,9 +4,12 @@
 // deterministic: the "message thread" calls run between blocks.
 //   PSYSNAP_PLUGINTEST=1 psybox_snapshot     prints PASS/FAIL, exits 1 on a failure
 
+#include "plugin/PluginEditor.h"
 #include "plugin/PluginProcessor.h"
 
+#include <chrono>
 #include <cstdio>
+#include <thread>
 
 namespace
 {
@@ -222,6 +225,112 @@ void stateRoundTrips()
     check (b.proc.getPresetName() == a.proc.getPresetName() && b.proc.getMacroName (2) == "Air", "and the name and macro names");
 }
 
+// auval sets values and reads them back: a continuous parameter returns
+// exactly what the host set, and the engine still plays its plain value.
+void hostValuesComeBackExactly()
+{
+    Bench b;
+    bool exact = true, played = true;
+    for (int i = 0; i < kNumParams; ++i)
+    {
+        auto* prm = b.proc.param ((P) i);
+        const auto& d = paramDefs()[(size_t) i];
+        const bool continuous = d.mapping != Mapping::Choice && d.mapping != Mapping::Toggle;
+        for (const float n : { 0.f, 1.f, prm->getDefaultValue(), 0.3711f })
+        {
+            prm->setValueNotifyingHost (n);
+            if (continuous && prm->getValue() != n)
+            {
+                std::printf ("  %s: set %.9g, read %.9g\n", d.id, (double) n, (double) prm->getValue());
+                exact = false;
+            }
+            if (const float want = d.snap (d.toPlain (n)); std::abs (b.proc.plain ((P) i) - want) > 1e-6f * std::max (1.f, std::abs (want)))
+            {
+                std::printf ("  %s: norm %g plays %g, not %g\n", d.id, (double) n, (double) b.proc.plain ((P) i), (double) want);
+                played = false;
+            }
+        }
+    }
+    check (exact, "every continuous parameter gives the host back the value it set");
+    check (played, "and the engine plays that value");
+}
+
+// The WAV bounce renders on another thread: it writes the file, stops fast
+// when cancelled (and leaves nothing), and keys the sound it rendered.
+void bounceRendersOffTheMessageThread()
+{
+    Bench b;
+    b.sinePatch();
+    const auto dir = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("psybox-bounce-test");
+    dir.createDirectory();
+
+    const auto req = b.proc.bounceRequest();
+    const auto file = dir.getChildFile ("sine.wav");
+    std::atomic<float> progress { 0.f };
+    bool ok = false;
+    std::thread t ([&] { ok = PsyBoxProcessor::renderBounce (req, file, [] { return false; }, &progress); });
+    t.join();
+    juce::AudioFormatManager fm;
+    fm.registerBasicFormats();
+    float peak = 0.f;
+    juce::int64 len = 0;
+    if (std::unique_ptr<juce::AudioFormatReader> r (fm.createReaderFor (file)); r != nullptr)
+    {
+        len = r->lengthInSamples;
+        juce::Range<float> ranges[2];
+        r->readMaxLevels (0, len, ranges, 2);
+        peak = std::max (ranges[0].getEnd(), -ranges[0].getStart());
+    }
+    check (ok && len > 4800 && std::abs (juce::Decibels::gainToDecibels (peak) + 1.f) < 0.05f && progress.load() == 1.f,
+           "a bounce renders on another thread to a WAV at -1 dBFS");
+
+    b.set (P::F1Cutoff, 900.f);
+    check (b.proc.bounceRequest().key != req.key && b.proc.bounceRequest().key == b.proc.bounceRequest().key,
+           "and its key follows the sound");
+
+    b.proc.setCategory (Category::Riser);
+    b.proc.generateWithSeed (7);
+    b.set (P::EnergyMode, (float) EnergyMode::Time);
+    b.set (P::EnergySec, 60.f);
+    const auto longReq = b.proc.bounceRequest();
+    const auto longFile = dir.getChildFile ("riser.wav");
+    std::atomic<bool> stop { false };
+    bool longOk = true;
+    const auto t0 = std::chrono::steady_clock::now();
+    std::thread t2 ([&] { longOk = PsyBoxProcessor::renderBounce (longReq, longFile, [&] { return stop.load(); }); });
+    std::this_thread::sleep_for (std::chrono::milliseconds (50));
+    stop = true;
+    t2.join();
+    const double secs = std::chrono::duration<double> (std::chrono::steady_clock::now() - t0).count();
+    check (! longOk && ! longFile.exists() && secs < 1.0, "a cancelled bounce of a minute-long riser stops at once and leaves no file");
+    dir.deleteRecursively();
+}
+
+// Two PsyBox windows open at once each draw in their own category's colour,
+// not in the colour of the one that opened (or changed) last.
+void twoWindowsKeepTheirAccents()
+{
+    PsyBoxProcessor lead, bass;
+    lead.setCategory (Category::PsyLead);
+    bass.setCategory (Category::PsyBass);
+    std::unique_ptr<juce::AudioProcessorEditor> leadWin (lead.createEditor()), bassWin (bass.createEditor());   // the bass opens last
+    const auto colourOf = [] (Category k) { return juce::Colour ((juce::uint32) (0xff000000 | categoryInfo()[(size_t) k].colour)); };
+    // pixels drawn exactly in colour c (anti-aliased edges blend, solid strokes don't)
+    const auto count = [] (juce::Component& win, juce::Colour c) {
+        const auto img = win.createComponentSnapshot (win.getLocalBounds(), true, 1.f);
+        const juce::Image::BitmapData px (img, juce::Image::BitmapData::readOnly);
+        int n = 0;
+        for (int y = 0; y < img.getHeight(); ++y)
+            for (int x = 0; x < img.getWidth(); ++x)
+                n += px.getPixelColour (x, y) == c;
+        return n;
+    };
+    const int leadInLead = count (*leadWin, colourOf (Category::PsyLead)), bassInLead = count (*leadWin, colourOf (Category::PsyBass));
+    const int bassInBass = count (*bassWin, colourOf (Category::PsyBass)), leadInBass = count (*bassWin, colourOf (Category::PsyLead));
+    std::printf ("  lead window: %d lead, %d bass pixels; bass window: %d bass, %d lead\n", leadInLead, bassInLead, bassInBass, leadInBass);
+    check (leadInLead > 50 && bassInLead == 0 && bassInBass > 50 && leadInBass == 0, "two open windows each draw in their own category's colour");
+}
+
 void renderLatencyFromTheStart()
 {
     Bench b;
@@ -255,6 +364,9 @@ int runProcessorTests()
     redoKeepsTweaks();
     slotMacroNamesSurviveASession();
     stateRoundTrips();
+    hostValuesComeBackExactly();
+    bounceRendersOffTheMessageThread();
+    twoWindowsKeepTheirAccents();
     renderLatencyFromTheStart();
     tailCoversTheEffects();
     std::printf ("%d failed\n", failures);

@@ -19,6 +19,33 @@ namespace
         return r;
     }
 
+    // A continuous parameter that gives the host back exactly the normalised
+    // value it set. AudioParameterFloat keeps the plain value instead, and
+    // toPlain, snap, toNorm comes back a few ulps off (auval warns), or never
+    // reaches an end at all where a law can't (PhosC13's Inverse at 0).
+    class ExactParameter final : public juce::RangedAudioParameter
+    {
+    public:
+        ExactParameter (const juce::ParameterID& id, const juce::String& paramName, const ParamDef& d, bool automatable)
+            : RangedAudioParameter (id, paramName, juce::AudioProcessorParameterWithIDAttributes().withAutomatable (automatable)),
+              pd (d), range (rangeFor (d)), defaultNorm (d.toNorm (d.snap (d.def))), norm (defaultNorm)
+        {
+        }
+
+        const juce::NormalisableRange<float>& getNormalisableRange() const override { return range; }
+        float getValue() const override { return norm.load (std::memory_order_relaxed); }
+        void setValue (float v) override { norm.store (juce::jlimit (0.f, 1.f, v), std::memory_order_relaxed); }
+        float getDefaultValue() const override { return defaultNorm; }
+        juce::String getText (float v, int) const override { return juce::String (pd.format (convertFrom0to1 (v))); }
+        float getValueForText (const juce::String& s) const override { return convertTo0to1 (pd.parse (s.toStdString())); }
+
+    private:
+        const ParamDef& pd;
+        const juce::NormalisableRange<float> range;
+        const float defaultNorm;
+        std::atomic<float> norm;
+    };
+
     // Accepts state saved under the working title "PsySynth" and renames its tag to ours.
     bool adoptStateTag (juce::XmlElement* xml, const juce::Identifier& type)
     {
@@ -50,13 +77,8 @@ juce::AudioProcessorValueTreeState::ParameterLayout PsyBoxProcessor::createLayou
         }
         else
         {
-            const ParamDef* dp = &d;
             // The effect order is the patch's layout, not something to automate.
-            auto attrs = juce::AudioParameterFloatAttributes()
-                             .withAutomatable (std::string_view (d.id) != "fx_order")
-                             .withStringFromValueFunction ([dp] (float v, int) { return juce::String (dp->format (v)); })
-                             .withValueFromStringFunction ([dp] (const juce::String& s) { return dp->parse (s.toStdString()); });
-            layout.add (std::make_unique<juce::AudioParameterFloat> (id, name, rangeFor (d), d.def, attrs));
+            layout.add (std::make_unique<ExactParameter> (id, name, d, std::string_view (d.id) != "fx_order"));
         }
     }
     return layout;
@@ -861,30 +883,58 @@ double PsyBoxProcessor::getTailLengthSeconds() const
 // Bounce
 // ---------------------------------------------------------------------------
 
-juce::File PsyBoxProcessor::bounceToFile()
+PsyBoxProcessor::Bounce PsyBoxProcessor::bounceRequest() const
 {
-    constexpr double fs = 48000.0;
-    constexpr int block = 512;
-    auto st = currentState();
-    if (st.geti (P::EngineMode) == (int) EngineMode::Kick)
-        st.set (P::ArpOn, 0.f);   // one hit: the WAV is a kick sample
-    const double bpm = juce::jmax (20.0, lastBpm.load());
-    const int note = lastPlayedNote.load();
+    Bounce b;
+    b.state = currentState();
+    if (b.state.geti (P::EngineMode) == (int) EngineMode::Kick)
+        b.state.set (P::ArpOn, 0.f);   // one hit: the WAV is a kick sample
+    b.bpm = juce::jmax (20.0, lastBpm.load());
+    b.note = lastPlayedNote.load();
 
     // Gate: percussive patches (no sustain) only need attack + decay; sustained
     // ones are held for at least a beat so the body of the sound is there.
-    const double attack = st.get (P::AenvA) / 1000.0, decay = st.get (P::AenvD) / 1000.0;
-    const double beat = 60.0 / bpm;
     // Energy sounds are held for their whole length.
-    const double gateSec = hasLength() ? juce::jlimit (0.1, 60.0, energyLengthSeconds())
-                         : st.get (P::AenvS) < 0.05f ? juce::jlimit (0.1, 8.0, attack + decay)
-                                                     : juce::jlimit (beat, 8.0, attack + decay + 0.25);
-    const int gate = (int) (gateSec * fs);
-    const int maxLen = (int) ((gateSec + 32.0) * fs);
+    const double attack = b.state.get (P::AenvA) / 1000.0, decay = b.state.get (P::AenvD) / 1000.0;
+    const double beat = 60.0 / b.bpm;
+    b.gateSec = hasLength() ? juce::jlimit (0.1, 60.0, energyLengthSeconds())
+              : b.state.get (P::AenvS) < 0.05f ? juce::jlimit (0.1, 8.0, attack + decay)
+                                               : juce::jlimit (beat, 8.0, attack + decay + 0.25);
+    b.expectSec = b.gateSec + juce::jmin (getTailLengthSeconds(), 32.0);
+
+    // Flats: a file name can't hold "#", and C#3 would become C3.
+    const auto noteName = juce::MidiMessage::getMidiNoteName (b.note, false, true, 4);
+    b.name = juce::File::createLegalFileName (presetName.trimCharactersAtEnd ("*") + " " + noteName);
+
+    // FNV-1a over everything the render depends on
+    uint64_t h = 1469598103934665603ULL;
+    const auto mix = [&h] (uint64_t v) { h = (h ^ v) * 1099511628211ULL; };
+    for (int i = 0; i < kNumParams; ++i)
+    {
+        const float v = b.state.get ((P) i);
+        uint32_t bits;
+        std::memcpy (&bits, &v, sizeof bits);
+        mix (bits);
+    }
+    mix ((uint64_t) std::llround (b.bpm * 1000.0));
+    mix ((uint64_t) b.note);
+    mix ((uint64_t) b.name.hashCode64());
+    b.key = h;
+    return b;
+}
+
+bool PsyBoxProcessor::renderBounce (const Bounce& b, const juce::File& file, const std::function<bool()>& cancelled,
+                                    std::atomic<float>* progress)
+{
+    constexpr double fs = 48000.0;
+    constexpr int block = 512;
+    const int gate = (int) (b.gateSec * fs);
+    const int maxLen = (int) ((b.gateSec + 32.0) * fs);
+    const double expected = std::max (1.0, b.expectSec * fs);
 
     Engine e;
-    e.setOffline (true);   // a bounce plays at the Render quality
-    e.setParams (st);   // before prepare, so the first note and the latency see this patch
+    e.setOffline (true);    // a bounce plays at the Render quality
+    e.setParams (b.state);  // before prepare, so the first note and the latency see this patch
     e.prepare (fs, block);
     const int latency = e.latencySamples();
 
@@ -896,11 +946,13 @@ juce::File PsyBoxProcessor::bounceToFile()
     const int quietNeeded = (int) (0.3 * fs);
     while (pos < maxLen)
     {
+        if (cancelled())
+            return false;
         MidiEvent ev[2];
         int nEv = 0;
-        if (pos == 0) { ev[nEv].type = MidiEvent::NoteOn; ev[nEv].number = note; ev[nEv].value = 0.8f; ++nEv; }
-        if (gate >= pos && gate < pos + block) { ev[nEv].type = MidiEvent::NoteOff; ev[nEv].number = note; ev[nEv].offset = gate - pos; ++nEv; }
-        e.process (bl.data(), br.data(), block, ev, nEv, bpm);
+        if (pos == 0) { ev[nEv].type = MidiEvent::NoteOn; ev[nEv].number = b.note; ev[nEv].value = 0.8f; ++nEv; }
+        if (gate >= pos && gate < pos + block) { ev[nEv].type = MidiEvent::NoteOff; ev[nEv].number = b.note; ev[nEv].offset = gate - pos; ++nEv; }
+        e.process (bl.data(), br.data(), block, ev, nEv, b.bpm);
         float pk = 0.f;
         for (int i = 0; i < block; ++i)
         {
@@ -909,6 +961,8 @@ juce::File PsyBoxProcessor::bounceToFile()
             pk = std::max (pk, std::max (std::abs (bl[(size_t) i]), std::abs (br[(size_t) i])));
         }
         pos += block;
+        if (progress != nullptr)
+            progress->store ((float) std::min (0.99, pos / expected), std::memory_order_relaxed);
         // after the note is released, stop once the tail stays below -80 dB
         quiet = (pos > gate && pk < 1e-4f) ? quiet + block : 0;
         if (quiet >= quietNeeded) break;
@@ -927,28 +981,32 @@ juce::File PsyBoxProcessor::bounceToFile()
     if (const float pk = out.getMagnitude (0, len); pk > 1e-5f)
         out.applyGain (juce::Decibels::decibelsToGain (-1.f) / pk);
 
-    auto dir = juce::File::getSpecialLocation (juce::File::userMusicDirectory).getChildFile ("PsyBox").getChildFile ("Bounces");
-    if (! dir.createDirectory())
-        return {};
-    // Flats: a file name can't hold "#", and C#3 would become C3. Never over
-    // an earlier bounce: a DAW may still play it from there.
-    const auto noteName = juce::MidiMessage::getMidiNoteName (note, false, true, 4);
-    const auto base = juce::File::createLegalFileName (presetName.trimCharactersAtEnd ("*") + " " + noteName);
-    const auto file = dir.getChildFile (base + ".wav").getNonexistentSibling();
-
     juce::WavAudioFormat wav;
+    if (! file.deleteFile())   // an output stream would append to it
+        return false;
     std::unique_ptr<juce::OutputStream> stream (file.createOutputStream());
     if (stream == nullptr)
-        return {};
+        return false;
     auto writer = wav.createWriterFor (stream, juce::AudioFormatWriterOptions {}.withSampleRate (fs).withNumChannels (2).withBitsPerSample (24));
     if (writer == nullptr || ! writer->writeFromAudioSampleBuffer (out, 0, len))
     {
         writer.reset();
+        stream.reset();
         file.deleteFile();
-        return {};
+        return false;
     }
     writer.reset();
-    return file;
+    if (progress != nullptr)
+        progress->store (1.f, std::memory_order_relaxed);
+    return true;
+}
+
+juce::File PsyBoxProcessor::newBounceFile (const Bounce& b)
+{
+    auto dir = juce::File::getSpecialLocation (juce::File::userMusicDirectory).getChildFile ("PsyBox").getChildFile ("Bounces");
+    if (! dir.createDirectory())
+        return {};
+    return dir.getChildFile (b.name + ".wav").getNonexistentSibling();
 }
 
 // ---------------------------------------------------------------------------

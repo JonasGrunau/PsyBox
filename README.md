@@ -137,7 +137,10 @@ is:
 Jilax uses the Length panel (one beat by default, Cut at End) with **One Shot**
 on: a tap plays the whole shot, like a sample. It has no arp. Drag the output
 window to bounce a shot as a WAV (each bounce is a new file in
-~/Music/PsyBox/Bounces, so a clip already in your DAW never changes).
+~/Music/PsyBox/Bounces, so a clip already in your DAW never changes). The WAV
+renders in the background from the moment the pointer is over the window, so
+the UI never stalls; a long energy sound shows its progress, and the drag
+starts as soon as it is done.
 
 ### Energy
 

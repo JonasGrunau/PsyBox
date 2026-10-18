@@ -108,7 +108,7 @@ namespace
             const auto a = r.reduced (sp::sm, sp::sm);
             const int model = (int) std::lround (v (P::PhosDistModel));
             strokeLine (g, phosDriveWave (a, model, 0.f, true), col::lineStrong, 1.f);
-            strokeLine (g, phosDriveWave (a, model, v (P::PhosDistDrive), false), accent());
+            strokeLine (g, phosDriveWave (a, model, v (P::PhosDistDrive), false), accent (*this));
         }
 
         // the four bands' summed response, +-24 dB, a dot on each band
@@ -149,14 +149,14 @@ namespace
             fill.lineTo (a.getRight(), yOf (0.f));
             fill.lineTo (a.getX(), yOf (0.f));
             fill.closeSubPath();
-            g.setColour (accent().withAlpha (0.12f));
+            g.setColour (accent (*this).withAlpha (0.12f));
             g.fillPath (fill);
-            strokeLine (g, p, accent());
+            strokeLine (g, p, accent (*this));
             for (int b = 0; b < 4; ++b)
             {
                 const int base = (int) P::PhosEqLowGain + b * 3;
                 const float hz = v ((P) (base + 1));
-                g.setColour (v ((P) base) != 0.f ? accent() : col::textFaint);
+                g.setColour (v ((P) base) != 0.f ? accent (*this) : col::textFaint);
                 g.fillEllipse (juce::Rectangle<float> (5.f, 5.f).withCentre ({ logX (a, hz), yOf (dbAt (hz)) }));
             }
         }
@@ -182,8 +182,8 @@ namespace
                     if (i == 0) p.startNewSubPath (pt);
                     else p.lineTo (pt);
                 }
-                if (c == 0) fillUnder (g, p, a, 0.12f);
-                strokeLine (g, p, c == 0 ? accent() : accent().withAlpha (0.45f));
+                if (c == 0) fillUnder (g, p, a, accent (*this), 0.12f);
+                strokeLine (g, p, c == 0 ? accent (*this) : accent (*this).withAlpha (0.45f));
             }
         }
 
@@ -216,7 +216,7 @@ namespace
                 const double step = side == 0 ? ml : mr;
                 float amp = 0.4f + 0.6f * mix;
                 for (int k = 1; step > 1.0 && k * step <= bar && amp > 0.03f; ++k, amp *= std::max (fb, 0.f))
-                    tick (k * step, amp, side == 0, accent());
+                    tick (k * step, amp, side == 0, accent (*this));
             }
         }
 
@@ -246,13 +246,13 @@ namespace
                 if (t < early) amp = (1.f - blend) * (noise > 0.55f ? 1.f : 0.3f) + blend * 0.4f;
                 else amp = (0.3f + 0.7f * blend) * std::sqrt (std::pow (10.f, -3.f * (t - early) / decay));
                 const float h = half * juce::jmin (1.f, amp) * (0.4f + 0.6f * noise);
-                g.setColour (accent().withAlpha (0.25f + 0.5f * bright));
+                g.setColour (accent (*this).withAlpha (0.25f + 0.5f * bright));
                 g.fillRect (x, cy - h, 1.f, 2.f * h);
                 const juce::Point<float> pt (x, cy - half * juce::jmin (1.f, amp));
                 if (! started) { env.startNewSubPath (pt); started = true; }
                 else env.lineTo (pt);
             }
-            strokeLine (g, env, accent(), 1.2f);
+            strokeLine (g, env, accent (*this), 1.2f);
         }
 
         // output over input in dB (-48..0): threshold, knee, ratio, gain, soft clip
@@ -277,7 +277,7 @@ namespace
             }
             g.setColour (col::grid);
             g.fillRect (px (thr), a.getY(), 1.f, a.getHeight());
-            strokeLine (g, p, accent());
+            strokeLine (g, p, accent (*this));
         }
 
         // input -1..1 across, output up; the dry diagonal underneath
@@ -302,7 +302,7 @@ namespace
                 if (i == 0) p.startNewSubPath (pt);
                 else p.lineTo (pt);
             }
-            strokeLine (g, p, accent());
+            strokeLine (g, p, accent (*this));
         }
 
         // two cycles of a 250 Hz sine at 48 kHz through the crusher, the
@@ -334,7 +334,7 @@ namespace
                 lastY = yw;
             }
             strokeLine (g, dry, col::lineStrong, 1.f);
-            strokeLine (g, wet, accent());
+            strokeLine (g, wet, accent (*this));
         }
 
         // a few partials (faint where they were), shifted copies in the accent;
@@ -360,8 +360,8 @@ namespace
                 float gain = mix;
                 for (int j = 1; j <= 4; ++j, gain *= fb)
                 {
-                    if (spread > 0.02f) bar (f + (float) j * hz * (1.f - 2.f * spread), amp * gain, accent().withAlpha (0.45f));
-                    bar (f + (float) j * hz, amp * gain, accent());
+                    if (spread > 0.02f) bar (f + (float) j * hz * (1.f - 2.f * spread), amp * gain, accent (*this).withAlpha (0.45f));
+                    bar (f + (float) j * hz, amp * gain, accent (*this));
                 }
             }
         }
@@ -374,7 +374,7 @@ namespace
             drawDecades (g, r, a);
             const float centre = v (P::PhaserCenter), depth = v (P::PhaserDepth), fb = v (P::PhaserFb), mix = v (P::PhaserMix);
             const float x0 = logX (a, centre * std::exp2 (-2.5f * depth)), x1 = logX (a, centre * std::exp2 (2.5f * depth));
-            g.setColour (accent().withAlpha (0.07f));
+            g.setColour (accent (*this).withAlpha (0.07f));
             g.fillRect (juce::Rectangle<float>::leftTopRightBottom (x0, r.getY(), juce::jmax (x1, x0 + 1.f), r.getBottom()));
 
             constexpr float topDb = 12.f, botDb = -30.f;
@@ -395,8 +395,8 @@ namespace
                 if (i == 0) p.startNewSubPath (pt);
                 else p.lineTo (pt);
             }
-            fillUnder (g, p, a);
-            strokeLine (g, p, accent());
+            fillUnder (g, p, a, accent (*this));
+            strokeLine (g, p, accent (*this));
         }
 
         // two seconds of the delay time each side sweeps through
@@ -420,8 +420,8 @@ namespace
                     if (i == 0) p.startNewSubPath (pt);
                     else p.lineTo (pt);
                 }
-                if (c == 0) fillUnder (g, p, a, 0.12f);
-                strokeLine (g, p, c == 0 ? accent() : accent().withAlpha (0.45f));
+                if (c == 0) fillUnder (g, p, a, accent (*this), 0.12f);
+                strokeLine (g, p, c == 0 ? accent (*this) : accent (*this).withAlpha (0.45f));
             }
         }
 
@@ -448,7 +448,7 @@ namespace
             tick (0.0, 1.f, true, true, col::textFaint);
             float amp = 0.4f + 0.6f * mix;
             for (int k = 1; ms > 1.0 && k * ms <= bar && amp > 0.03f; ++k, amp *= fb)
-                tick (k * ms, amp, ! ping || k % 2 == 1, ! ping || k % 2 == 0, accent());
+                tick (k * ms, amp, ! ping || k % 2 == 1, ! ping || k % 2 == 0, accent (*this));
         }
 
         // pre-delay gap, early reflections, then the tail decaying to -60 dB
@@ -479,13 +479,13 @@ namespace
                 const float amp = std::sqrt (lvl);
                 float h = half * amp * (0.35f + 0.65f * noise);
                 if (t < early) h = noise > 0.6f ? half * amp : half * amp * 0.25f;   // sparse early reflections
-                g.setColour (accent().withAlpha (0.25f + 0.6f * (lvl > 0.f ? bright / lvl : 0.f)));
+                g.setColour (accent (*this).withAlpha (0.25f + 0.6f * (lvl > 0.f ? bright / lvl : 0.f)));
                 g.fillRect (x, cy - h, 1.f, 2.f * h);
                 const juce::Point<float> pt (x, cy - half * amp);
                 if (! started) { env.startNewSubPath (pt); started = true; }
                 else env.lineTo (pt);
             }
-            strokeLine (g, env, accent(), 1.2f);
+            strokeLine (g, env, accent (*this), 1.2f);
         }
 
         // a stereo fan: the wedge opens with width and stereoize, the lows
@@ -511,9 +511,9 @@ namespace
             const float ang = juce::jmax (0.02f, spread * halfPi * 0.95f);
             juce::Path wedge;
             wedge.addPieSegment (disc, -ang, ang, 0.f);
-            g.setColour (accent().withAlpha (0.16f));
+            g.setColour (accent (*this).withAlpha (0.16f));
             g.fillPath (wedge);
-            strokeLine (g, wedge, accent());
+            strokeLine (g, wedge, accent (*this));
 
             const float lowMono = juce::jlimit (0.f, 1.f, std::log (v (P::WidthMonoHz) / 20.f) / std::log (25.f));
             const float lr = rad * 0.55f * lowMono;
@@ -521,7 +521,7 @@ namespace
             inner.addPieSegment (juce::Rectangle<float> (c.x - lr, c.y - lr, 2.f * lr, 2.f * lr), -ang, ang, 0.f);
             g.setColour (col::well);
             g.fillPath (inner);
-            g.setColour (accent());
+            g.setColour (accent (*this));
             g.fillRect (c.x - 0.75f, c.y - lr, 1.5f, lr);
 
             g.setFont (mono (9.f));
@@ -693,9 +693,9 @@ void FxPage::Power::paint (juce::Graphics& g)
     const bool hot = isMouseOver();
     if (on)
     {
-        g.setColour (accent().withAlpha (hot ? 0.3f : 0.2f));
+        g.setColour (accent (*this).withAlpha (hot ? 0.3f : 0.2f));
         g.fillRoundedRectangle (b, 4.f);
-        g.setColour (accent().withAlpha (0.6f));
+        g.setColour (accent (*this).withAlpha (0.6f));
         g.drawRoundedRectangle (b, 4.f, 1.f);
     }
     else
@@ -703,7 +703,7 @@ void FxPage::Power::paint (juce::Graphics& g)
         g.setColour (hot ? col::textFaint : col::lineStrong);
         g.drawRoundedRectangle (b, 4.f, 1.f);
     }
-    drawIcon (g, b.withSizeKeepingCentre (11.f, 11.f), on ? accent() : (hot ? col::textDim : col::textFaint));
+    drawIcon (g, b.withSizeKeepingCentre (11.f, 11.f), on ? accent (*this) : (hot ? col::textDim : col::textFaint));
 }
 
 void FxPage::Power::mouseDown (const juce::MouseEvent&)
@@ -869,10 +869,10 @@ void FxPage::Strip::paint (juce::Graphics& g)
     const int stack = glyphH + gap + nameH + (prefixed ? prefixH + 2 : 0);
     const int top = badge.getCentreY() - stack / 2 + 2;
     drawGlyph (g, glyph, juce::Rectangle<float> ((float) badge.getCentreX() - 26.f, (float) top, 52.f, (float) glyphH),
-               active ? accent() : col::textFaint);
+               active ? accent (*this) : col::textFaint);
     if (prefixed)
     {
-        g.setColour (active ? accent().withAlpha (0.8f) : col::textFaint);
+        g.setColour (active ? accent (*this).withAlpha (0.8f) : col::textFaint);
         g.setFont (mono (8.5f));
         g.drawText ("PHOSCYON", juce::Rectangle<int> (badge.getX(), top + glyphH + gap - 1, badge.getWidth(), prefixH),
                     juce::Justification::centred, false);
@@ -1086,19 +1086,19 @@ void FxPage::Chain::paintRow (juce::Graphics& g, int effect, juce::Rectangle<int
     }
     a.removeFromLeft (kPad);
     a.removeFromRight (kPad);
-    g.setColour (r.on ? accent() : col::lineStrong);
+    g.setColour (r.on ? accent (*this) : col::lineStrong);
     g.fillRoundedRectangle (juce::Rectangle<float> ((float) a.getX(), (float) a.getCentreY() - 7.f, 2.f, 14.f), 1.f);
     a.removeFromLeft (sp::md);
     g.setColour (col::textFaint);
     g.setFont (mono (10.f));
     g.drawText (juce::String (place + 1), a.removeFromLeft (sp::lg), juce::Justification::centredLeft, false);
     Power::drawIcon (g, a.removeFromRight (12).withSizeKeepingCentre (11, 11).toFloat(),
-                     r.on ? accent() : (lit ? col::textDim : col::textFaint));
+                     r.on ? accent (*this) : (lit ? col::textDim : col::textFaint));
     const auto nameCol = r.on ? col::text : (lit ? col::textDim : col::textFaint);
     if (r.name.startsWith ("Phoscyon "))
     {
         // the original's effects: its name small over the effect's
-        g.setColour (r.on ? accent().withAlpha (0.8f) : col::textFaint);
+        g.setColour (r.on ? accent (*this).withAlpha (0.8f) : col::textFaint);
         g.setFont (mono (8.f));
         g.drawText ("PHOSCYON", a.withHeight (10).withY (a.getCentreY() - 11), juce::Justification::centredLeft, false);
         drawHeading (g, r.name.fromFirstOccurrenceOf (" ", false, false), a.withY (a.getY() + 5), juce::Justification::centredLeft, nameCol);
@@ -1129,9 +1129,9 @@ void FxPage::Chain::paint (juce::Graphics& g)
     {
         // the empty place it will land in
         const auto gap = rowArea (slot).reduced (kPad - 4, 3).toFloat();
-        g.setColour (accent().withAlpha (0.06f));
+        g.setColour (accent (*this).withAlpha (0.06f));
         g.fillRoundedRectangle (gap, 3.f);
-        g.setColour (accent().withAlpha (0.5f));
+        g.setColour (accent (*this).withAlpha (0.5f));
         juce::Path outline;
         outline.addRoundedRectangle (gap.reduced (0.5f), 3.f);
         juce::Path dashed;

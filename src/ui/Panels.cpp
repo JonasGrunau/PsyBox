@@ -296,7 +296,7 @@ void Sidebar::paint (juce::Graphics& g)
     g.setColour (col::line);
     g.fillRect (0, a.getY(), getWidth() - 1, 1);
     a = a.reduced (kPad, 0).withTrimmedTop (kPad);
-    g.setColour (accent());
+    g.setColour (accent (*this));
     g.setFont (title (17.f));
     g.drawText (info[(size_t) sel].name, a.removeFromTop (24), juce::Justification::centredLeft, false);
     a.removeFromTop (sp::xs);
@@ -562,7 +562,7 @@ void TopBar::paint (juce::Graphics& g)
     g.drawRoundedRectangle (r.toFloat().reduced (0.5f), 4.f, 1.f);
     auto text = r.withTrimmedLeft (prev.getRight() - r.getX() + sp::sm).withTrimmedRight (r.getRight() - next.getX() + sp::sm);
     const auto& info = psy::categoryInfo()[(size_t) proc.getCategory()];
-    g.setColour (accent());
+    g.setColour (accent (*this));
     g.setFont (heading (9.5f));
     const auto catName = juce::String (info.shortName).toUpperCase();
     const int cw = juce::GlyphArrangement::getStringWidthInt (heading (9.5f), catName) + sp::md;

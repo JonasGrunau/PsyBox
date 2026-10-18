@@ -90,7 +90,7 @@ void PsyBoxEditor::Keys::drawWhiteNote (int note, juce::Graphics& g, juce::Recta
                                           juce::Colour, juce::Colour)
 {
     const auto body = r.withTrimmedRight (1.f);   // 1 px gap between keys shows the background
-    g.setColour (down ? accent() : (over ? juce::Colour (0xff232328) : juce::Colour (0xff1a1a1e)));
+    g.setColour (down ? accent (*this) : (over ? juce::Colour (0xff232328) : juce::Colour (0xff1a1a1e)));
     g.fillRect (body);
     if (note % 12 == 0)
     {
@@ -104,7 +104,7 @@ void PsyBoxEditor::Keys::drawBlackNote (int, juce::Graphics& g, juce::Rectangle<
 {
     g.setColour (col::bg);
     g.fillRect (r.expanded (1.f, 0.f).withTrimmedTop (-1.f).withTrimmedBottom (-1.f));   // outline in the gap colour
-    g.setColour (down ? accent() : (over ? juce::Colour (0xff141418) : juce::Colour (0xff0d0d10)));
+    g.setColour (down ? accent (*this) : (over ? juce::Colour (0xff141418) : juce::Colour (0xff0d0d10)));
     g.fillRect (r);
 }
 
@@ -196,9 +196,9 @@ void PsyBoxEditor::updateAccent()
 {
     const auto c = psy::categoryInfo()[(size_t) proc.getCategory()].colour;
     const auto accent = juce::Colour ((juce::uint32) (0xff000000 | c));
-    if (accent != theme::accent() || withKeyboard)
+    if (accent != getAccent())
     {
-        theme::setAccent (accent);
+        setAccent (accent);
         root.repaint();
         keyboard.repaint();
     }

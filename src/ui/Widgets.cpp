@@ -420,7 +420,7 @@ void ModSourceHandle::paint (juce::Graphics& g)
 {
     const bool hot = isMouseOver() || dragging;
     auto r = getLocalBounds().toFloat();
-    const auto iconColour = used ? accent() : (hot ? col::text : col::textDim);
+    const auto iconColour = used ? accent (*this) : (hot ? col::text : col::textDim);
     drawIcon (g, r.removeFromLeft (12.f).withSizeKeepingCentre (11.f, 11.f).translated (0.f, tab ? -1.f : 0.f), iconColour);
     if (label.isEmpty()) return;
     r.removeFromLeft ((float) sp::xs);
@@ -455,9 +455,9 @@ void ModSourceHandle::mouseDrag (const juce::MouseEvent& e)
             ig.addTransform (juce::AffineTransform::scale (2.f));
             ig.setColour (col::panel.withAlpha (0.95f));
             ig.fillRoundedRectangle (0.5f, 0.5f, (float) w - 1.f, (float) h - 1.f, 10.f);
-            ig.setColour (accent());
+            ig.setColour (accent (*this));
             ig.drawRoundedRectangle (0.5f, 0.5f, (float) w - 1.f, (float) h - 1.f, 10.f, 1.f);
-            drawIcon (ig, { 7.f, 4.f, 12.f, 12.f }, accent());
+            drawIcon (ig, { 7.f, 4.f, 12.f, 12.f }, accent (*this));
             ig.setColour (col::text);
             ig.setFont (heading (9.5f));
             ig.drawText (name, juce::Rectangle<int> (23, 0, w - 26, h), juce::Justification::centredLeft, false);
@@ -563,7 +563,7 @@ void NumberBox::paint (juce::Graphics& g)
         }
         p.addEllipse (-3.9f, -3.9f, 7.8f, 7.8f);
         p.applyTransform (juce::AffineTransform::translation (c));
-        g.setColour (gearOn ? accent() : (overGear && on ? col::text : (on ? col::textDim : col::textFaint)));
+        g.setColour (gearOn ? accent (*this) : (overGear && on ? col::text : (on ? col::textDim : col::textFaint)));
         g.fillPath (p);
         g.setColour (col::well);
         g.fillEllipse (juce::Rectangle<float> (3.4f, 3.4f).withCentre (c));
@@ -572,7 +572,7 @@ void NumberBox::paint (juce::Graphics& g)
     }
 
     const bool changed = overrideText.isEmpty() && std::abs (value - psy::def (param).def) > 0.001f;
-    const auto valueColour = ! on ? col::textFaint : (changed ? accent() : col::text);
+    const auto valueColour = ! on ? col::textFaint : (changed ? accent (*this) : col::text);
     if (cell)
     {
         const auto ar = inner.removeFromRight (11.f);
@@ -606,7 +606,7 @@ void NumberBox::paint (juce::Graphics& g)
 
     if (numRoutes > 0)
     {
-        g.setColour (accent());
+        g.setColour (accent (*this));
         g.fillEllipse (juce::Rectangle<float> (4.f, 4.f).withCentre ({ f.getRight() - 4.f, f.getY() + 4.f }));
     }
 }
@@ -833,7 +833,7 @@ void Segmented::paint (juce::Graphics& g)
         x += w[(size_t) i];
         if (i == selected)
         {
-            g.setColour (accent().withAlpha (0.16f));
+            g.setColour (accent (*this).withAlpha (0.16f));
             g.fillRoundedRectangle (seg.reduced (2.f), 2.f);
         }
         if (i > 0)
@@ -842,7 +842,7 @@ void Segmented::paint (juce::Graphics& g)
             if (vertical) g.fillRect (seg.getX() + 6.f, seg.getY(), seg.getWidth() - 12.f, 1.f);
             else g.fillRect (seg.getX(), seg.getY() + 5.f, 1.f, seg.getHeight() - 10.f);
         }
-        g.setColour (i == selected ? accent() : (i == hover ? col::text : col::textDim));
+        g.setColour (i == selected ? accent (*this) : (i == hover ? col::text : col::textDim));
         g.drawText (labels[i].toUpperCase(), seg.toNearestInt(), juce::Justification::centred, false);
     }
 }
@@ -890,9 +890,9 @@ void ToggleDot::paint (juce::Graphics& g)
         const bool hot = isMouseOver();
         if (on)
         {
-            g.setColour (accent().withAlpha (0.22f));
+            g.setColour (accent (*this).withAlpha (0.22f));
             g.fillRoundedRectangle (pill, 7.f);
-            g.setColour (accent());
+            g.setColour (accent (*this));
             g.fillEllipse (pill.getRight() - 12.f, pill.getY() + 2.f, 10.f, 10.f);
         }
         else
@@ -911,7 +911,7 @@ void ToggleDot::paint (juce::Graphics& g)
     const auto dot = juce::Rectangle<float> (1.f, cy - 4.f, 8.f, 8.f);
     if (on)
     {
-        g.setColour (accent());
+        g.setColour (accent (*this));
         g.fillEllipse (dot);
     }
     else
@@ -1075,7 +1075,7 @@ void TabStrip::paint (juce::Graphics& g)
         {
             const bool lit = isLit (i);
             const float cy = (float) r.getCentreY() - 1.f;
-            g.setColour (lit ? accent() : col::textFaint.withAlpha (0.6f));
+            g.setColour (lit ? accent (*this) : col::textFaint.withAlpha (0.6f));
             if (lit) g.fillEllipse ((float) tr.getX(), cy - 2.5f, 5.f, 5.f);
             else g.drawEllipse ((float) tr.getX() + 0.5f, cy - 2.f, 4.f, 4.f, 1.f);
             tr.removeFromLeft (11);

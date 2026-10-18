@@ -44,7 +44,7 @@ void PsyLookAndFeel::drawRotarySlider (juce::Graphics& g, int x, int y, int w, i
     const bool locked = (bool) s.getProperties().getWithDefault (lockedId, false);
     const float angle = start + pos * (end - start);
     const float stroke = d > 44.f ? 2.5f : 2.f;
-    const juce::Colour acc = accent();
+    const juce::Colour acc = accent (s);
 
     // track
     juce::Path track;
@@ -103,7 +103,7 @@ void PsyLookAndFeel::drawLinearSlider (juce::Graphics& g, int x, int y, int w, i
     g.fillRoundedRectangle (b.getX(), cy - 1.f, b.getWidth(), 2.f, 1.f);
     const float from = bipolar ? b.getCentreX() : b.getX();
     const float to = pos;
-    g.setColour (accent());
+    g.setColour (accent (s));
     g.fillRoundedRectangle (std::min (from, to), cy - 1.f, std::abs (to - from), 2.f, 1.f);
     if (bipolar)
     {
@@ -157,6 +157,14 @@ void PsyLookAndFeel::drawPopupMenuBackground (juce::Graphics& g, int w, int h)
     g.drawRect (0, 0, w, h, 1);
 }
 
+void PsyLookAndFeel::drawPopupMenuItemWithOptions (juce::Graphics& g, const juce::Rectangle<int>& area, bool isHighlighted,
+                                                   const juce::PopupMenu::Item& item, const juce::PopupMenu::Options& o)
+{
+    // the accent of the window the menu opened from
+    menuAccent = accent (o.getTargetComponent() != nullptr ? o.getTargetComponent() : o.getParentComponent());
+    LookAndFeel_V4::drawPopupMenuItemWithOptions (g, area, isHighlighted, item, o);
+}
+
 void PsyLookAndFeel::drawPopupMenuItem (juce::Graphics& g, const juce::Rectangle<int>& area, bool isSeparator, bool isActive,
                                         bool isHighlighted, bool isTicked, bool hasSubMenu, const juce::String& text,
                                         const juce::String& shortcut, const juce::Drawable*, const juce::Colour*)
@@ -170,12 +178,12 @@ void PsyLookAndFeel::drawPopupMenuItem (juce::Graphics& g, const juce::Rectangle
     auto r = area.reduced (4, 1);
     if (isHighlighted && isActive)
     {
-        g.setColour (accent().withAlpha (0.14f));
+        g.setColour (menuAccent.withAlpha (0.14f));
         g.fillRoundedRectangle (r.toFloat(), 3.f);
     }
     if (isTicked)
     {
-        g.setColour (accent());
+        g.setColour (menuAccent);
         g.fillEllipse ((float) r.getX() + 7.f, (float) r.getCentreY() - 2.5f, 5.f, 5.f);
     }
     g.setColour (! isActive ? col::textFaint : (isHighlighted || isTicked ? col::text : col::textDim.brighter (0.3f)));
@@ -217,7 +225,7 @@ void PsyLookAndFeel::drawButtonBackground (juce::Graphics& g, juce::Button& b, c
     const bool primary = (bool) b.getProperties().getWithDefault (primaryId, false);
     if (primary)
     {
-        auto c = accent();
+        auto c = accent (b);
         if (down) c = c.darker (0.25f);
         else if (over) c = c.brighter (0.12f);
         g.setColour (c);
@@ -226,7 +234,7 @@ void PsyLookAndFeel::drawButtonBackground (juce::Graphics& g, juce::Button& b, c
     }
     if (b.getToggleState())
     {
-        g.setColour (accent().withAlpha (0.14f));
+        g.setColour (accent (b).withAlpha (0.14f));
         g.fillRoundedRectangle (r, 4.f);
     }
     else if (over || down)
@@ -242,7 +250,7 @@ void PsyLookAndFeel::drawButtonText (juce::Graphics& g, juce::TextButton& b, boo
 {
     const bool primary = (bool) b.getProperties().getWithDefault (primaryId, false);
     g.setFont (getTextButtonFont (b, b.getHeight()));
-    g.setColour (primary ? juce::Colour (0xff0a0a0b) : (b.getToggleState() ? accent() : (over ? col::text : col::textDim.brighter (0.2f))));
+    g.setColour (primary ? juce::Colour (0xff0a0a0b) : (b.getToggleState() ? accent (b) : (over ? col::text : col::textDim.brighter (0.2f))));
     g.drawText (b.getButtonText().toUpperCase(), b.getLocalBounds(), juce::Justification::centred, false);
 }
 
@@ -278,7 +286,7 @@ void PsyLookAndFeel::fillTextEditorBackground (juce::Graphics& g, int w, int h, 
 
 void PsyLookAndFeel::drawTextEditorOutline (juce::Graphics& g, int w, int h, juce::TextEditor& e)
 {
-    g.setColour (e.hasKeyboardFocus (true) ? accent().withAlpha (0.7f) : col::lineStrong);
+    g.setColour (e.hasKeyboardFocus (true) ? accent (e).withAlpha (0.7f) : col::lineStrong);
     g.drawRoundedRectangle (0.5f, 0.5f, (float) w - 1.f, (float) h - 1.f, 3.f, 1.f);
 }
 

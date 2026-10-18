@@ -30,7 +30,7 @@ void DisplayBase::paint (juce::Graphics& g)
 void DisplayBase::timerCallback()
 {
     if (! isShowing()) return;
-    const uint64_t fp = fingerprint() ^ (uint64_t) theme::accent().getARGB();
+    const uint64_t fp = fingerprint() ^ (uint64_t) theme::accent (*this).getARGB();
     if (fp != lastPrint)
     {
         lastPrint = fp;
@@ -57,9 +57,8 @@ void DisplayBase::drawGrid (juce::Graphics& g, juce::Rectangle<float> r, int v, 
 
 namespace
 {
-    void strokeCurve (juce::Graphics& g, const juce::Path& p, juce::Rectangle<float> area, bool fill)
+    void strokeCurve (juce::Graphics& g, juce::Colour acc, const juce::Path& p, juce::Rectangle<float> area, bool fill)
     {
-        const auto acc = accent();
         if (fill)
         {
             juce::Path f (p);
@@ -97,7 +96,7 @@ uint64_t LiveDisplay::mixPos (uint64_t h, float pos)
 
 void LiveDisplay::drawDot (juce::Graphics& g, juce::Point<float> pt, bool newest, juce::Rectangle<float> area) const
 {
-    const auto acc = accent();
+    const auto acc = accent (*this);
     const auto box = [pt] (float d) { return juce::Rectangle<float> (d, d).withCentre (pt); };
     if (! newest)
     {
@@ -371,7 +370,7 @@ void WaveDisplay::paintContent (juce::Graphics& g, juce::Rectangle<float> r)
 
     float maxGain = 0.f;
     for (int k = 0; k < v.count; ++k) maxGain = std::max (maxGain, v.gain[(size_t) k]);
-    const auto acc = accent();
+    const auto acc = accent (*this);
     // the outer voices first, the centre last and brightest
     for (int k = v.count - 1; k >= 1; --k)
     {
@@ -536,10 +535,10 @@ void FilterDisplay::paintContent (juce::Graphics& g, juce::Rectangle<float> r)
             livePath = responsePath (r, top, bottom);
         }
     }
-    strokeCurve (g, moved ? livePath : knobPath, r, true);
+    strokeCurve (g, accent (*this), moved ? livePath : knobPath, r, true);
 
     // cutoff marker
-    g.setColour (accent().withAlpha (0.35f));
+    g.setColour (accent (*this).withAlpha (0.35f));
     g.fillRect (xOf (shownCutoff), r.getY(), 1.f, r.getHeight());
 }
 
@@ -599,7 +598,7 @@ void EnvDisplay::paintContent (juce::Graphics& g, juce::Rectangle<float> r)
         const float u = (float) i / steps;
         p.lineTo (X (tw (a) + tw (d) + hold + tw (rel) * u), Y (s * std::exp (-u * 5.f) * (1.f - u)));
     }
-    strokeCurve (g, p, area, true);
+    strokeCurve (g, accent (*this), p, area, true);
 
     // stage handles
     g.setColour (col::text);
@@ -653,7 +652,7 @@ void PitchEnvDisplay::paintContent (juce::Graphics& g, juce::Rectangle<float> r)
         p.lineTo (X (a + d * u), Y (amt * std::pow (1.f - u, 1.f + c * 7.f)));
     }
     p.lineTo (X (total), Y (0));
-    strokeCurve (g, p, area, false);
+    strokeCurve (g, accent (*this), p, area, false);
 
     // the voices: attack, decay, then resting at the end while the note sounds
     for (int k = view.numVoices - 1; k >= 0; --k)
@@ -716,7 +715,7 @@ void LfoDisplay::paintContent (juce::Graphics& g, juce::Rectangle<float> r)
         if (i == 0) p.startNewSubPath (pt);
         else p.lineTo (pt);
     }
-    strokeCurve (g, p, area, false);
+    strokeCurve (g, accent (*this), p, area, false);
 
     // the voices; a free-running LFO is one for all of them
     const bool perVoice = proc.plain (psy::lfoParam (lfo, 4)) > 0.5f;
@@ -738,6 +737,28 @@ namespace
     constexpr float kMeterW = 92.f;                            // meter strip at the right of the window
 }
 
+// A render on its own (low priority) thread into a temporary WAV. It checks
+// for a stop every block, so a stale one goes quickly.
+struct Scope::BounceJob final : juce::Thread
+{
+    explicit BounceJob (PsyBoxProcessor::Bounce b) : Thread ("PsyBox bounce"), bounce (std::move (b))
+    {
+        startThread (juce::Thread::Priority::low);
+    }
+    ~BounceJob() override { stopThread (-1); }
+
+    void run() override
+    {
+        ok = PsyBoxProcessor::renderBounce (bounce, temp.getFile(), [this] { return threadShouldExit(); }, &progress);
+        done = true;
+    }
+
+    const PsyBoxProcessor::Bounce bounce;
+    const juce::TemporaryFile temp { ".wav" };   // deleted with the job
+    std::atomic<float> progress { 0.f };
+    std::atomic<bool> done { false }, ok { false };
+};
+
 Scope::Scope (PsyBoxProcessor& p) : DisplayBase (p)
 {
     buf.resize (2048);
@@ -746,6 +767,8 @@ Scope::Scope (PsyBoxProcessor& p) : DisplayBase (p)
     setMouseCursor (juce::MouseCursor::DraggingHandCursor);
     setTooltip ("Output. Drag out to export this sound as a WAV file");
 }
+
+Scope::~Scope() = default;
 
 void Scope::timerCallback()
 {
@@ -767,25 +790,80 @@ void Scope::timerCallback()
     }
     // A few quiet frames still repaint, so the last of the signal leaves the wave.
     quietFrames = quiet ? quietFrames + 1 : 0;
-    if (quietFrames <= 3) repaint();
+    if (quietFrames <= 3 || waiting) repaint();   // waiting: the render's progress
+}
+
+void Scope::prepareBounce()
+{
+    auto b = proc.bounceRequest();
+    if (job != nullptr && job->bounce.key == b.key)
+        return;
+    job = std::make_unique<BounceJob> (std::move (b));   // a stale render stops and goes
+}
+
+juce::File Scope::bounceFile()
+{
+    if (! job->ok)
+        return {};
+    // the same sound again: the file it went to (unless it was moved away)
+    if (exportedKey == job->bounce.key && exported.existsAsFile())
+        return exported;
+    const auto file = PsyBoxProcessor::newBounceFile (job->bounce);
+    if (file == juce::File() || ! job->temp.getFile().copyFileTo (file))
+        return {};
+    exported = file;
+    exportedKey = job->bounce.key;
+    return file;
+}
+
+void Scope::mouseEnter (const juce::MouseEvent&)
+{
+    failed = false;
+    prepareBounce();   // most of it is done by the time a drag starts
+    repaint();
+}
+
+void Scope::mouseDown (const juce::MouseEvent&)
+{
+    failed = false;
+    prepareBounce();
+}
+
+void Scope::mouseUp (const juce::MouseEvent&)
+{
+    dragging = waiting = false;
+    repaint();
 }
 
 void Scope::mouseDrag (const juce::MouseEvent& e)
 {
-    if (dragging || e.getDistanceFromDragStart() < 6)
+    if (dragging || failed || e.getDistanceFromDragStart() < 6)
         return;
+    // The sound as it is when the drag starts. Not again while waiting: under
+    // host automation it changes all the time and would never finish.
+    if (! waiting)
+        prepareBounce();
+    if (! job->done)
+    {
+        if (! waiting) { waiting = true; repaint(); }
+        return;   // the first move after it is done starts the drag
+    }
+    waiting = false;
+    const auto file = bounceFile();
+    if (! file.existsAsFile())
+    {
+        failed = true;
+        repaint();
+        return;
+    }
     dragging = true;
     repaint();
-    const auto file = proc.bounceToFile();
-    if (file.existsAsFile())
-        juce::DragAndDropContainer::performExternalDragDropOfFiles ({ file.getFullPathName() }, false, this,
-                                                                     [safe = juce::Component::SafePointer<Scope> (this)] {
-                                                                         if (safe == nullptr) return;
-                                                                         safe->dragging = false;
-                                                                         safe->repaint();
-                                                                     });
-    else
-        dragging = false;
+    juce::DragAndDropContainer::performExternalDragDropOfFiles ({ file.getFullPathName() }, false, this,
+                                                                 [safe = juce::Component::SafePointer<Scope> (this)] {
+                                                                     if (safe == nullptr) return;
+                                                                     safe->dragging = false;
+                                                                     safe->repaint();
+                                                                 });
 }
 
 void Scope::paintContent (juce::Graphics& g, juce::Rectangle<float> r)
@@ -796,13 +874,27 @@ void Scope::paintContent (juce::Graphics& g, juce::Rectangle<float> r)
     paintMeter (g, meter.withTrimmedLeft (1.f));
     paintWave (g, r);
 
-    if (isMouseOver() || dragging)
+    if (isMouseOver() || dragging || waiting)
     {
         g.setColour (col::well.withAlpha (0.75f));
         g.fillRect (r);
-        g.setColour (col::text.withAlpha (dragging ? 0.9f : 0.7f));
+        juce::String text = "DRAG TO EXPORT WAV";
+        if (dragging) text = "DROP TO EXPORT WAV";
+        else if (failed) text = "EXPORT FAILED";
+        else if (waiting && job != nullptr)
+        {
+            const float done = job->done ? 1.f : job->progress.load (std::memory_order_relaxed);
+            text = job->done ? "READY, DRAG ON" : "RENDERING " + juce::String (juce::roundToInt (done * 100.f)) + "%";
+            // a thin bar along the bottom
+            const auto bar = r.reduced (12.f, 0.f).removeFromBottom (10.f).withHeight (2.f);
+            g.setColour (col::lineStrong);
+            g.fillRect (bar);
+            g.setColour (accent (*this));
+            g.fillRect (bar.withWidth (bar.getWidth() * done));
+        }
+        g.setColour (col::text.withAlpha (dragging || waiting ? 0.9f : 0.7f));
         g.setFont (heading (9.5f));
-        g.drawText (dragging ? "DROP TO EXPORT WAV" : "DRAG TO EXPORT WAV", r.toNearestInt(), juce::Justification::centred, false);
+        g.drawText (text, r.toNearestInt(), juce::Justification::centred, false);
     }
 }
 
@@ -832,9 +924,9 @@ void Scope::paintWave (juce::Graphics& g, juce::Rectangle<float> r)
         if (px == 0) p.startNewSubPath (area.getX(), y);
         else p.lineTo (area.getX() + (float) px, y);
     }
-    g.setColour (accent().withAlpha (0.12f));
+    g.setColour (accent (*this).withAlpha (0.12f));
     g.strokePath (p, juce::PathStrokeType (3.f));
-    g.setColour (accent());
+    g.setColour (accent (*this));
     g.strokePath (p, juce::PathStrokeType (1.3f));
 }
 
@@ -858,9 +950,9 @@ void Scope::paintMeter (juce::Graphics& g, juce::Rectangle<float> r)
         const juce::Rectangle<float> track (area.getX(), y, area.getWidth(), barH);
         g.setColour (col::lineStrong);
         g.fillRect (track);
-        g.setColour (accent().withAlpha (0.35f));
+        g.setColour (accent (*this).withAlpha (0.35f));
         g.fillRect (track.withRight (xOf (m.peakDb)));
-        g.setColour (accent());
+        g.setColour (accent (*this));
         g.fillRect (track.withRight (xOf (m.rmsDb)));
         if (m.holdDb > kMeterFloorDb)
         {
@@ -909,7 +1001,7 @@ namespace
     }
 
     // Min/max per pixel column, drawn as a filled band around the centre line.
-    void drawWave (juce::Graphics& g, const std::vector<float>& x, int count, juce::Rectangle<float> r, float scale)
+    void drawWave (juce::Graphics& g, juce::Colour acc, const std::vector<float>& x, int count, juce::Rectangle<float> r, float scale)
     {
         const int cols = juce::jmax (1, (int) r.getWidth());
         juce::Path p;
@@ -927,7 +1019,7 @@ namespace
         for (int c = 1; c < cols; ++c) p.lineTo (r.getX() + (float) c, cy - hi[(size_t) c] * half);
         for (int c = cols - 1; c >= 0; --c) p.lineTo (r.getX() + (float) c, cy - lo[(size_t) c] * half);
         p.closeSubPath();
-        g.setColour (accent().withAlpha (0.75f));
+        g.setColour (acc.withAlpha (0.75f));
         g.fillPath (p);
     }
 } // namespace
@@ -960,13 +1052,13 @@ void KickPitchDisplay::paintContent (juce::Graphics& g, juce::Rectangle<float> r
         if (i == 0) p.startNewSubPath (X (ms), y);
         else p.lineTo (X (ms), y);
     }
-    strokeCurve (g, p, area, true);
+    strokeCurve (g, accent (*this), p, area, true);
 
     // start, knee and body markers
     const float r0 = body / s.tuneHz;
     const float start = s.startHz * r0, knee = juce::jlimit (body, std::max (start, body), s.kneeHz * r0);
     const float kneeMs = 3.f * s.snapMs;
-    g.setColour (accent());
+    g.setColour (accent (*this));
     for (auto pt : { juce::Point<float> (X (0.f), Y (start)), juce::Point<float> (X (kneeMs), Y (psy::kickPitchAt (s, n, kneeMs * 0.001f))),
                      juce::Point<float> (X (3.f * s.sweepMs), Y (body)) })
         g.fillEllipse (pt.x - 2.5f, pt.y - 2.5f, 5.f, 5.f);
@@ -1005,7 +1097,7 @@ void KickEnvDisplay::paintContent (juce::Graphics& g, juce::Rectangle<float> r)
     p.startNewSubPath (X (0), Y (0.f));
     for (size_t i = 0; i < envPoints.size(); ++i) p.lineTo (X ((int) i * stride), Y (envPoints[i]));
     p.lineTo (X (count - 1), Y (0.f));
-    strokeCurve (g, p, area, true);
+    strokeCurve (g, accent (*this), p, area, true);
 
     // where the hold ends and the decay starts
     const float holdEnd = (s.attackMs + s.holdMs) / totalMs;
@@ -1042,7 +1134,7 @@ void KickClickDisplay::paintContent (juce::Graphics& g, juce::Rectangle<float> r
     // scaled to its own peak: this view is about the shape, Level sets the loudness
     float pk = 1e-6f;
     for (float v : click) pk = std::max (pk, std::abs (v));
-    drawWave (g, click, count, r.reduced (4.f, 6.f), 0.9f / pk);
+    drawWave (g, accent (*this), click, count, r.reduced (4.f, 6.f), 0.9f / pk);
 }
 
 void KickDriveDisplay::paintContent (juce::Graphics& g, juce::Rectangle<float> r)
@@ -1064,7 +1156,7 @@ void KickDriveDisplay::paintContent (juce::Graphics& g, juce::Rectangle<float> r
         if (i == 0) p.startNewSubPath (px, py);
         else p.lineTo (px, py);
     }
-    strokeCurve (g, p, area, false);
+    strokeCurve (g, accent (*this), p, area, false);
 }
 
 void KickWaveDisplay::ensure() const
@@ -1107,7 +1199,7 @@ void KickWaveDisplay::paintContent (juce::Graphics& g, juce::Rectangle<float> r)
     g.setColour (col::grid);
     g.fillRect (area.getX(), area.getCentreY(), area.getWidth(), 1.f);
 
-    drawWave (g, wave, count, area, 1.9f);
+    drawWave (g, accent (*this), wave, count, area, 1.9f);
 
     // pitch sweep on a log axis over the wave, faint
     const float lo = std::log (25.f), hiF = std::log (10000.f);
@@ -1324,7 +1416,7 @@ void CompDisplay::paintContent (juce::Graphics& g, juce::Rectangle<float> r)
 void CompDisplay::paintMulti (juce::Graphics& g, juce::Rectangle<float> r, bool on)
 {
     const auto p = plot();
-    const auto acc = accent();
+    const auto acc = accent (*this);
     const float splits[2] = { proc.plain (P::MbXLow), proc.plain (P::MbXHigh) };
     const float xs[4] = { r.getX(), xOfHz (splits[0]), xOfHz (splits[1]), r.getRight() };
 
@@ -1396,7 +1488,7 @@ void CompDisplay::paintMulti (juce::Graphics& g, juce::Rectangle<float> r, bool 
 void CompDisplay::paintNormal (juce::Graphics& g, juce::Rectangle<float> r, bool on)
 {
     const auto p = plot();
-    const auto acc = accent();
+    const auto acc = accent (*this);
     const float thr = proc.plain (P::CompThresh), knee = proc.plain (P::CompKnee);
     const float slope = 1.f - 1.f / std::max (proc.plain (P::CompRatio), 1.f);
     const auto out = [&] (float in) { return in + psy::dsp::dyn::downGain (in, thr, slope, knee); };
@@ -1418,7 +1510,7 @@ void CompDisplay::paintNormal (juce::Graphics& g, juce::Rectangle<float> r, bool
         if (i == 0) curve.startNewSubPath (pt);
         else curve.lineTo (pt);
     }
-    strokeCurve (g, curve, p, true);
+    strokeCurve (g, accent (*this), curve, p, true);
 
     // threshold handle and value
     const bool hot = hover.param == P::CompThresh || drag.param == P::CompThresh;

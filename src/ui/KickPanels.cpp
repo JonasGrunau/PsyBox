@@ -57,7 +57,7 @@ void KickPitchPanel::timerCallback()
 void KickPitchPanel::paint (juce::Graphics& g)
 {
     Section::paint (g);
-    g.setColour (accent());
+    g.setColour (accent (*this));
     g.setFont (mono (10.f));
     g.drawText (readout, header(), juce::Justification::centredRight, false);
 }

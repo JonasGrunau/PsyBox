@@ -10,6 +10,7 @@
 class PsyBoxEditor : public juce::AudioProcessorEditor,
                      public juce::ChangeListener,
                      public juce::DragAndDropContainer,
+                     public theme::AccentHolder,
                      private juce::Timer
 {
 public:

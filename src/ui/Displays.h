@@ -219,22 +219,33 @@ private:
 
 // Output window: oscilloscope with zero-crossing trigger, plus a stereo level
 // meter (RMS bar over a peak bar, held peak tick and readout, red on clip).
-// Click and drag out of it to drop the current sound as a WAV file.
+// Click and drag out of it to drop the current sound as a WAV file. The WAV
+// renders on its own thread from the moment the pointer is over the scope;
+// a drag that comes sooner shows the progress and starts at the first move
+// after it is done (macOS starts a file drag only from a mouse event).
 class Scope : public DisplayBase, public juce::SettableTooltipClient
 {
 public:
     explicit Scope (PsyBoxProcessor& p);
-    void mouseEnter (const juce::MouseEvent&) override { repaint(); }
+    ~Scope() override;
+    void mouseEnter (const juce::MouseEvent&) override;
     void mouseExit (const juce::MouseEvent&) override { repaint(); }
+    void mouseDown (const juce::MouseEvent&) override;
     void mouseDrag (const juce::MouseEvent&) override;
-    void mouseUp (const juce::MouseEvent&) override { dragging = false; repaint(); }
+    void mouseUp (const juce::MouseEvent&) override;
 
 private:
     struct Meter { float peakDb = -100.f, rmsDb = -100.f, holdDb = -100.f; int holdFrames = 0, clipFrames = 0; };
+    struct BounceJob;
     std::vector<float> buf;
     std::array<Meter, 2> meters;
-    bool dragging = false;
+    bool dragging = false, waiting = false, failed = false;
     int quietFrames = 0;
+    std::unique_ptr<BounceJob> job;   // the render of the sound as it is now (or was, until the next check)
+    juce::File exported;              // the last file dragged out, and the sound in it
+    uint64_t exportedKey = 0;
+    void prepareBounce();             // starts a render unless this sound's is running or done
+    juce::File bounceFile();          // the finished render in Bounces; empty if it failed
     void timerCallback() override;
     void paintContent (juce::Graphics&, juce::Rectangle<float>) override;
     void paintWave (juce::Graphics&, juce::Rectangle<float>);

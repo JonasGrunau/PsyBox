@@ -38,11 +38,25 @@ namespace theme
     // A curve stroked the way the displays draw theirs (round joins and caps).
     void strokeLine (juce::Graphics& g, const juce::Path& p, juce::Colour c, float width = 1.5f);
     // Fills under a curve with the accent fading downwards, like the other displays.
-    void fillUnder (juce::Graphics& g, const juce::Path& curve, juce::Rectangle<float> area, float alpha = 0.16f);
+    void fillUnder (juce::Graphics& g, const juce::Path& curve, juce::Rectangle<float> area, juce::Colour accent, float alpha = 0.16f);
 
-    // Current accent (message thread only). Set when the category changes.
-    juce::Colour accent();
-    void setAccent (juce::Colour c);
+    // The editor holds its window's accent (its category's colour), so two
+    // open PsyBox windows each keep their own. Message thread only.
+    class AccentHolder
+    {
+    public:
+        virtual ~AccentHolder() = default;
+        juce::Colour getAccent() const noexcept { return accentColour; }
+        void setAccent (juce::Colour c) noexcept;
+
+    private:
+        juce::Colour accentColour { 0xfff2e205 };
+    };
+
+    // The accent of the window `c` is in. Outside every editor (a popup with
+    // no target, or no component at all), the one set last.
+    juce::Colour accent (const juce::Component* c);
+    inline juce::Colour accent (const juce::Component& c) { return accent (&c); }
 
     // Fonts: Inter for labels, JetBrains Mono for values.
     juce::Font label (float height = 10.5f);       // small caps style labels

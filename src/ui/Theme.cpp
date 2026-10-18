@@ -6,7 +6,7 @@ namespace theme
 {
 namespace
 {
-    juce::Colour currentAccent { 0xfff2e205 };
+    juce::Colour lastAccent { 0xfff2e205 };
 
     struct Typefaces
     {
@@ -33,8 +33,19 @@ namespace
     }
 } // namespace
 
-juce::Colour accent() { return currentAccent; }
-void setAccent (juce::Colour c) { currentAccent = c; }
+void AccentHolder::setAccent (juce::Colour c) noexcept
+{
+    accentColour = c;
+    lastAccent = c;
+}
+
+juce::Colour accent (const juce::Component* c)
+{
+    for (auto* p = c; p != nullptr; p = p->getParentComponent())
+        if (auto* h = dynamic_cast<const AccentHolder*> (p))
+            return h->getAccent();
+    return lastAccent;
+}
 
 juce::Font label (float h) { return make (faces().medium, h, 0.06f); }
 juce::Font labelStrong (float h) { return make (faces().semibold, h, 0.06f); }
@@ -48,13 +59,13 @@ void strokeLine (juce::Graphics& g, const juce::Path& p, juce::Colour c, float w
     g.strokePath (p, juce::PathStrokeType (width, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
 }
 
-void fillUnder (juce::Graphics& g, const juce::Path& curve, juce::Rectangle<float> a, float alpha)
+void fillUnder (juce::Graphics& g, const juce::Path& curve, juce::Rectangle<float> a, juce::Colour acc, float alpha)
 {
     juce::Path f (curve);
     f.lineTo (a.getRight(), a.getBottom());
     f.lineTo (a.getX(), a.getBottom());
     f.closeSubPath();
-    g.setGradientFill (juce::ColourGradient (accent().withAlpha (alpha), 0.f, a.getY(), accent().withAlpha (0.f), 0.f, a.getBottom(), false));
+    g.setGradientFill (juce::ColourGradient (acc.withAlpha (alpha), 0.f, a.getY(), acc.withAlpha (0.f), 0.f, a.getBottom(), false));
     g.fillPath (f);
 }
 

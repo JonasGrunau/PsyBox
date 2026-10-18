@@ -27,6 +27,8 @@
 // PSYSNAP_VIEW=1), e.g. 10 for the Phoscyon Limiter.
 // PSYSNAP_CHAINDRAG=n holds the FX chain's first row dragged to row n (use
 // with PSYSNAP_VIEW=1): the rows make room and its landing place stays empty.
+// PSYSNAP_BOUNCE=1 drags the output window before the WAV is rendered (try a
+// long energy sound): it shows the render's progress.
 
 #include "plugin/PluginEditor.h"
 #include "plugin/PluginProcessor.h"
@@ -309,6 +311,20 @@ int main (int argc, char** argv)
             }
         if (std::getenv ("PSYSNAP_DNDTEST") != nullptr)
             return runDragAndDropTest (proc, *editor);
+
+        if (std::getenv ("PSYSNAP_BOUNCE") != nullptr)
+            if (auto* scope = findChild<Scope> (*editor, [] (Scope&) { return true; }))
+            {
+                auto src = juce::Desktop::getInstance().getMainMouseSource();
+                const auto at = [&] (juce::Point<float> pos, bool dragged) {
+                    return juce::MouseEvent (src, pos, juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier), 0.f, 0.f, 0.f, 0.f, 0.f,
+                                             scope, scope, juce::Time::getCurrentTime(), { 20.f, 20.f }, juce::Time::getCurrentTime(), 1, dragged);
+                };
+                scope->mouseEnter (at ({ 20.f, 20.f }, false));
+                scope->mouseDown (at ({ 20.f, 20.f }, false));
+                scope->mouseDrag (at ({ 40.f, 22.f }, true));
+                juce::MessageManager::getInstance()->runDispatchLoopUntil (150);
+            }
 
         const auto* scaleText = std::getenv ("PSYSNAP_SCALE");
         const auto img = editor->createComponentSnapshot (editor->getLocalBounds(), true,

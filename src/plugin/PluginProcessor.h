@@ -134,10 +134,27 @@ public:
     void setEnergyMode (psy::EnergyMode);
     double energyLengthSeconds() const;
 
-    // Renders the current patch offline (one note: the last one played, held,
-    // then released until the tail dies away) to a 24-bit WAV in
-    // ~/Music/PsyBox/Bounces and returns the file. Message thread.
-    juce::File bounceToFile();
+    // ---- WAV bounce -----------------------------------------------------------
+    // One note of the current patch (the last one played), held, then released
+    // until the tail dies away, as a 24-bit WAV. bounceRequest() takes what to
+    // render (message thread); renderBounce() runs on any thread, so a long
+    // energy sound renders without freezing the UI.
+    struct Bounce
+    {
+        psy::ParamState state;
+        double bpm = 120.0, gateSec = 1.0, expectSec = 1.0;   // expected length, for the progress
+        int note = 48;
+        juce::String name;   // file name without extension: the preset and the note
+        uint64_t key = 0;    // equal keys render the same WAV
+    };
+    Bounce bounceRequest() const;
+    // Writes `b` to `file`. Gives up (false, no file) once `cancelled` returns
+    // true or the write fails; `progress` follows the render from 0 to 1.
+    static bool renderBounce (const Bounce& b, const juce::File& file, const std::function<bool()>& cancelled,
+                              std::atomic<float>* progress = nullptr);
+    // A new file for `b` in ~/Music/PsyBox/Bounces, never an earlier one (a
+    // DAW may still play it from there); empty if the folder can't be made.
+    static juce::File newBounceFile (const Bounce& b);
 
     // On-screen / computer keyboard (standalone). Merged into the MIDI input.
     juce::MidiKeyboardState keyboardState;

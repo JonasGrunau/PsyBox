@@ -81,15 +81,15 @@ void PhosFilterDisplay::paintContent (juce::Graphics& g, juce::Rectangle<float> 
     {
         strokeLine (g, curve (resting), col::lineStrong, 1.f);
         const auto p = curve (live);
-        fillUnder (g, p, a, 0.14f);
-        strokeLine (g, p, accent());
+        fillUnder (g, p, a, accent (*this), 0.14f);
+        strokeLine (g, p, accent (*this));
         drawDot (g, { xOf (live), yOf (psy::PhosVoice::responseDb (live, s.reso, live) + 8.f) }, true, a);
     }
     else
     {
         const auto p = curve (resting);
-        fillUnder (g, p, a, 0.14f);
-        strokeLine (g, p, accent());
+        fillUnder (g, p, a, accent (*this), 0.14f);
+        strokeLine (g, p, accent (*this));
     }
 }
 
@@ -145,15 +145,15 @@ void PhosEnvDisplay::paintContent (juce::Graphics& g, juce::Rectangle<float> r)
             }
             if (acc == 0)
             {
-                fillUnder (g, p, a, 0.14f);
-                strokeLine (g, p, theme::accent());
+                fillUnder (g, p, a, accent (*this), 0.14f);
+                strokeLine (g, p, theme::accent (*this));
             }
             else
             {
                 juce::Path dashed;
                 const float dashes[] = { 4.f, 3.f };
                 juce::PathStrokeType (1.2f).createDashedStroke (dashed, p, dashes, 2);
-                g.setColour (theme::accent().withAlpha (0.5f));
+                g.setColour (theme::accent (*this).withAlpha (0.5f));
                 g.fillPath (dashed);
             }
         }
@@ -178,15 +178,15 @@ void PhosEnvDisplay::paintContent (juce::Graphics& g, juce::Rectangle<float> r)
         }
         if (acc == 0)
         {
-            fillUnder (g, p, a, 0.14f);
-            strokeLine (g, p, theme::accent());
+            fillUnder (g, p, a, accent (*this), 0.14f);
+            strokeLine (g, p, theme::accent (*this));
         }
         else
         {
             juce::Path dashed;
             const float dashes[] = { 4.f, 3.f };
             juce::PathStrokeType (1.2f).createDashedStroke (dashed, p, dashes, 2);
-            g.setColour (theme::accent().withAlpha (0.5f));
+            g.setColour (theme::accent (*this).withAlpha (0.5f));
             g.fillPath (dashed);
         }
     }
@@ -261,10 +261,10 @@ void PhosSynthPanel::paint (juce::Graphics& g)
         const bool on = coupled[(size_t) pair];
         const auto l = leds[(size_t) pair * 2]->getBounds().getCentre().toFloat(), r = leds[(size_t) pair * 2 + 1]->getBounds().getCentre().toFloat();
         const float mid = 0.5f * (l.x + r.x);
-        g.setColour (on ? accent().withAlpha (0.35f) : col::line);
+        g.setColour (on ? accent (*this).withAlpha (0.35f) : col::line);
         g.fillRect (l.x + 6.f, l.y - 0.5f, mid - 0.5f * tw - l.x - 6.f, 1.f);
         g.fillRect (mid + 0.5f * tw, l.y - 0.5f, r.x - 6.f - mid - 0.5f * tw, 1.f);
-        g.setColour (on ? accent() : col::textFaint);
+        g.setColour (on ? accent (*this) : col::textFaint);
         g.drawText (name, juce::Rectangle<float> (mid - 0.5f * tw, l.y - 6.f, tw, 12.f), juce::Justification::centred, false);
     }
 }
@@ -327,7 +327,7 @@ void PhosFilterPanel::timerCallback()
 void PhosFilterPanel::paint (juce::Graphics& g)
 {
     Section::paint (g);
-    g.setColour (accent());
+    g.setColour (accent (*this));
     g.setFont (mono (10.f));
     g.drawText (shown, header(), juce::Justification::centredRight, false);
 }
@@ -382,7 +382,7 @@ namespace
             const auto a = r.reduced (sp::sm, sp::sm);
             const int model = (int) std::lround (proc.plain (P::PhosDistModel));
             strokeLine (g, phosDriveWave (a, model, 0.f, true), col::lineStrong, 1.f);
-            strokeLine (g, phosDriveWave (a, model, proc.plain (P::PhosDistDrive), false), proc.plain (P::PhosDistOn) > 0.5f ? accent() : col::textFaint);
+            strokeLine (g, phosDriveWave (a, model, proc.plain (P::PhosDistDrive), false), proc.plain (P::PhosDistOn) > 0.5f ? accent (*this) : col::textFaint);
         }
     };
 } // namespace

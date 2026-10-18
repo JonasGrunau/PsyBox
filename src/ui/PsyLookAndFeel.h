@@ -20,6 +20,8 @@ public:
     void drawPopupMenuItem (juce::Graphics&, const juce::Rectangle<int>& area, bool isSeparator, bool isActive,
                             bool isHighlighted, bool isTicked, bool hasSubMenu, const juce::String& text,
                             const juce::String& shortcutKeyText, const juce::Drawable* icon, const juce::Colour* textColour) override;
+    void drawPopupMenuItemWithOptions (juce::Graphics&, const juce::Rectangle<int>& area, bool isHighlighted,
+                                       const juce::PopupMenu::Item&, const juce::PopupMenu::Options&) override;
     juce::Font getPopupMenuFont() override;
     void getIdealPopupMenuItemSize (const juce::String& text, bool isSeparator, int standardHeight, int& w, int& h) override;
     int getPopupMenuBorderSize() override { return 4; }
@@ -38,4 +40,7 @@ public:
     juce::Font getAlertWindowTitleFont() override;
     juce::Font getAlertWindowMessageFont() override;
     juce::Font getAlertWindowFont() override;
+
+private:
+    juce::Colour menuAccent { 0xfff2e205 };   // the window a popup menu opened from, set per item
 };

@@ -5,10 +5,10 @@ using psy::P;
 
 namespace
 {
-    juce::Colour stepColour (const psy::ArpPattern& pt, int i, bool arpOn)
+    juce::Colour stepColour (juce::Colour accentColour, const psy::ArpPattern& pt, int i, bool arpOn)
     {
         const bool acc = pt.has (i, psy::ArpPattern::Accent);
-        return arpOn ? accent().withAlpha (acc ? 1.f : 0.55f) : col::textFaint.withAlpha (acc ? 0.7f : 0.4f);
+        return arpOn ? accentColour.withAlpha (acc ? 1.f : 0.55f) : col::textFaint.withAlpha (acc ? 0.7f : 0.4f);
     }
 } // namespace
 
@@ -429,7 +429,7 @@ void ArpPage::Panel::Templates::paint (juce::Graphics& g)
         const auto r = cardArea (i).toFloat();
         g.setColour (i == hover ? col::panel.brighter (0.06f) : col::panel);
         g.fillRoundedRectangle (r, 6.f);
-        g.setColour (sel ? accent() : (i == hover ? col::lineStrong : col::line));
+        g.setColour (sel ? accent (*this) : (i == hover ? col::lineStrong : col::line));
         g.drawRoundedRectangle (r.reduced (0.5f), 6.f, 1.f);
 
         auto in = r.reduced ((float) sp::md, (float) sp::sm + 2.f);
@@ -446,7 +446,7 @@ void ArpPage::Panel::Templates::paint (juce::Graphics& g)
             const juce::Rectangle<float> c (in.getX() + (float) s * (sw + kGap), y, sw, kStepH);
             if (pt.has (s, F::On))
             {
-                g.setColour (stepColour (pt, s, true));
+                g.setColour (stepColour (accent (*this), pt, s, true));
                 g.fillRoundedRectangle (c, 1.5f);
                 if (pt.has (s, F::Slide) && s + 1 < psy::kArpSteps)
                     g.fillRect (c.getRight(), c.getCentreY() - 1.f, kGap, 2.f);
@@ -547,11 +547,11 @@ void ArpPage::Panel::Grid::refresh()
     const auto pt = proc.getArpPattern();
     const int step = proc.getArpStep();
     const bool on = proc.plain (P::ArpOn) > 0.5f;
-    if (step == shownStep && on == shownOn && accent() == shownAccent && pt == shown) return;
+    if (step == shownStep && on == shownOn && accent (*this) == shownAccent && pt == shown) return;
     shown = pt;
     shownStep = step;
     shownOn = on;
-    shownAccent = accent();
+    shownAccent = accent (*this);
     repaint();
 }
 
@@ -700,7 +700,7 @@ void ArpPage::Panel::Grid::paint (juce::Graphics& g)
         const auto rr = cellArea (Row::Ruler, i);
         const bool isEnd = i == pt.length - 1;
         g.setFont (mono (10.f));
-        g.setColour (isEnd ? accent() : (i == playing ? col::text : (hover.row == Row::Ruler && hover.step == i ? col::text : (inLoop ? col::textDim : col::textFaint))));
+        g.setColour (isEnd ? accent (*this) : (i == playing ? col::text : (hover.row == Row::Ruler && hover.step == i ? col::text : (inLoop ? col::textDim : col::textFaint))));
         g.drawText (juce::String (i + 1), rr, juce::Justification::centred, false);
         if (isEnd)
             g.fillRect (rr.getX() + 4, rr.getBottom() - 1, rr.getWidth() - 8, 2);
@@ -709,7 +709,7 @@ void ArpPage::Panel::Grid::paint (juce::Graphics& g)
         const auto c = cellArea (Row::On, i).toFloat();
         if (pt.has (i, F::On))
         {
-            g.setColour (stepColour (pt, i, on).withMultipliedAlpha (dim));
+            g.setColour (stepColour (accent (*this), pt, i, on).withMultipliedAlpha (dim));
             g.fillRoundedRectangle (c, 3.f);
             if (pt.has (i, F::Slide) && i + 1 < pt.length)
             {
@@ -739,7 +739,7 @@ void ArpPage::Panel::Grid::paint (juce::Graphics& g)
         g.fillRect (n.getX() + 3.f, n.getCentreY() - 0.5f, n.getWidth() - 6.f, 1.f);
         const float travel = n.getHeight() * 0.5f - 6.f;
         const float y = n.getCentreY() - travel * (float) semis / (float) psy::kArpNoteRange;
-        g.setColour ((on ? accent() : col::textDim).withMultipliedAlpha (noteDim));
+        g.setColour ((on ? accent (*this) : col::textDim).withMultipliedAlpha (noteDim));
         g.fillRoundedRectangle (n.getX() + 4.f, y - 2.f, n.getWidth() - 8.f, 4.f, 2.f);
         const auto half = semis > 0 ? n.withTrimmedTop (n.getHeight() * 0.5f) : n.withTrimmedBottom (n.getHeight() * 0.5f);
         g.setFont (mono (10.5f));
@@ -751,7 +751,7 @@ void ArpPage::Panel::Grid::paint (juce::Graphics& g)
         const auto dot = a.withSizeKeepingCentre (12.f, 12.f);
         if (pt.has (i, F::Accent))
         {
-            g.setColour ((on ? accent() : col::textDim).withMultipliedAlpha (dim));
+            g.setColour ((on ? accent (*this) : col::textDim).withMultipliedAlpha (dim));
             g.fillRoundedRectangle (dot, 2.f);
         }
         else
@@ -764,7 +764,7 @@ void ArpPage::Panel::Grid::paint (juce::Graphics& g)
         const auto pill = cellArea (Row::Slide, i).toFloat().withSizeKeepingCentre (22.f, 10.f);
         if (pt.has (i, F::Slide))
         {
-            g.setColour ((on ? accent() : col::textDim).withMultipliedAlpha (dim));
+            g.setColour ((on ? accent (*this) : col::textDim).withMultipliedAlpha (dim));
             g.fillRoundedRectangle (pill, 5.f);
         }
         else

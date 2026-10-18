@@ -44,7 +44,7 @@ uint64_t UnisonSettings::print() const
     uint64_t h = kFnvSeed;
     for (auto prm : { id.count, id.detune, id.blend, id.width, id.range, id.mode, id.stack })
         h = fnvMix (h, (uint64_t) std::lround (proc.plain (prm) * 1000.f));
-    return h ^ (uint64_t) accent().getARGB();
+    return h ^ (uint64_t) accent (*this).getARGB();
 }
 
 void UnisonSettings::timerCallback()
@@ -84,7 +84,7 @@ void UnisonSettings::paint (juce::Graphics& g)
         const float rel = maxGain > 0.f ? l.gain[(size_t) k] / maxGain : 0.f;
         const float x = r.getCentreX() + juce::jlimit (-1.f, 1.f, l.semis[(size_t) k] / span) * (r.getWidth() * 0.5f - 3.f);
         const float h = (r.getHeight() - 4.f) * (0.3f + 0.7f * rel);
-        g.setColour (on ? accent().withAlpha (0.3f + 0.7f * rel) : col::textFaint);
+        g.setColour (on ? accent (*this).withAlpha (0.3f + 0.7f * rel) : col::textFaint);
         g.fillRoundedRectangle (x - 1.f, r.getBottom() - h, 2.f, h, 1.f);
     }
     g.setColour (on ? col::textDim : col::textFaint);
@@ -824,9 +824,9 @@ void SweepDisplay::paintContent (juce::Graphics& g, juce::Rectangle<float> r)
         level.lineTo (area.getRight(), area.getBottom());
     }
     level.closeSubPath();
-    g.setColour (accent().withAlpha (0.14f));
+    g.setColour (accent (*this).withAlpha (0.14f));
     g.fillPath (level);
-    g.setColour (accent());
+    g.setColour (accent (*this));
     g.strokePath (level, juce::PathStrokeType (1.4f));
     g.setColour (col::text.withAlpha (0.5f));
     g.strokePath (sweepPath, juce::PathStrokeType (1.f));
