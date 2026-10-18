@@ -1246,14 +1246,15 @@ TEST_CASE ("The 303 follows an LFO sample by sample, not once per host block", "
     p.set (P::Mod1Amt, 0.9f);
     const std::vector<MidiEvent> ev { noteAt (0, 45) };
     const auto ref = renderBlocks (p, 48000, 16, ev);
-    for (int block : { 64, 1024 })
+    // The matrix is read on a 16-sample grid counted across blocks, so blocks
+    // that split it elsewhere (7, 1) read it at the same samples too: they
+    // were -43 dB off when it was read at every chunk's start.
+    for (int block : { 1, 7, 64, 1024 })
     {
         const auto x = renderBlocks (p, 48000, block, ev);
         INFO ("block " << block << ": " << diffDb (ref.l, x.l) << " dB");
         CHECK (diffDb (ref.l, x.l) < -60.0);
     }
-    // chunks that start elsewhere sample the LFO elsewhere: close, not identical
-    CHECK (diffDb (ref.l, renderBlocks (p, 48000, 7, ev).l) < -35.0);
 }
 
 TEST_CASE ("Effects follow per-voice envelopes and LFOs the same at any block size", "[engine][blocks][fx]")

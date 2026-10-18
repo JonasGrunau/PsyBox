@@ -131,6 +131,7 @@ void Engine::resetEffects() noexcept
     decimR.reset();
     outGainSet = false;
     fxCount = fxCountOs = 0;
+    phosModCount = 0;
 }
 
 void Engine::reset()
@@ -812,16 +813,26 @@ void Engine::renderVoices (int offset, int n, bool record) noexcept
     for (auto& k : kicks)
         if (k.isActive())
             k.render (osL.data(), osR.data(), offset, n, ctx);
-    if (phos.isActive())
+    if (! phos.isActive())
     {
-        const auto mods = phosMods (offset);
-        phos.render (osL.data(), osR.data(), offset, n, PhosSettings::from (cur), mods, record ? fxSrc.data() : nullptr);
-        for (int i = 0; i < n; ++i)
+        phosModCount = (phosModCount + n) % kPhosModGrid;   // the grid runs on through silence
+        return;
+    }
+    const auto settings = PhosSettings::from (cur);
+    for (int i = 0; i < n;)
+    {
+        if (phosModCount == 0)
+            phosModsNow = phosMods (offset + i);
+        const int m = std::min (n - i, kPhosModGrid - phosModCount);
+        phos.render (osL.data(), osR.data(), offset + i, m, settings, phosModsNow, record ? fxSrc.data() : nullptr);
+        for (int k = 0; k < m; ++k)
         {
             phosModEnv.process();
             if (record)
-                fxSrc[(size_t) (offset + i)][(size_t) ModSrc::ModEnv] = phosModEnv.value();
+                fxSrc[(size_t) (offset + i + k)][(size_t) ModSrc::ModEnv] = phosModEnv.value();
         }
+        phosModCount = (phosModCount + m) % kPhosModGrid;
+        i += m;
     }
 }
 

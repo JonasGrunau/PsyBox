@@ -120,6 +120,12 @@ private:
     dsp::Adsr phosModEnv;
     float phosVelocity = 0.f, phosRandom = 0.f;
     dsp::Rng phosRng { 909 };
+    // The 303 reads its matrix every kPhosModGrid samples, counted on from
+    // block to block (like the effects' slices), so where it reads never
+    // depends on the host's block size.
+    static constexpr int kPhosModGrid = 16;
+    PhosMods phosModsNow;
+    int phosModCount = 0;   // samples into the current grid step
     PhosFx phosFx;
 
     // mono / legato note stack
