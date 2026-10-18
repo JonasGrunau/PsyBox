@@ -32,7 +32,13 @@ spread of each setting. Each recipe draws its modules with those odds and its
 settings from those spreads, mapped onto PsyBox's engine. The refitted
 categories came out with fewer supersaws and more FM, a second oscillator on
 the note or an octave away in most patches, filters that a synced LFO sweeps,
-and more drive and multiband compression.
+and more drive and multiband compression. Nine in ten of those presets also
+run Serum's EQ (a high-pass around 200 Hz, a lift around 3 kHz in most), a
+fifth to a third widen with its dimension expander, and many draw their LFOs:
+the recipes do the same with PsyBox's own EQ, Dimension and drawn LFOs (a
+zap's dive drawn and run once, an arp's cutoff stepped through the bar, an
+extra filter envelope on leads and plucks, a slow swell on stabs, semitone
+steps in glitches, a gate on some pads), and Perc gets claps.
 
 ### Acid
 
@@ -287,9 +293,11 @@ Dark Forest Kick · Full-On Kick · Goa Kick · Hi-Tech Kick · Perc · Progress
 **Perc** is a synth sound for the hits around the kick: closed and open hats
 (noise high-passed at 3-9 kHz, a ring-modulated metal layer in some),
 snares with a short body or a laser dive, tonal percs and toms (a sine or
-soft FM pair falling a few semitones) and alien percs (inharmonic FM or ring
-modulation through a band-pass or comb). Each hit dies away while the key is
-held; there is no arp, so you play the groove. Hats open up on soft hits.
+soft FM pair falling a few semitones), alien percs (inharmonic FM or ring
+modulation through a band-pass or comb) and claps (band-passed noise in three
+to five bursts 7-14 ms apart, the amp envelope's Bursts). Each hit dies away
+while the key is held; there is no arp, so you play the groove. Hats open up
+on soft hits.
 
 A kick category switches the synth to a dedicated kick engine, and the OSC
 view becomes the KICK view: the kick's Pitch, Amp, Click, Drive and wave
@@ -394,12 +402,19 @@ Laid out like Serum. The tabs in the top bar switch views:
   detune makes it beat; while you change a unison setting the voices also show
   as lines across the detune range. The filter curves follow the newest note,
   so envelopes, LFOs, macros and automation move them; the knob setting stays
-  as a faint curve underneath.
-- **FX**: a rack like Serum 2's. The chain on the left lists the nine effects
-  in signal order: click a row to switch one on or off, drag it up or down to
-  move it in the chain. On the right, each effect is a strip in the same
-  order: badge, knobs, a display of what it does (curve, steps, echoes, reverb
-  tail, stereo fan...), Mix and a power switch. Switched-off strips grey out.
+  as a faint curve underneath. Pick **Drawn** as an LFO's shape to draw it in
+  its display: drag a point (on a 1/16 by 1/8 grid, Shift for free),
+  double-click to add or remove one, drag the dot in a segment's middle to
+  bend it (double-click it to make the segment a step), right-click for a
+  shape to start from. With **Env** on, an LFO runs once from each note and
+  holds where it ends; the display then shows the one cycle it runs.
+- **FX**: a rack like Serum 2's. The chain on the left lists the eleven
+  effects in signal order: click a row to switch one on or off, drag it up or
+  down to move it in the chain. On the right, each effect is a strip in the
+  same order, and the rack scrolls: badge, knobs, a display of what it does
+  (curve, steps, echoes, reverb tail, stereo fan, the EQ's response, the
+  dimension expander's taps...), Mix and a power switch. Switched-off strips
+  grey out.
   The order is saved with the patch and undoable; Generate starts a new patch
   in the default order. Distortion first runs at the voices' oversampled
   rate; anywhere later in the chain it oversamples itself (Eco 4x, Standard
@@ -463,10 +478,14 @@ FIR decimators. Drive happens before decimation and uses antiderivative
 anti-aliasing.
 
 The amp envelope (its attack has a Curve: from an analog-style charge to a
-slow-then-fast swell) and Env 1 to 3 (Env 1 also drives the filters' Env knobs,
-Env 3 is the pitch envelope), 3 LFOs (tempo sync, retrigger, S&H, smooth
-random), the energy Sweep, 4 macros and a 16-slot mod matrix whose targets
-include the effects. The envelope, LFO and Sweep displays run live: a dot per
+slow-then-fast swell; **Bursts** start a note with up to seven short hits a
+**Gap** apart, each down about 30 dB by the next, the attack being the last:
+a hand clap's flutter) and Env 1 to 3 (Env 1 also drives the filters' Env
+knobs, Env 3 is the pitch envelope), 3 LFOs (tempo sync, retrigger, S&H,
+smooth random, and drawn curves of up to 16 points, each segment straight,
+bent or a step; **Env** runs an LFO once from each note and holds its end, an
+envelope of any shape), the energy Sweep, 4 macros and a 16-slot mod matrix
+whose targets include the effects. The envelope, LFO and Sweep displays run live: a dot per
 sounding voice moves along the curve, the newest with a playhead.
 
 Nothing clicks by accident. A voice's level moves at most a full note's level
@@ -503,8 +522,10 @@ keep running.
 ### Effects
 
 Distortion (5 types), bitcrusher, Hilbert frequency shifter,
-phaser, chorus / flanger, compressor, ping-pong delay, an 8-line FDN reverb
-and a stereo width stage, in that order.
+phaser, chorus / flanger, dimension expander, compressor, EQ, ping-pong delay,
+an 8-line FDN reverb and a stereo width stage, in that order. The EQ and the
+dimension expander keep their places in the chain as their own settings, so
+patches from before them keep their order.
 
 The distortion has a **Low Cut** after its shaper (off at 20 Hz): clipping a
 high-passed sound brings its root back as a difference tone, and the low cut
@@ -537,6 +558,26 @@ everything under the split to mono (a Linkwitz-Riley split on the side
 channel only). **Width** scales the stereo above it, and **Stereoize** makes
 stereo out of mono voices (a short Haas side from the mid). Left + right
 never changes, so the mix stays mono-compatible.
+
+The **EQ** has two bands like Serum's: the low one a shelf, a bell or a 12 or
+24 dB high-pass, the high one a shelf, a bell or a low-pass. Each band follows
+its analog prototype up to Nyquist instead of cramping towards it like the
+usual bilinear design. Each section is fitted to the prototype's curve
+whenever a knob moves: its numerator by least squares, its poles by a few
+Levenberg-Marquardt steps from Vicanek's matched design, at about 30
+frequencies up to 0.9 of Nyquist. A cut is the exact inverse of the boost.
+From 20 Hz to 20 kHz at 44.1 to 96 kHz a shelf stays within 0.1 dB of the
+analog curve, even with its corner at 8-12 kHz, a resonant shelf within
+0.35 dB, a bell within 0.3 dB (a bilinear one is up to 9.5 dB off) and a cut
+within 0.4 dB. It runs as a state-variable filter whose coefficients glide to
+each new design, so the knobs and the matrix move it without zipper noise,
+and a shelf or bell at 0 dB passes the sound untouched.
+
+The **Dimension** expander works like Roland's Dimension D: four short delays
+of the mid that slow sines move in opposite pairs, their difference added to
+the left and taken from the right. It widens without a chorus's wobble, the
+lows under 150 Hz stay mono, and left + right never changes. **Size** sets the
+delays (about 2 to 21 ms), **Mix** the width.
 
 The Noise section's **Direct** switch adds the noise after the filters, for
 bright grit over a dark sound. Its types: White, Pink, Digital (sample and

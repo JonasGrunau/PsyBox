@@ -83,6 +83,9 @@ namespace
             case D::PhosChorusMix:                return s.on (P::PhosChoOn);
             case D::PhosDelayFb: case D::PhosDelayMix: return s.on (P::PhosDlyOn);
             case D::PhosReverbMix:                return s.on (P::PhosRevOn);
+            case D::EqLowFreq: case D::EqLowGain: return s.on (P::EqOn) && (s.geti (P::EqLowType) >= (int) EqBand::Cut12 || s.get (P::EqLowGain) != 0.f);
+            case D::EqHighFreq: case D::EqHighGain: return s.on (P::EqOn) && (s.geti (P::EqHighType) >= (int) EqBand::Cut12 || s.get (P::EqHighGain) != 0.f);
+            case D::DimMix:                       return s.on (P::DimOn);
             case D::PitchAll: case D::PitchA: case D::PitchB: case D::Amp: case D::Pan: return true;
             case D::None: case D::Count:          return false;
         }
@@ -172,6 +175,11 @@ namespace
             case D::ReverbSize:   return { "Room", Kind::Space };
             case D::ReverbMix:    return { "Reverb", Kind::Space };
             case D::WidthAmount:  return { "Width", Kind::Space };
+            case D::EqLowFreq:    return { "EQ Low", Kind::Colour };
+            case D::EqLowGain:    return { "Low Boost", Kind::Colour };
+            case D::EqHighFreq:   return { "EQ High", Kind::Colour };
+            case D::EqHighGain:   return { "Air", Kind::Colour };
+            case D::DimMix:       return { "Dimension", Kind::Space };
             case D::PhosCutoff:   return { "Cutoff", Kind::Filter };
             case D::PhosReso:     return { "Resonance", Kind::Filter };
             case D::PhosEnvMod:   return { "Envmod", Kind::Filter };

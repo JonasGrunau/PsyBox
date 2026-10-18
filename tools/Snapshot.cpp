@@ -23,8 +23,8 @@
 // arp in real time on a second thread while Generate runs twice from this one
 // (the way a user hits it mid-line), writes the mono output as float32 and
 // prints where each Generate came in. No editor.
-// PSYSNAP_STRIP=n scrolls the Phoscyon FX rack to effect n (use with
-// PSYSNAP_VIEW=1), e.g. 10 for the Phoscyon Limiter.
+// PSYSNAP_STRIP=n scrolls the FX rack to effect n (use with PSYSNAP_VIEW=1),
+// e.g. 9 for our EQ, 10 for the Dimension or (category 38) the Phoscyon Limiter.
 // PSYSNAP_CHAINDRAG=n holds the FX chain's first row dragged to row n (use
 // with PSYSNAP_VIEW=1): the rows make room and its landing place stays empty.
 // PSYSNAP_BOUNCE=1 drags the output window before the WAV is rendered (try a

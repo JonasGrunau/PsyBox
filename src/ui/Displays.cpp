@@ -547,8 +547,8 @@ void FilterDisplay::paintContent (juce::Graphics& g, juce::Rectangle<float> r)
 // ---------------------------------------------------------------------------
 uint64_t EnvDisplay::fingerprint() const
 {
-    uint64_t h = hashParams ({ P::AenvA, P::AenvD, P::AenvS, P::AenvR, P::AenvCurve, P::AenvStart, P::FenvA, P::FenvD, P::FenvS, P::FenvR,
-                               P::MenvA, P::MenvD, P::MenvS, P::MenvR }) + (uint64_t) env;
+    uint64_t h = hashParams ({ P::AenvA, P::AenvD, P::AenvS, P::AenvR, P::AenvCurve, P::AenvStart, P::AenvBursts, P::AenvGap,
+                               P::FenvA, P::FenvD, P::FenvS, P::FenvR, P::MenvA, P::MenvD, P::MenvS, P::MenvR }) + (uint64_t) env;
     for (int k = 0; k < view.numVoices; ++k)
     {
         const auto& e = view.voices[(size_t) k].env[(size_t) env];
@@ -566,12 +566,19 @@ void EnvDisplay::paintContent (juce::Graphics& g, juce::Rectangle<float> r)
     const float s = proc.plain (ids[env][2]), rel = proc.plain (ids[env][3]);
     // compress long times so short envelopes stay readable
     const auto tw = [] (float ms) { return std::sqrt (std::max (ms, 0.f) + 1.f) - 1.f; };
-    const float hold = 0.35f * (tw (a) + tw (d) + tw (rel)) + 4.f;
-    const float total = tw (a) + tw (d) + hold + tw (rel);
+    // the amp's clap hits come first: each up at once, then down by the next
+    const int hits = env == 0 ? (int) std::lround (proc.plain (P::AenvBursts)) - 1 : 0;
+    const float bw = hits > 0 ? tw ((float) hits * proc.plain (P::AenvGap)) : 0.f;
+    const float hold = 0.35f * (bw + tw (a) + tw (d) + tw (rel)) + 4.f;
+    const float total = bw + tw (a) + tw (d) + hold + tw (rel);
     drawGrid (g, r, 8, 4);
     auto area = r.reduced (6.f, 8.f);
     const auto X = [&] (float t) { return area.getX() + area.getWidth() * t / total; };
     const auto Y = [&] (float v) { return area.getBottom() - area.getHeight() * v; };
+    const auto burstAt = [&] (float u) {   // u: 0..1 over all the hits
+        const float f = (float) hits * u, k = std::floor (f), t = f - k;
+        return t < 0.04f ? t / 0.04f : std::exp (-3.5f * (t - 0.04f) / 0.96f);
+    };
 
     juce::Path p;
     // attack: the RC charge, or the amp envelope's bend towards a swell,
@@ -580,30 +587,36 @@ void EnvDisplay::paintContent (juce::Graphics& g, juce::Rectangle<float> r)
     const float start = env == 0 ? proc.plain (P::AenvStart) : 0.f;
     const auto attackAt = [&] (float u) { return start + (1.f - start) * psy::dsp::attackShape (u, bend); };
     p.startNewSubPath (X (0), Y (0));
-    if (start > 0.f) p.lineTo (X (0), Y (start));
     const int steps = 24;
+    if (hits > 0)
+        for (int i = 1; i <= steps * hits; ++i)
+        {
+            const float u = (float) i / (float) (steps * hits);
+            p.lineTo (X (bw * u), Y (burstAt (u - 0.5f / (float) (steps * hits))));
+        }
+    else if (start > 0.f) p.lineTo (X (0), Y (start));
     for (int i = 1; i <= steps; ++i)
     {
         const float u = (float) i / steps;
-        p.lineTo (X (tw (a) * u), Y (attackAt (u)));
+        p.lineTo (X (bw + tw (a) * u), Y (attackAt (u)));
     }
     for (int i = 1; i <= steps; ++i)  // decay: exponential
     {
         const float u = (float) i / steps;
-        p.lineTo (X (tw (a) + tw (d) * u), Y (s + (1.f - s) * std::exp (-u * 5.f)));
+        p.lineTo (X (bw + tw (a) + tw (d) * u), Y (s + (1.f - s) * std::exp (-u * 5.f)));
     }
-    p.lineTo (X (tw (a) + tw (d) + hold), Y (s));
+    p.lineTo (X (bw + tw (a) + tw (d) + hold), Y (s));
     for (int i = 1; i <= steps; ++i)
     {
         const float u = (float) i / steps;
-        p.lineTo (X (tw (a) + tw (d) + hold + tw (rel) * u), Y (s * std::exp (-u * 5.f) * (1.f - u)));
+        p.lineTo (X (bw + tw (a) + tw (d) + hold + tw (rel) * u), Y (s * std::exp (-u * 5.f) * (1.f - u)));
     }
     strokeCurve (g, accent (*this), p, area, true);
 
     // stage handles
     g.setColour (col::text);
-    for (auto pt : { juce::Point<float> (X (tw (a)), Y (1.f)), juce::Point<float> (X (tw (a) + tw (d)), Y (s)),
-                     juce::Point<float> (X (tw (a) + tw (d) + hold), Y (s)) })
+    for (auto pt : { juce::Point<float> (X (bw + tw (a)), Y (1.f)), juce::Point<float> (X (bw + tw (a) + tw (d)), Y (s)),
+                     juce::Point<float> (X (bw + tw (a) + tw (d) + hold), Y (s)) })
         g.fillEllipse (pt.x - 2.5f, pt.y - 2.5f, 5.f, 5.f);
 
     // the voices, on the curve: x from how far into its stage each one is
@@ -615,10 +628,11 @@ void EnvDisplay::paintContent (juce::Graphics& g, juce::Rectangle<float> r)
         juce::Point<float> pt;
         switch ((Stage) e.stage)
         {
-            case Stage::Attack:  pt = { X (tw (a) * u), Y (attackAt (u)) }; break;
-            case Stage::Decay:   pt = { X (tw (a) + tw (d) * u), Y (s + (1.f - s) * std::exp (-u * 5.f)) }; break;
-            case Stage::Sustain: pt = { X (tw (a) + tw (d)), Y (s) }; break;
-            case Stage::Release: pt = { X (tw (a) + tw (d) + hold + tw (rel) * u), Y (s * std::exp (-u * 5.f) * (1.f - u)) }; break;
+            case Stage::Burst:   pt = { X (bw * u), Y (hits > 0 ? burstAt (u) : 0.f) }; break;
+            case Stage::Attack:  pt = { X (bw + tw (a) * u), Y (attackAt (u)) }; break;
+            case Stage::Decay:   pt = { X (bw + tw (a) + tw (d) * u), Y (s + (1.f - s) * std::exp (-u * 5.f)) }; break;
+            case Stage::Sustain: pt = { X (bw + tw (a) + tw (d)), Y (s) }; break;
+            case Stage::Release: pt = { X (bw + tw (a) + tw (d) + hold + tw (rel) * u), Y (s * std::exp (-u * 5.f) * (1.f - u)) }; break;
             case Stage::Idle:    continue;
         }
         drawDot (g, pt, k == 0, r);
@@ -668,27 +682,243 @@ void PitchEnvDisplay::paintContent (juce::Graphics& g, juce::Rectangle<float> r)
 // ---------------------------------------------------------------------------
 uint64_t LfoDisplay::fingerprint() const
 {
-    uint64_t h = hashParams ({ psy::lfoParam (lfo, 0), psy::lfoParam (lfo, 4), psy::lfoParam (lfo, 5) }) + (uint64_t) lfo * 31u;
+    uint64_t h = hashParams ({ psy::lfoParam (lfo, 0), psy::lfoParam (lfo, 4), psy::lfoParam (lfo, 5), psy::lfoEnvParam (lfo),
+                               psy::lfoPointsParam (lfo) }) + (uint64_t) lfo * 31u;
+    if (drawn())
+        for (int k = 0; k < psy::kLfoPoints; ++k)
+            for (auto lane : { psy::LfoLane::X, psy::LfoLane::Y, psy::LfoLane::Bend })
+                h = fnvMixFloat (h, proc.plain (psy::lfoPointParam (lfo, k, lane)));
+    h = fnvMix (h, (uint64_t) (hoverPoint + 2) * 131u + (uint64_t) (hoverBend + 2));
     for (int k = 0; k < view.numVoices; ++k)
         h = mixPos (h, view.voices[(size_t) k].lfo[(size_t) lfo]);
     return h;
 }
 
+bool LfoDisplay::drawn() const
+{
+    return (int) std::lround (proc.plain (psy::lfoParam (lfo, 0))) == (int) psy::LfoShape::Drawn;
+}
+
+psy::dsp::LfoCurve LfoDisplay::curve() const
+{
+    std::array<float, psy::kLfoPoints> xs {}, ys {}, bs {};
+    for (int k = 0; k < psy::kLfoPoints; ++k)
+    {
+        xs[(size_t) k] = proc.plain (psy::lfoPointParam (lfo, k, psy::LfoLane::X));
+        ys[(size_t) k] = proc.plain (psy::lfoPointParam (lfo, k, psy::LfoLane::Y));
+        bs[(size_t) k] = proc.plain (psy::lfoPointParam (lfo, k, psy::LfoLane::Bend));
+    }
+    psy::dsp::LfoCurve c;
+    c.set ((int) std::lround (proc.plain (psy::lfoPointsParam (lfo))), xs.data(), ys.data(), bs.data());
+    return c;
+}
+
+std::vector<LfoDisplay::Pt> LfoDisplay::points() const
+{
+    const auto c = curve();
+    std::vector<Pt> out;
+    for (int k = 0; k < c.n; ++k)
+        out.push_back ({ c.x[(size_t) k], c.y[(size_t) k], proc.plain (psy::lfoPointParam (lfo, k, psy::LfoLane::Bend)) });
+    return out;
+}
+
+juce::Rectangle<float> LfoDisplay::area() const { return getLocalBounds().toFloat().reduced (1.f).reduced (4.f, 8.f); }
+
+juce::Point<float> LfoDisplay::toScreen (float x, float y) const
+{
+    const auto a = area();
+    return { a.getX() + a.getWidth() * x, a.getCentreY() - y * a.getHeight() * 0.5f };
+}
+
+// the segment's middle, on the curve
+juce::Point<float> LfoDisplay::bendHandle (const std::vector<Pt>& pts, int seg) const
+{
+    const float x0 = pts[(size_t) seg].x, x1 = seg + 1 < (int) pts.size() ? pts[(size_t) seg + 1].x : 1.f;
+    const float xm = 0.5f * (x0 + x1);
+    return toScreen (xm, curve().value (xm));
+}
+
+void LfoDisplay::pickAt (juce::Point<float> pt, int& point, int& bend) const
+{
+    point = bend = -1;
+    if (! drawn()) return;
+    const auto pts = points();
+    float best = 7.f;
+    for (int k = 0; k < (int) pts.size(); ++k)
+        if (const float d = pt.getDistanceFrom (toScreen (pts[(size_t) k].x, pts[(size_t) k].y)); d < best) { best = d; point = k; }
+    if (point >= 0) return;
+    for (int k = 0; k < (int) pts.size(); ++k)
+    {
+        const float x1 = k + 1 < (int) pts.size() ? pts[(size_t) k + 1].x : 1.f;
+        if (x1 - pts[(size_t) k].x < 1e-4f) continue;   // an empty closing segment has nothing to bend
+        if (const float d = pt.getDistanceFrom (bendHandle (pts, k)); d < best) { best = d; bend = k; }
+    }
+}
+
+void LfoDisplay::setParam (psy::P p, float plain, bool gesture)
+{
+    auto* prm = proc.param (p);
+    const float n = psy::def (p).toNorm (plain);
+    if (std::abs (prm->getValue() - n) < 1e-7f) return;
+    if (gesture) prm->beginChangeGesture();
+    prm->setValueNotifyingHost (n);
+    if (gesture) prm->endChangeGesture();
+}
+
+void LfoDisplay::writePoints (const std::vector<Pt>& pts)
+{
+    const int n = juce::jlimit (2, psy::kLfoPoints, (int) pts.size());
+    setParam (psy::lfoPointsParam (lfo), (float) n, true);
+    for (int k = 0; k < n; ++k)
+    {
+        setParam (psy::lfoPointParam (lfo, k, psy::LfoLane::X), pts[(size_t) k].x, true);
+        setParam (psy::lfoPointParam (lfo, k, psy::LfoLane::Y), pts[(size_t) k].y, true);
+        setParam (psy::lfoPointParam (lfo, k, psy::LfoLane::Bend), pts[(size_t) k].bend, true);
+    }
+}
+
+void LfoDisplay::showShapes()
+{
+    juce::PopupMenu m;
+    m.addSectionHeader ("Start from");
+    m.addItem (1, "Triangle");
+    m.addItem (2, "Ramp Down");
+    m.addItem (3, "Ramp Up");
+    m.addItem (4, "Square");
+    m.addItem (5, "16 Steps");
+    m.addItem (6, "Envelope (up, then down)");
+    m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (this), [safe = juce::Component::SafePointer<LfoDisplay> (this)] (int r) {
+        if (safe == nullptr || r <= 0) return;
+        std::vector<Pt> pts;
+        switch (r)
+        {
+            case 1: pts = { { 0.f, -1.f, 0.f }, { 0.5f, 1.f, 0.f }, { 1.f, -1.f, 0.f } }; break;
+            case 2: pts = { { 0.f, 1.f, 0.f }, { 1.f, -1.f, 0.f } }; break;
+            case 3: pts = { { 0.f, -1.f, 0.f }, { 1.f, 1.f, 0.f } }; break;
+            case 4: pts = { { 0.f, 1.f, 1.f }, { 0.5f, -1.f, 1.f }, { 1.f, -1.f, 0.f } }; break;
+            case 5:
+                for (int k = 0; k < 16; ++k) pts.push_back ({ (float) k / 16.f, k % 4 == 0 ? 1.f : (k % 2 == 0 ? 0.25f : -0.5f), 1.f });
+                break;
+            default: pts = { { 0.f, -1.f, -0.2f }, { 0.15f, 1.f, -0.5f }, { 1.f, -1.f, 0.f } }; break;
+        }
+        safe->writePoints (pts);
+    });
+}
+
+void LfoDisplay::mouseMove (const juce::MouseEvent& e)
+{
+    int pt, bd;
+    pickAt (e.position, pt, bd);
+    if (pt != hoverPoint || bd != hoverBend) { hoverPoint = pt; hoverBend = bd; repaint(); }
+    setMouseCursor (pt >= 0 || bd >= 0 ? juce::MouseCursor::DraggingHandCursor : juce::MouseCursor::NormalCursor);
+    setTooltip (drawn() ? "Drag a point (Shift: off the grid), double-click to add or remove one; drag a segment's middle dot to bend it, "
+                          "double-click it for a step; right-click for a shape to start from"
+                        : juce::String());
+}
+
+void LfoDisplay::mouseExit (const juce::MouseEvent&)
+{
+    if (hoverPoint >= 0 || hoverBend >= 0) { hoverPoint = hoverBend = -1; repaint(); }
+}
+
+void LfoDisplay::mouseDown (const juce::MouseEvent& e)
+{
+    if (! drawn()) return;
+    if (e.mods.isPopupMenu()) { showShapes(); return; }
+    pickAt (e.position, dragPoint, dragBend);
+    touched.clear();
+    if (dragPoint >= 0) touched = { psy::lfoPointParam (lfo, dragPoint, psy::LfoLane::X), psy::lfoPointParam (lfo, dragPoint, psy::LfoLane::Y) };
+    else if (dragBend >= 0)
+    {
+        touched = { psy::lfoPointParam (lfo, dragBend, psy::LfoLane::Bend) };
+        bendFrom = proc.plain (touched[0]);
+    }
+    for (auto p : touched) proc.param (p)->beginChangeGesture();
+}
+
+void LfoDisplay::mouseDrag (const juce::MouseEvent& e)
+{
+    if (touched.empty()) return;
+    const auto pts = points();
+    const auto a = area();
+    if (dragPoint >= 0)
+    {
+        float x = (e.position.x - a.getX()) / a.getWidth(), y = (a.getCentreY() - e.position.y) / (a.getHeight() * 0.5f);
+        if (! e.mods.isShiftDown())
+        {
+            x = std::round (x * 16.f) / 16.f;
+            y = std::round (y * 8.f) / 8.f;
+        }
+        const float lo = dragPoint == 0 ? 0.f : pts[(size_t) dragPoint - 1].x;
+        const float hi = dragPoint == 0 ? 0.f : (dragPoint + 1 < (int) pts.size() ? pts[(size_t) dragPoint + 1].x : 1.f);
+        setParam (touched[0], juce::jlimit (lo, hi, x), false);
+        setParam (touched[1], juce::jlimit (-1.f, 1.f, y), false);
+    }
+    else
+    {
+        // up bends the curve up: a rising segment starts fast (bend < 0), a falling one stays high (bend > 0)
+        const float y0 = pts[(size_t) dragBend].y, y1 = dragBend + 1 < (int) pts.size() ? pts[(size_t) dragBend + 1].y : pts[0].y;
+        const float up = (float) -e.getDistanceFromDragStartY() / 80.f;
+        setParam (touched[0], juce::jlimit (-1.f, 1.f, bendFrom + (y1 >= y0 ? -up : up)), false);
+    }
+}
+
+void LfoDisplay::mouseUp (const juce::MouseEvent&)
+{
+    for (auto p : touched) proc.param (p)->endChangeGesture();
+    touched.clear();
+    dragPoint = dragBend = -1;
+}
+
+void LfoDisplay::mouseDoubleClick (const juce::MouseEvent& e)
+{
+    if (! drawn()) return;
+    int pt, bd;
+    pickAt (e.position, pt, bd);
+    auto pts = points();
+    if (bd >= 0)   // a segment: step <-> straight
+    {
+        setParam (psy::lfoPointParam (lfo, bd, psy::LfoLane::Bend), pts[(size_t) bd].bend >= 0.999f ? 0.f : 1.f, true);
+        return;
+    }
+    if (pt >= 0)   // a point: gone (two stay)
+    {
+        if (pt == 0 || (int) pts.size() <= 2) return;
+        pts.erase (pts.begin() + pt);
+        writePoints (pts);
+        return;
+    }
+    if ((int) pts.size() >= psy::kLfoPoints) return;
+    const auto a = area();
+    float x = juce::jlimit (0.f, 1.f, (e.position.x - a.getX()) / a.getWidth());
+    float y = juce::jlimit (-1.f, 1.f, (a.getCentreY() - e.position.y) / (a.getHeight() * 0.5f));
+    if (! e.mods.isShiftDown()) { x = std::round (x * 16.f) / 16.f; y = std::round (y * 8.f) / 8.f; }
+    size_t at = 1;
+    while (at < pts.size() && pts[at].x <= x) ++at;
+    pts.insert (pts.begin() + (long) at, Pt { x, y, 0.f });
+    writePoints (pts);
+}
+
 void LfoDisplay::paintContent (juce::Graphics& g, juce::Rectangle<float> r)
 {
-    drawGrid (g, r, 4, 2);
     const int shape = (int) proc.plain (psy::lfoParam (lfo, 0));
     const float phase = proc.plain (psy::lfoParam (lfo, 5));
-    auto area = r.reduced (4.f, 8.f);
+    const bool env = proc.plain (psy::lfoEnvParam (lfo)) > 0.5f;
+    const bool isDrawn = shape == (int) psy::LfoShape::Drawn;
+    // an envelope or a drawn shape: the one cycle it runs or is drawn on
+    const int cycles = env || isDrawn ? 1 : 2;
+    drawGrid (g, r, isDrawn ? 16 : 4, isDrawn ? 4 : 2);
+    auto a = area();
     juce::Path p;
     psy::dsp::Rng rng (5);
     float held[4], rands[5];
     for (auto& v : rands) v = rng.bipolar();
     for (int i = 0; i < 4; ++i) held[i] = rands[i + 1];
-    // two cycles from the start phase: x 0..1 across the display
+    const auto drawnCurve = curve();
+    // a drawn shape from 0 (its points' own place), the others from the start phase
     const auto valueAt = [&] (float x) {
-        const float t = 2.f * x + phase;
-        const float ph = t - std::floor (t);
+        const float t = isDrawn ? x : (float) cycles * x + phase;
+        const float ph = isDrawn || (env && t >= 1.f) ? std::min (t, 1.f) : t - std::floor (t);
         const int cyc = std::min (3, (int) t);
         switch (shape)
         {
@@ -698,6 +928,7 @@ void LfoDisplay::paintContent (juce::Graphics& g, juce::Rectangle<float> r)
             case 3: return 1.f - 2.f * ph;
             case 4: return ph < 0.5f ? 1.f : -1.f;
             case 5: return held[cyc];
+            case 7: return drawnCurve.value (ph);
             default:
             {
                 const float s = 0.5f - 0.5f * std::cos (psy::dsp::kPi * ph);
@@ -706,23 +937,57 @@ void LfoDisplay::paintContent (juce::Graphics& g, juce::Rectangle<float> r)
         }
     };
     const auto pointAt = [&] (float x) {
-        return juce::Point<float> (area.getX() + area.getWidth() * x, area.getCentreY() - valueAt (x) * area.getHeight() * 0.5f);
+        return juce::Point<float> (a.getX() + a.getWidth() * x, a.getCentreY() - valueAt (x) * a.getHeight() * 0.5f);
     };
-    const int n = 200;
+    const int n = isDrawn ? juce::jmax (200, (int) a.getWidth() * 2) : 200;
     for (int i = 0; i <= n; ++i)
     {
         const auto pt = pointAt ((float) i / (float) n);
         if (i == 0) p.startNewSubPath (pt);
         else p.lineTo (pt);
     }
-    strokeCurve (g, accent (*this), p, area, false);
+    strokeCurve (g, accent (*this), p, a, false);
+
+    if (isDrawn)
+    {
+        // the points, and a dot in the middle of each segment to bend it
+        const auto pts = points();
+        for (int k = 0; k < (int) pts.size(); ++k)
+        {
+            const float x1 = k + 1 < (int) pts.size() ? pts[(size_t) k + 1].x : 1.f;
+            if (x1 - pts[(size_t) k].x < 1e-4f) continue;
+            const auto c = bendHandle (pts, k);
+            g.setColour (k == hoverBend ? accent (*this) : col::textFaint);
+            g.drawEllipse (juce::Rectangle<float> (6.f, 6.f).withCentre (c), 1.f);
+        }
+        for (int k = 0; k < (int) pts.size(); ++k)
+        {
+            const auto c = toScreen (pts[(size_t) k].x, pts[(size_t) k].y);
+            const float d = k == hoverPoint ? 9.f : 7.f;
+            g.setColour (col::well);
+            g.fillEllipse (juce::Rectangle<float> (d, d).withCentre (c));
+            g.setColour (accent (*this));
+            g.drawEllipse (juce::Rectangle<float> (d, d).withCentre (c), 1.5f);
+        }
+    }
+    else if (env)
+    {
+        // where the envelope ends and holds
+        g.setColour (col::textFaint);
+        g.fillRect (a.getRight() - 1.f, a.getY(), 1.f, a.getHeight());
+    }
 
     // the voices; a free-running LFO is one for all of them
-    const bool perVoice = proc.plain (psy::lfoParam (lfo, 4)) > 0.5f;
+    const bool perVoice = proc.plain (psy::lfoParam (lfo, 4)) > 0.5f || env;
     for (int k = perVoice ? view.numVoices - 1 : std::min (view.numVoices, 1) - 1; k >= 0; --k)
     {
-        const float x = std::fmod (view.voices[(size_t) k].lfo[(size_t) lfo] - phase + 2.f, 2.f) * 0.5f;
-        drawDot (g, pointAt (x), k == 0, r);
+        // (an envelope never wraps, so its phase over two cycles is its phase, held at 1 at the end)
+        const float ph2 = view.voices[(size_t) k].lfo[(size_t) lfo];
+        float x;
+        if (env) x = ph2 - (isDrawn ? 0.f : phase);
+        else if (isDrawn) x = ph2 - std::floor (ph2);
+        else x = std::fmod (ph2 - phase + 2.f, 2.f) * 0.5f;
+        drawDot (g, pointAt (juce::jlimit (0.f, 1.f, x)), k == 0, r);
     }
 }
 

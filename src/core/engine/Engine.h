@@ -8,6 +8,7 @@
 #include "Voice.h"
 #include "dsp/Dynamics.h"
 #include "dsp/Effects.h"
+#include "dsp/Eq.h"
 #include "dsp/Oversampling.h"
 
 #include <array>
@@ -160,6 +161,8 @@ private:
     dsp::StereoDelay delay;
     dsp::Reverb reverb;
     dsp::StereoWidth width;
+    dsp::Eq eq;
+    dsp::Dimension dim;
     std::array<dsp::DcBlocker, 2> outDc;
 
     // Matrix slots that target an effect, and the patch the effects play
@@ -226,7 +229,11 @@ private:
     // The effects in the patch's order. Distortion first runs on the
     // oversampled signal before the decimator instead (see process).
     void processFx (float* l, float* r, int n, double bpm, const ParamState& p) noexcept;
-    bool distFirst (const ParamState& p) const noexcept { return fxChain (p.geti (P::FxOrder))[0] == (int) Fx::Distortion; }
+    static SynthFxChain synthChain (const ParamState& p) noexcept
+    {
+        return synthFxChain (p.geti (P::FxOrder), p.geti (P::EqSlot), p.geti (P::DimSlot));
+    }
+    bool distFirst (const ParamState& p) const noexcept { return synthChain (p)[0] == (int) Fx::Distortion; }
     static PhosFxChain phosChain (const ParamState& p) noexcept
     {
         return phosFxChain (p.geti (P::FxOrder), p.geti (P::PhosEqSlot), p.geti (P::PhosLimSlot));

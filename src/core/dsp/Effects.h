@@ -1016,4 +1016,96 @@ private:
     Ramp rWidth, rStereo;
 };
 
+// ---------------------------------------------------------------------------
+// Dimension expander, after the Roland SDD-320 Dimension D: the mid, high-
+// passed at 150 Hz so the lows stay mono, feeds one delay line read by four
+// taps whose lengths slow sines move in opposite pairs (the D's antiphase
+// BBDs). The taps' difference is pure side: + to the left, - to the right,
+// so L + R never changes (mono-compatible, nothing cancels in mono) and the
+// opposed pitch drifts don't sound as a wobble. Size scales the taps from
+// about 2..4.5 ms to 9..21 ms (with a 12 % swing), Mix the side level. The
+// tap lengths glide (50 ms) and the mix glides over 32 samples, so a size
+// move or the matrix never steps them.
+// ---------------------------------------------------------------------------
+class Dimension
+{
+public:
+    void prepare (float sr)
+    {
+        fs = sr;
+        line.prepare ((int) (0.03f * sr) + 8);
+        sw.prepare (sr);
+        reset();
+    }
+
+    void reset() noexcept
+    {
+        line.reset();
+        hp1.reset();
+        hp2.reset();
+        for (size_t k = 0; k < 4; ++k) phase[k] = 0.25 * (double) k;
+        base.reset (-1.f);
+        mixNow.reset();
+        sw.reset();
+    }
+
+    bool isActive (bool on) noexcept { return sw.isActive (on); }
+
+    void process (float* l, float* r, int n, float size, float mix, bool on = true) noexcept
+    {
+        if (! sw.wake (on, [this] { reset(); }))
+            return;
+        const float baseMs = 2.f + 7.f * clamp01 (size);
+        if (base.z < 0.f) base.reset (baseMs);
+        base.setTime (0.05f, fs);
+        mixNow.set (clamp01 (mix), 32);
+        const float g = prewarp (150.f, fs);
+        hp1.setG (g, 1.41421356f);
+        hp2.setG (g, 1.41421356f);
+        for (int i = 0; i < n; ++i)
+        {
+            const float xl = l[i], xr = r[i];
+            const float m = 0.5f * (xl + xr);
+            line.push (flushDenormal (hp2.process (hp1.process (m).hp).hp));
+            const float b = base.process (baseMs) * 0.001f * fs;
+            float side = 0.f;
+            for (size_t k = 0; k < 4; ++k)
+            {
+                phase[k] += kRate[k] / (double) fs;
+                if (phase[k] >= 1.0) phase[k] -= 1.0;
+                const float lfo = (float) std::sin (kTwoPi * phase[k]);
+                // taps 0 and 2 swing against 1 and 3, and the pairs subtract
+                const float d = b * kTap[k] * (1.f + 0.12f * (k % 2 == 0 ? lfo : -lfo));
+                side += (k % 2 == 0 ? 1.f : -1.f) * line.read (d);
+            }
+            side *= 0.4f * mixNow.next();
+            const float f = sw.tick (on);
+            l[i] = FxSwitch::blend (xl, xl + side, f);
+            r[i] = FxSwitch::blend (xr, xr - side, f);
+            if (sw.done (on))
+            {
+                sw.stop();
+                return;
+            }
+        }
+        for (auto* s : { &hp1, &hp2 })
+        {
+            s->ic1 = flushDenormal (s->ic1);
+            s->ic2 = flushDenormal (s->ic2);
+        }
+    }
+
+private:
+    static constexpr float kTap[4] = { 1.f, 1.43f, 1.87f, 2.33f };
+    static constexpr double kRate[4] = { 0.29, 0.37, 0.43, 0.51 };   // Hz
+
+    float fs = 48000.f;
+    DelayLine line;
+    Svf hp1, hp2;
+    std::array<double, 4> phase {};
+    OnePole base;
+    Glide mixNow;
+    FxSwitch sw;
+};
+
 } // namespace psy::dsp

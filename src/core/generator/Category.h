@@ -97,7 +97,7 @@ inline const std::array<CategoryInfo, kNumCategories>& categoryInfo() noexcept
         { "Psy Arp",      "Arp",     Main,       0xFE9625, "Goa and psy 16th sequences over an octave pedal" },
         { "FM",           "FM",      Main,       0xFE5654, "Hi-tech FM growls and metal lines, index on the move" },
         { "Pad",          "Pad",     Background, 0x1FB3F3, "Warm chord beds that swell in and ring out" },
-        { "Perc",         "Perc",    Kick,       0xEA6BEA, "Hats, laser snares and tonal or alien percs" },
+        { "Perc",         "Perc",    Kick,       0xEA6BEA, "Hats, claps, laser snares and tonal or alien percs" },
         { "Jilax Bass",   "Jilax Bass", Bass,     0x579FFD, "Jilax's rolling psy bass: a saw, a ladder and a snap on every 16th" },
     } };
     return info;

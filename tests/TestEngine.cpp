@@ -218,6 +218,10 @@ TEST_CASE ("Extreme parameter fuzzing never produces NaN or runaway output", "[e
             p.v[(size_t) i] = defs[(size_t) i].snap (defs[(size_t) i].toPlain (n));
         }
         p.set (P::Quality, (float) (trial % 3));
+        // the output gain is plain gain staging (Level +24 dB, Volume +6 dB and a
+        // Phoscyon limiter's +24 dB stack to +54 dB), not a runaway
+        p.set (P::MasterVol, 0.f);
+        p.set (P::PatchGain, 0.f);
         const Render out = play (p, 1.0);
         INFO ("trial " << trial);
         CHECK (out.preClip < 16.f);   // +24 dBFS: loud is allowed, a runaway is not
@@ -748,6 +752,111 @@ TEST_CASE ("The effect order round-trips and changes the sound; the default is t
     for (size_t i = 0; i < dryFirst.l.size(); ++i) diff += std::abs (dryFirst.l[i] - wetFirst.l[i]);
     CHECK (diff > 1.0);   // distorting the reverb tail is a different sound
     CHECK (wetFirst.peak < 1.f);
+}
+
+TEST_CASE ("The EQ and dimension expander take their slots in the chain and play in it", "[engine][fx][eq][dimension]")
+{
+    // by default: after the chorus and the compressor, the old nine in their order around them
+    CHECK (synthFxChain (0, 7, 5) == SynthFxChain { 0, 1, 2, 3, 4, kDimension, 5, kEq, 6, 7, 8 });
+    CHECK (synthFxChain (0, 3, 3) == SynthFxChain { 0, 1, 2, kEq, kDimension, 3, 4, 5, 6, 7, 8 });   // the second steps aside
+    for (int code : { 0, 7, 40320, 362879 })
+        for (int eqSlot : { 0, 4, 10 })
+            for (int dimSlot : { 1, 6, 9 })
+            {
+                int c = -1, e = -1, d = -1;
+                synthFxSlots (synthFxChain (code, eqSlot, dimSlot), c, e, d);
+                CHECK (synthFxChain (c, e, d) == synthFxChain (code, eqSlot, dimSlot));
+                CHECK (c == code);
+            }
+
+    ParamState p;
+    p.set (P::AenvS, 1.f);
+    p.set (P::F1Type, (float) FilterType::Off);
+    const auto plain = hold (p, 0.5);
+    p.set (P::EqOn, 1.f);   // on, both bands at 0 dB: the samples pass as they are
+    const auto flat = hold (p, 0.5);
+    CHECK (flat.l == plain.l);
+    p.set (P::EqLowType, (float) EqBand::Cut24);
+    p.set (P::EqLowFreq, 1000.f);
+    const auto cut = hold (p, 0.5);
+    CHECK (cut.rmsDb < plain.rmsDb - 3.0);   // a C3 saw loses its fundamental and the next octaves
+    p.set (P::EqOn, 0.f);
+    p.set (P::DimOn, 1.f);
+    p.set (P::DimMix, 1.f);
+    const auto wide = hold (p, 0.5);
+    double side = 0.0, sum = 0.0;
+    for (size_t i = 0; i < wide.l.size(); ++i)
+    {
+        side = std::max (side, (double) std::abs (wide.l[i] - wide.r[i]));
+        sum = std::max (sum, (double) std::abs (wide.l[i] + wide.r[i] - plain.l[i] - plain.r[i]));
+    }
+    CHECK (plain.l == plain.r);
+    CHECK (side > 0.05);    // wide...
+    CHECK (sum < 1e-4);     // ...and the mono sum untouched
+}
+
+TEST_CASE ("An LFO as an envelope runs once per note and holds; drawn steps play like the square", "[engine][lfo][env][drawn]")
+{
+    // LFO 1 saw down at 4 Hz on the volume: as an envelope the note fades over
+    // a quarter second and stays faded; free-running it comes back every cycle.
+    ParamState p;
+    p.set (P::AenvS, 1.f);
+    p.set (P::F1Type, (float) FilterType::Off);
+    p.set (P::Lfo1Shape, (float) LfoShape::SawDown);
+    p.set (P::Lfo1Rate, 4.f);
+    p.set (P::Lfo1Retrig, 0.f);
+    p.set (P::Mod1Src, (float) ModSrc::Lfo1);
+    p.set (P::Mod1Dst, (float) ModDst::Amp);
+    p.set (P::Mod1Amt, 0.5f);
+    const auto windowRms = [] (const Render& r, double from, double to) {
+        return testutil::rms (std::vector<float> (r.l.begin() + (long) (from * 48000.0), r.l.begin() + (long) (to * 48000.0)));
+    };
+    p.set (P::Lfo1Env, 1.f);
+    const auto env = hold (p, 1.2);
+    p.set (P::Lfo1Env, 0.f);
+    const auto free = hold (p, 1.2);
+    INFO ("env: " << windowRms (env, 0.4, 0.6) << " then " << windowRms (env, 0.9, 1.1) << "; free " << windowRms (free, 0.9, 1.1));
+    CHECK (std::abs (windowRms (env, 0.4, 0.6) - windowRms (env, 0.9, 1.1)) < 0.02 * windowRms (env, 0.4, 0.6));   // held
+    CHECK (windowRms (free, 0.75, 0.8) > 1.5 * windowRms (env, 0.75, 0.8));   // free: back up again
+
+    // a drawn curve of two held steps, +1 then -1, is the square sample for sample
+    p.set (P::Lfo1Shape, (float) LfoShape::Square);
+    const auto square = hold (p, 0.8);
+    p.set (P::Lfo1Shape, (float) LfoShape::Drawn);
+    p.set (lfoPointsParam (0), 3.f);
+    const float pts[3][3] = { { 0.f, 1.f, 1.f }, { 0.5f, -1.f, 1.f }, { 1.f, -1.f, 0.f } };
+    for (int k = 0; k < 3; ++k)
+    {
+        p.set (lfoPointParam (0, k, LfoLane::X), pts[k][0]);
+        p.set (lfoPointParam (0, k, LfoLane::Y), pts[k][1]);
+        p.set (lfoPointParam (0, k, LfoLane::Bend), pts[k][2]);
+    }
+    const auto drawn = hold (p, 0.8);
+    CHECK (drawn.l == square.l);
+}
+
+TEST_CASE ("Clap bursts play as hits a gap apart before the note's own attack", "[engine][env][clap]")
+{
+    ParamState p;
+    p.set (P::NoiseLevel, 1.f);
+    p.set (P::OscAOn, 0.f);
+    p.set (P::F1Type, (float) FilterType::BP12);
+    p.set (P::F1Cutoff, 1500.f);
+    p.set (P::AenvA, 0.f);
+    p.set (P::AenvD, 200.f);
+    p.set (P::AenvS, 0.f);
+    p.set (P::AenvBursts, 4.f);
+    p.set (P::AenvGap, 12.f);
+    const auto out = hold (p, 0.3);
+    const auto ms = [&] (double a, double b) {
+        return testutil::rms (std::vector<float> (out.l.begin() + (long) (a * 48.0), out.l.begin() + (long) (b * 48.0)));
+    };
+    for (int k = 0; k < 3; ++k)   // the three hits before the note
+    {
+        INFO ("hit " << k);
+        CHECK (ms (12.0 * k, 12.0 * k + 3.0) > 4.0 * ms (12.0 * k + 8.5, 12.0 * k + 11.5));   // up at each hit, down before the next
+    }
+    CHECK (ms (36.0, 60.0) > ms (0.0, 3.0));   // the last hit is the note: it decays over 200 ms
 }
 
 TEST_CASE ("Jilax's clipper at the end of the chain doesn't fold back", "[engine][fx][alias]")
@@ -1745,6 +1854,24 @@ namespace
         "phos_cho_fat", "phos_cho_hp", "phos_cho_out", "phos_cho_mix", "phos_lim_on", "phos_lim_knee",
         "phos_lim_ratio", "phos_lim_attack", "phos_lim_release", "phos_lim_thresh", "phos_lim_gain", "phos_lim_clip",
         "phos_eq_slot", "phos_lim_slot", "render_quality",
+        "eq_on", "eq_low_type", "eq_low_freq", "eq_low_gain", "eq_low_q", "eq_high_type", "eq_high_freq",
+        "eq_high_gain", "eq_high_q", "dim_on", "dim_size", "dim_mix", "eq_slot", "dim_slot",
+        "lfo1_env", "lfo2_env", "lfo3_env", "aenv_bursts", "aenv_gap",
+        "lfo1_points",
+        "lfo1_x1", "lfo1_y1", "lfo1_b1", "lfo1_x2", "lfo1_y2", "lfo1_b2", "lfo1_x3", "lfo1_y3", "lfo1_b3", "lfo1_x4", "lfo1_y4", "lfo1_b4",
+        "lfo1_x5", "lfo1_y5", "lfo1_b5", "lfo1_x6", "lfo1_y6", "lfo1_b6", "lfo1_x7", "lfo1_y7", "lfo1_b7", "lfo1_x8", "lfo1_y8", "lfo1_b8",
+        "lfo1_x9", "lfo1_y9", "lfo1_b9", "lfo1_x10", "lfo1_y10", "lfo1_b10", "lfo1_x11", "lfo1_y11", "lfo1_b11", "lfo1_x12", "lfo1_y12", "lfo1_b12",
+        "lfo1_x13", "lfo1_y13", "lfo1_b13", "lfo1_x14", "lfo1_y14", "lfo1_b14", "lfo1_x15", "lfo1_y15", "lfo1_b15", "lfo1_x16", "lfo1_y16", "lfo1_b16",
+        "lfo2_points",
+        "lfo2_x1", "lfo2_y1", "lfo2_b1", "lfo2_x2", "lfo2_y2", "lfo2_b2", "lfo2_x3", "lfo2_y3", "lfo2_b3", "lfo2_x4", "lfo2_y4", "lfo2_b4",
+        "lfo2_x5", "lfo2_y5", "lfo2_b5", "lfo2_x6", "lfo2_y6", "lfo2_b6", "lfo2_x7", "lfo2_y7", "lfo2_b7", "lfo2_x8", "lfo2_y8", "lfo2_b8",
+        "lfo2_x9", "lfo2_y9", "lfo2_b9", "lfo2_x10", "lfo2_y10", "lfo2_b10", "lfo2_x11", "lfo2_y11", "lfo2_b11", "lfo2_x12", "lfo2_y12", "lfo2_b12",
+        "lfo2_x13", "lfo2_y13", "lfo2_b13", "lfo2_x14", "lfo2_y14", "lfo2_b14", "lfo2_x15", "lfo2_y15", "lfo2_b15", "lfo2_x16", "lfo2_y16", "lfo2_b16",
+        "lfo3_points",
+        "lfo3_x1", "lfo3_y1", "lfo3_b1", "lfo3_x2", "lfo3_y2", "lfo3_b2", "lfo3_x3", "lfo3_y3", "lfo3_b3", "lfo3_x4", "lfo3_y4", "lfo3_b4",
+        "lfo3_x5", "lfo3_y5", "lfo3_b5", "lfo3_x6", "lfo3_y6", "lfo3_b6", "lfo3_x7", "lfo3_y7", "lfo3_b7", "lfo3_x8", "lfo3_y8", "lfo3_b8",
+        "lfo3_x9", "lfo3_y9", "lfo3_b9", "lfo3_x10", "lfo3_y10", "lfo3_b10", "lfo3_x11", "lfo3_y11", "lfo3_b11", "lfo3_x12", "lfo3_y12", "lfo3_b12",
+        "lfo3_x13", "lfo3_y13", "lfo3_b13", "lfo3_x14", "lfo3_y14", "lfo3_b14", "lfo3_x15", "lfo3_y15", "lfo3_b15", "lfo3_x16", "lfo3_y16", "lfo3_b16",
     };
 } // namespace
 

@@ -11,6 +11,19 @@
 namespace psy
 {
 
+// An LFO's drawn curve from its points (lfoPointsParam, lfoPointParam).
+inline void readLfoCurve (const ParamState& p, int lfo, dsp::LfoCurve& out) noexcept
+{
+    std::array<float, kLfoPoints> xs {}, ys {}, bs {};
+    for (int k = 0; k < kLfoPoints; ++k)
+    {
+        xs[(size_t) k] = p.get (lfoPointParam (lfo, k, LfoLane::X));
+        ys[(size_t) k] = p.get (lfoPointParam (lfo, k, LfoLane::Y));
+        bs[(size_t) k] = p.get (lfoPointParam (lfo, k, LfoLane::Bend));
+    }
+    out.set (p.geti (lfoPointsParam (lfo)), xs.data(), ys.data(), bs.data());
+}
+
 // Everything a voice needs from the engine for one chunk of samples.
 struct VoiceContext
 {
@@ -24,6 +37,10 @@ struct VoiceContext
     float modWheel = 0.f, aftertouch = 0.f;
     std::array<const float*, kNumLfos> globalLfo {};  // per-sample values for free-running LFOs
     std::array<float, kNumLfos> lfoHz {};
+    // Per LFO: runs in the voice (Retrig or Env), runs once as an envelope,
+    // and its drawn curve (read only when its shape is Drawn).
+    std::array<bool, kNumLfos> lfoPerVoice {}, lfoEnv {};
+    std::array<dsp::LfoCurve, kNumLfos> lfoCurve {};
     // Energy sweep: linear phase step per base-rate sample (1 / length), the
     // curve's exponent, how much the level follows it, and whether the note
     // ends when it reaches the end.

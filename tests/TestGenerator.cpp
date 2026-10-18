@@ -1095,6 +1095,82 @@ TEST_CASE ("Pads swell in, hold and ring out, spread and wet", "[generator][pad]
     CHECK (groupOf (Category::Pad) == CategoryGroup::Background);
 }
 
+TEST_CASE ("The corpus's categories EQ, widen and draw their LFOs the way its presets do", "[generator][eq][dimension][drawn]")
+{
+    // Nearly every psy preset in the Serum corpus cuts its lows with the EQ
+    // (a high-pass around 200 Hz), a fifth to a third widen with the
+    // dimension expander, zaps draw their dive on an LFO run once, arps step
+    // the cutoff through the bar, and percs clap in bursts.
+    Generator g;
+    const int n = 200;
+    const auto routed = [] (const ParamState& p, ModSrc src, ModDst dst) {
+        for (int k = 0; k < kNumModSlots; ++k)
+            if (p.geti (modSrcParam (k)) == (int) src && p.geti (modDstParam (k)) == (int) dst && p.get (modAmtParam (k)) != 0.f)
+                return true;
+        return false;
+    };
+    int eq = 0, lowCut = 0, dim = 0;
+    for (uint32_t seed = 1; seed <= (uint32_t) n; ++seed)
+    {
+        const auto p = g.generate (Category::PsyLead, seed, ParamState(), LockSet());
+        if (! p.on (P::EqOn)) { dim += p.on (P::DimOn) ? 1 : 0; continue; }
+        ++eq;
+        dim += p.on (P::DimOn) ? 1 : 0;
+        if (p.geti (P::EqLowType) >= (int) EqBand::Cut12)
+        {
+            ++lowCut;
+            CHECK (p.get (P::EqLowFreq) >= 99.f);
+            CHECK (p.get (P::EqLowFreq) <= 341.f);
+        }
+    }
+    INFO ("leads: EQ " << eq << ", low cut " << lowCut << ", dimension " << dim << " of " << n);
+    CHECK (eq > n * 8 / 10);
+    CHECK (lowCut > eq * 8 / 10);
+    CHECK (dim > n / 6);
+    CHECK (dim < n / 2);
+
+    int dives = 0, steps = 0, claps = 0, hatCuts = 0;
+    for (uint32_t seed = 1; seed <= (uint32_t) n; ++seed)
+    {
+        const auto z = g.generate (Category::Zap, seed, ParamState(), LockSet());
+        if (z.geti (P::Lfo1Shape) == (int) LfoShape::Drawn && z.on (P::Lfo1Env) && routed (z, ModSrc::Lfo1, ModDst::PitchAll))
+        {
+            ++dives;
+            CHECK (z.get (P::PenvAmt) == 0.f);   // the drawn dive stands in for the pitch envelope
+        }
+        const auto a = g.generate (Category::PsyArp, seed, ParamState(), LockSet());
+        if (a.geti (P::Lfo1Shape) == (int) LfoShape::Drawn && routed (a, ModSrc::Lfo1, ModDst::F1Cutoff))
+        {
+            ++steps;
+            const int count = a.geti (lfoPointsParam (0));
+            CHECK ((count == 8 || count == 16));
+            for (int k = 0; k < count; ++k)
+                CHECK (a.get (lfoPointParam (0, k, LfoLane::Bend)) == 1.f);   // every point holds: steps
+        }
+        const auto c = g.generate (Category::Perc, seed, ParamState(), LockSet());
+        if (c.geti (P::AenvBursts) > 1)
+        {
+            ++claps;
+            CHECK (c.geti (P::F1Type) == (int) FilterType::BP12);
+            CHECK (c.get (P::AenvGap) >= 7.f);
+            CHECK (c.get (P::AenvGap) <= 14.f);
+        }
+        // a hat: loud noise high-passed from 3 kHz (or left open), no bursts
+        const bool hat = c.get (P::NoiseLevel) >= 0.45f && c.geti (P::AenvBursts) == 1
+                         && ((c.geti (P::F1Type) == (int) FilterType::HP12 && c.get (P::F1Cutoff) >= 2900.f) || c.geti (P::F1Type) == (int) FilterType::Off);
+        if (hat && c.on (P::EqOn) && c.geti (P::EqHighType) >= (int) EqBand::Cut12)
+            ++hatCuts;
+    }
+    INFO ("zap dives " << dives << ", arp steps " << steps << ", claps " << claps);
+    CHECK (dives > n / 5);
+    CHECK (dives < n / 2);
+    CHECK (steps > n / 8);
+    CHECK (steps < n * 4 / 10);
+    CHECK (claps > n / 14);
+    CHECK (claps < n / 4);
+    CHECK (hatCuts == 0);
+}
+
 TEST_CASE ("Percs are one short hit per note, with no arp", "[generator][perc]")
 {
     Generator g;

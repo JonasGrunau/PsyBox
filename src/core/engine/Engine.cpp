@@ -70,6 +70,8 @@ void Engine::prepare (double sampleRate, int maxBlockSize)
     delay.prepare (f);
     reverb.prepare (f);
     width.prepare (f);
+    eq.prepare (f);
+    dim.prepare (f);
     for (auto& d : outDc) d.prepare (f);
 
     osFactor = wantedFactor();
@@ -127,6 +129,8 @@ void Engine::resetEffects() noexcept
     delay.reset();
     reverb.reset();
     width.reset();
+    eq.reset();
+    dim.reset();
     for (auto& d : outDc) d.reset();
     decimL.reset();
     decimR.reset();
@@ -203,7 +207,7 @@ void Engine::getModView (ModView& out) const noexcept
         o.env[3] = { (uint8_t) pe.getStage(), pe.stageProgress() };
         // a free-running LFO (Retrig off) is the same for every voice
         for (int i = 0; i < kNumLfos; ++i)
-            o.lfo[(size_t) i] = cur.on (lfoParam (i, 4)) ? v.lfo (i).phase2() : globalLfos[(size_t) i].phase2();
+            o.lfo[(size_t) i] = lfoPerVoice (cur, i) ? v.lfo (i).phase2() : globalLfos[(size_t) i].phase2();
         o.sweep = v.sweepPhase();
         o.filter = { v.filterNow (0), v.filterNow (1) };
     }
@@ -274,6 +278,10 @@ void Engine::prepareContext (double bpm) noexcept
         const bool sync = cur.on (lfoParam (i, 2));
         ctx.lfoHz[(size_t) i] = sync ? (float) (bpm / 60.0) / syncDivBeats (cur.geti (lfoParam (i, 3)))
                                      : cur.get (lfoParam (i, 1));
+        ctx.lfoEnv[(size_t) i] = cur.on (lfoEnvParam (i));
+        ctx.lfoPerVoice[(size_t) i] = lfoPerVoice (cur, i);
+        if (cur.geti (lfoParam (i, 0)) == (int) LfoShape::Drawn)
+            readLfoCurve (cur, i, ctx.lfoCurve[(size_t) i]);
     }
     ctx.numSlots = 0;
     numFxSlots = 0;
@@ -688,7 +696,7 @@ void Engine::phosNoteOn (int note, float velocity) noexcept
     phosModEnv.set (cur.get (P::MenvA), cur.get (P::MenvD), cur.get (P::MenvS), cur.get (P::MenvR));
     phosModEnv.noteOn();
     for (int i = 0; i < kNumLfos; ++i)
-        if (cur.on (lfoParam (i, 4)))
+        if (lfoPerVoice (cur, i))
             globalLfos[(size_t) i].reset (cur.get (lfoParam (i, 5)));
 }
 
@@ -979,7 +987,7 @@ void Engine::process (float* left, float* right, int numSamples, const MidiEvent
             {
                 auto& lfo = globalLfos[(size_t) i];
                 auto& buf = globalLfoBuf[(size_t) i];
-                if (lockNow && cur.on (lfoParam (i, 2)) && ! cur.on (lfoParam (i, 4)))
+                if (lockNow && cur.on (lfoParam (i, 2)) && ! lfoPerVoice (cur, i))
                 {
                     const double cycles = (transport.ppq + (double) (done + pos) * beatsPerSample) / syncDivBeats (cur.geti (lfoParam (i, 3)))
                                           + (double) cur.get (lfoParam (i, 5));
@@ -989,9 +997,11 @@ void Engine::process (float* left, float* right, int numSamples, const MidiEvent
                     if (d > 1.0e-4f)
                         lfo.reset (want);
                 }
+                // the 303's LFOs are free ones that a note restarts: as an envelope they run once from it
                 const int shape = cur.geti (lfoParam (i, 0));
+                const bool once = phosMode() && ctx.lfoEnv[(size_t) i];
                 for (int k = 0; k < n; ++k)
-                    buf[(size_t) (pos + k)] = lfo.process (shape, freeLfoHz[(size_t) i]);
+                    buf[(size_t) (pos + k)] = lfo.process (shape, freeLfoHz[(size_t) i], &ctx.lfoCurve[(size_t) i], once);
                 ctx.globalLfo[(size_t) i] = buf.data();
             }
 
@@ -1129,7 +1139,7 @@ void Engine::modulateFx (int sampleInBlock, ParamState& out) noexcept
     // free-running LFOs are the same for every voice.
     auto src = fxSrc[(size_t) sampleInBlock];
     for (int i = 0; i < kNumLfos; ++i)
-        if (phosMode() || ! cur.on (lfoParam (i, 4)))
+        if (phosMode() || ! lfoPerVoice (cur, i))
             src[(size_t) ModSrc::Lfo1 + (size_t) i] = globalLfoBuf[(size_t) i][(size_t) sampleInBlock];
 
     constexpr int kFirst = (int) ModDst::DistDrive, kNum = (int) ModDst::Count - kFirst;
@@ -1158,7 +1168,7 @@ void Engine::processFx (float* l, float* r, int n, double bpm, const ParamState&
     }
     else
     {
-        const auto chain = fxChain (p.geti (P::FxOrder));
+        const auto chain = synthChain (p);
         for (int fx : chain)
             processFxSlot (fx, fx == chain[0], l, r, n, bpm, p);
     }
@@ -1234,6 +1244,30 @@ void Engine::processFxSlot (int fx, bool first, float* l, float* r, int n, doubl
             default:
                 break;
         }
+    }
+
+    if (fx == kEq)
+    {
+        if (const bool on = p.on (P::EqOn); eq.isActive (on))
+        {
+            dsp::Eq::Settings s;
+            s.lowType = p.geti (P::EqLowType);
+            s.lowHz = p.get (P::EqLowFreq);
+            s.lowDb = p.get (P::EqLowGain);
+            s.lowQ = p.get (P::EqLowQ);
+            s.highType = p.geti (P::EqHighType);
+            s.highHz = p.get (P::EqHighFreq);
+            s.highDb = p.get (P::EqHighGain);
+            s.highQ = p.get (P::EqHighQ);
+            eq.process (l, r, n, s, on);
+        }
+        return;
+    }
+    if (fx == kDimension)
+    {
+        if (const bool on = p.on (P::DimOn); dim.isActive (on))
+            dim.process (l, r, n, p.get (P::DimSize), p.get (P::DimMix), on);
+        return;
     }
 
     switch ((Fx) fx)

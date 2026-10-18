@@ -24,7 +24,7 @@ namespace choices
                                                 "BP 12", "BP 24", "Notch", "Ladder LP 12", "Ladder LP 24", "Ladder HP",
                                                 "Ladder BP", "Diode 303", "Formant", "Comb +", "Comb -" };
     const std::vector<std::string> filterRouting { "Serial", "Parallel" };
-    const std::vector<std::string> lfoShape { "Sine", "Triangle", "Saw Up", "Saw Down", "Square", "S&H", "Smooth" };
+    const std::vector<std::string> lfoShape { "Sine", "Triangle", "Saw Up", "Saw Down", "Square", "S&H", "Smooth", "Drawn" };
     const std::vector<std::string> syncDiv { "4/1", "2/1", "1/1", "1/2", "1/2D", "1/2T", "1/4", "1/4D", "1/4T",
                                              "1/8", "1/8D", "1/8T", "1/16", "1/16D", "1/16T", "1/32", "1/32T", "1/64" };
     const std::vector<std::string> modSrc { "None", "Amp Env", "Env 1", "Env 2", "Env 3", "LFO 1",
@@ -41,7 +41,8 @@ namespace choices
                                             "Chorus Mix", "Delay Feedback", "Delay Mix", "Reverb Size", "Reverb Mix", "Width",
                                             "Phoscyon Cutoff", "Phoscyon Reso", "Phoscyon Envmod", "Phoscyon Decay",
                                             "Phoscyon Accent", "Phoscyon Tuning", "Phoscyon Drive", "Phoscyon Color",
-                                            "Phoscyon Chorus Mix", "Phoscyon Delay Fb", "Phoscyon Delay Mix", "Phoscyon Reverb Mix" };
+                                            "Phoscyon Chorus Mix", "Phoscyon Delay Fb", "Phoscyon Delay Mix", "Phoscyon Reverb Mix",
+                                            "EQ Low Freq", "EQ Low Gain", "EQ High Freq", "EQ High Gain", "Dim Mix" };
     const std::vector<std::string> distType { "Soft", "Hard", "Fold", "Tube", "Rectify" };
     const std::vector<std::string> chorusMode { "Chorus", "Flanger" };
     const std::vector<std::string> compMode { "Normal", "Multi" };
@@ -64,6 +65,8 @@ namespace choices
     const std::vector<std::string> phosDistOrder { "Pre", "Post" };
     const std::vector<std::string> phosDelayFilter { "Off", "LP", "BP", "HP" };
     const std::vector<std::string> phosDelayScale { "Full", "Dotted", "Triplet" };
+    const std::vector<std::string> eqLowType { "Shelf", "Bell", "Low Cut 12", "Low Cut 24" };
+    const std::vector<std::string> eqHighType { "Shelf", "Bell", "High Cut 12", "High Cut 24" };
 } // namespace choices
 
 float syncDivBeats (int index) noexcept
@@ -115,32 +118,58 @@ int fxOrderCode (const FxChain& chain) noexcept
     return code;
 }
 
+namespace
+{
+    // The nine in their FxOrder plus two effects at their own slots; the
+    // second moves aside when both ask for the same one.
+    std::array<int, kNumFx + 2> twoInSlots (int orderCode, int slotA, int idA, int slotB, int idB) noexcept
+    {
+        constexpr int n = kNumFx + 2;
+        const auto base = fxChain (orderCode);
+        slotA = std::clamp (slotA, 0, n - 1);
+        slotB = std::clamp (slotB, 0, n - 1);
+        if (slotB == slotA)
+            slotB = slotA == n - 1 ? slotA - 1 : slotA + 1;
+        std::array<int, n> out {};
+        size_t b = 0;
+        for (int i = 0; i < n; ++i)
+            out[(size_t) i] = i == slotA ? idA : i == slotB ? idB : base[b++];
+        return out;
+    }
+
+    void slotsOfTwo (const std::array<int, kNumFx + 2>& chain, int idA, int idB, int& orderCode, int& slotA, int& slotB) noexcept
+    {
+        FxChain base {};
+        size_t b = 0;
+        for (int i = 0; i < kNumFx + 2; ++i)
+        {
+            const int fx = chain[(size_t) i];
+            if (fx == idA) slotA = i;
+            else if (fx == idB) slotB = i;
+            else if (b < base.size()) base[b++] = fx;
+        }
+        orderCode = std::max (0, fxOrderCode (base));
+    }
+} // namespace
+
 PhosFxChain phosFxChain (int orderCode, int eqSlot, int limSlot) noexcept
 {
-    const auto base = fxChain (orderCode);
-    eqSlot = std::clamp (eqSlot, 0, kNumPhosFx - 1);
-    limSlot = std::clamp (limSlot, 0, kNumPhosFx - 1);
-    if (limSlot == eqSlot)
-        limSlot = eqSlot == kNumPhosFx - 1 ? eqSlot - 1 : eqSlot + 1;
-    PhosFxChain out {};
-    size_t b = 0;
-    for (int i = 0; i < kNumPhosFx; ++i)
-        out[(size_t) i] = i == eqSlot ? kPhosEq : i == limSlot ? kPhosLimiter : base[b++];
-    return out;
+    return twoInSlots (orderCode, eqSlot, kPhosEq, limSlot, kPhosLimiter);
 }
 
 void phosFxSlots (const PhosFxChain& chain, int& orderCode, int& eqSlot, int& limSlot) noexcept
 {
-    FxChain base {};
-    size_t b = 0;
-    for (int i = 0; i < kNumPhosFx; ++i)
-    {
-        const int fx = chain[(size_t) i];
-        if (fx == kPhosEq) eqSlot = i;
-        else if (fx == kPhosLimiter) limSlot = i;
-        else if (b < base.size()) base[b++] = fx;
-    }
-    orderCode = std::max (0, fxOrderCode (base));
+    slotsOfTwo (chain, kPhosEq, kPhosLimiter, orderCode, eqSlot, limSlot);
+}
+
+SynthFxChain synthFxChain (int orderCode, int eqSlot, int dimSlot) noexcept
+{
+    return twoInSlots (orderCode, eqSlot, kEq, dimSlot, kDimension);
+}
+
+void synthFxSlots (const SynthFxChain& chain, int& orderCode, int& eqSlot, int& dimSlot) noexcept
+{
+    slotsOfTwo (chain, kEq, kDimension, orderCode, eqSlot, dimSlot);
 }
 
 const std::array<int, 7>& arpScaleSteps (int scale) noexcept
@@ -240,6 +269,11 @@ namespace
         { ModDst::PhosDelayFb,  P::PhosDlyFb,   1.f },
         { ModDst::PhosDelayMix, P::PhosDlyMix,  1.f },
         { ModDst::PhosReverbMix,P::PhosRevMix,  1.f },
+        { ModDst::EqLowFreq,    P::EqLowFreq,   1.f },
+        { ModDst::EqLowGain,    P::EqLowGain,   1.f },
+        { ModDst::EqHighFreq,   P::EqHighFreq,  1.f },
+        { ModDst::EqHighGain,   P::EqHighGain,  1.f },
+        { ModDst::DimMix,       P::DimMix,      1.f },
     };
 } // namespace
 

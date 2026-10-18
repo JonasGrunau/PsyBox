@@ -134,6 +134,7 @@ private:
     std::array<ParamKnob*, 3> lfoRate {}, lfoDiv {};
     int current = 0;
     std::array<bool, 3> lastSync {};
+    int lastShape = -1;
     juce::Rectangle<int> stripCaption;
     bool phos = false;
     std::unique_ptr<juce::Component> vcaDisplay, megDisplay;   // the Phoscyon envelopes

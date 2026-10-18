@@ -2,6 +2,7 @@
 
 #include "Theme.h"
 #include "dsp/Filters.h"
+#include "dsp/Modulators.h"
 #include "plugin/PluginProcessor.h"
 
 #include <juce_dsp/juce_dsp.h>
@@ -129,14 +130,41 @@ private:
     uint64_t fingerprint() const override;
 };
 
-class LfoDisplay : public LiveDisplay
+// An LFO's shape, two cycles from its phase, with a dot per voice. An
+// envelope (Env) shows the one cycle it runs, and a drawn shape the cycle it
+// is drawn on, edited right here: drag a point (on a 1/16 by 1/8 grid, Shift
+// for free), double-click to add or remove one, drag the dot in a segment's
+// middle to bend it (double-click it to make the segment a step), right-click
+// for a shape to start from.
+class LfoDisplay : public LiveDisplay, public juce::SettableTooltipClient
 {
 public:
     explicit LfoDisplay (PsyBoxProcessor& p) : LiveDisplay (p) {}
     void setLfo (int index) { lfo = index; lastPrint = 0; repaint(); }
+    void mouseMove (const juce::MouseEvent&) override;
+    void mouseExit (const juce::MouseEvent&) override;
+    void mouseDown (const juce::MouseEvent&) override;
+    void mouseDrag (const juce::MouseEvent&) override;
+    void mouseUp (const juce::MouseEvent&) override;
+    void mouseDoubleClick (const juce::MouseEvent&) override;
 
 private:
+    struct Pt { float x, y, bend; };
     int lfo = 0;
+    int hoverPoint = -1, hoverBend = -1, dragPoint = -1, dragBend = -1;
+    float bendFrom = 0.f;
+    std::vector<psy::P> touched;   // the parameters the drag holds a gesture on
+
+    bool drawn() const;
+    std::vector<Pt> points() const;              // as the LFO reads them: first at 0, the rest in order
+    psy::dsp::LfoCurve curve() const;
+    juce::Rectangle<float> area() const;         // the curve's box, inside the display
+    juce::Point<float> toScreen (float x, float y) const;
+    juce::Point<float> bendHandle (const std::vector<Pt>&, int segment) const;
+    void pickAt (juce::Point<float>, int& point, int& bend) const;
+    void setParam (psy::P, float plain, bool gesture);
+    void writePoints (const std::vector<Pt>&);  // one gesture per value that changes
+    void showShapes();
     void paintContent (juce::Graphics&, juce::Rectangle<float>) override;
     uint64_t fingerprint() const override;
 };

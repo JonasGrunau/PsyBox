@@ -1,5 +1,6 @@
 #include "TestUtil.h"
 #include "dsp/Effects.h"
+#include "dsp/Eq.h"
 #include "dsp/Modulators.h"
 #include "dsp/Oversampling.h"
 #include "dsp/PhosEffects.h"
@@ -478,11 +479,12 @@ namespace
     // Every effect that fades with `on`, in the settings of a busy patch.
     struct AllFx
     {
-        static constexpr size_t kCount = 14;
+        static constexpr size_t kCount = 16;
         static const char* name (size_t i)
         {
             static const char* n[kCount] = { "Distortion", "Bitcrusher", "FrequencyShifter", "Phaser", "ChorusFlanger", "StereoDelay", "Reverb",
-                                             "PhosDistortion", "PhosEq", "PhosDelay", "PhosReverb", "PhosChorus", "PhosLimiter", "LateDistortion" };
+                                             "PhosDistortion", "PhosEq", "PhosDelay", "PhosReverb", "PhosChorus", "PhosLimiter", "LateDistortion",
+                                             "Eq", "Dimension" };
             return n[i];
         }
 
@@ -500,9 +502,12 @@ namespace
         PhosChorus phosChorus;
         PhosLimiter phosLimiter;
         LateDistortion lateDist;
+        Eq eq;
+        Dimension dim;
 
         void prepare (float fs)
         {
+            eq.prepare (fs); dim.prepare (fs);
             dist.prepare (fs); crush.prepare (fs); shift.prepare (fs); phaser.prepare (fs); chorus.prepare (fs); delay.prepare (fs);
             reverb.prepare (fs); phosDist.prepare (fs); phosEq.prepare (fs); phosDelay.prepare (fs); phosReverb.prepare (fs);
             phosChorus.prepare (fs); phosLimiter.prepare (fs); lateDist.prepare (fs); lateDist.setQuality (2);
@@ -525,7 +530,9 @@ namespace
                 case 10: return phosReverb.isActive (on);
                 case 11: return phosChorus.isActive (on);
                 case 12: return phosLimiter.isActive (on);
-                default: return lateDist.isActive (on);
+                case 13: return lateDist.isActive (on);
+                case 14: return eq.isActive (on);
+                default: return dim.isActive (on);
             }
         }
 
@@ -558,7 +565,16 @@ namespace
                 }
                 case 11: phosChorus.process (l, r, n, 0.5f, 0.6f, 0.5f, 0.5f, 0.5f, 0.2f, 0.f, 0.5f, on); break;
                 case 12: phosLimiter.process (l, r, n, 0.5f, 8.f, 1.f, 100.f, -12.f, 0.f, true, on); break;
-                default: lateDist.process (l, r, n, 1, 18.f, 12000.f, 1.f, 150.f, true, on); break;
+                case 13: lateDist.process (l, r, n, 1, 18.f, 12000.f, 1.f, 150.f, true, on); break;
+                case 14:
+                {
+                    Eq::Settings s;
+                    s.lowType = 1; s.lowHz = 300.f; s.lowDb = 6.f; s.lowQ = 1.5f;
+                    s.highType = 0; s.highHz = 5000.f; s.highDb = -5.f;
+                    eq.process (l, r, n, s, on);
+                    break;
+                }
+                default: dim.process (l, r, n, 0.6f, 1.f, on); break;
             }
         }
     };
@@ -1265,4 +1281,383 @@ TEST_CASE ("The distortion's low cut starts from rest when it comes on", "[fx]")
     block (c, 20.f);
     block (c, 20.f);
     CHECK (block (a, 300.f) == block (c, 300.f));
+}
+
+// ---- EQ -----------------------------------------------------------------------
+
+namespace
+{
+    using EqKind = eq::Kind;
+
+    // The analog prototype's level in dB at f for a band: a cut shelf or bell
+    // is the boost's inverse, a 24 dB cut is two sections.
+    double analogBandDb (int type, bool high, double hz, double db, double q, double f)
+    {
+        const auto sec = [&] (EqKind kind, double g, double qq) {
+            const double m = 10.0 * std::log10 (eq::protoMag2 (eq::proto (kind, g, qq), f / hz));
+            return g < 0.0 ? -m : m;
+        };
+        const EqKind cut = high ? EqKind::LowPass : EqKind::HighPass;
+        switch (type)
+        {
+            case 0:  return db == 0.0 ? 0.0 : sec (high ? EqKind::HighShelf : EqKind::LowShelf, db, q);
+            case 1:  return db == 0.0 ? 0.0 : sec (EqKind::Bell, db, q);
+            case 2:  return sec (cut, 0.0, q);
+            default: return sec (cut, 0.0, eq::kCut24Q1) + sec (cut, 0.0, eq::kCut24Q2 * q / 0.70710678);
+        }
+    }
+
+    // The worst error in dB of a band against its prototype from 20 Hz to
+    // 20 kHz (or 0.45 of the rate); a cut only where it is above -30 dB.
+    double bandError (int type, bool high, double hz, double db, double q, double fs, bool bilinearDesign = false)
+    {
+        auto d = eq::band (type, high, hz, db, q, fs);
+        if (bilinearDesign)
+        {
+            // the usual design for comparison: bilinear, prewarped at the corner (boost, inverted for a cut)
+            const auto kind = type == 1 ? EqKind::Bell : (high ? EqKind::HighShelf : EqKind::LowShelf);
+            const auto b = eq::bilinear (eq::proto (kind, db, q), 2.0 * std::numbers::pi * hz / fs);
+            d.s[0] = eq::fromBiquad (db >= 0.0 ? b : eq::Biquad { 1.0 / b.b0, b.a1 / b.b0, b.a2 / b.b0, b.b1 / b.b0, b.b2 / b.b0 });
+        }
+        double worst = 0.0;
+        const double top = std::min (20000.0, 0.45 * fs);
+        for (int i = 0; i <= 400; ++i)
+        {
+            const double f = 20.0 * std::pow (top / 20.0, i / 400.0);
+            const double a = analogBandDb (type, high, hz, db, q, f);
+            if (type >= 2 && a < -30.0) continue;
+            worst = std::max (worst, std::abs (eq::bandDb (d, f, fs) - a));
+        }
+        return worst;
+    }
+} // namespace
+
+TEST_CASE ("The EQ follows its analog prototypes up to Nyquist, unlike a bilinear design", "[fx][eq]")
+{
+    // Bells and shelves at their usual settings, resonant shelves, cuts of
+    // both slopes, at 44.1, 48 and 96 kHz: the worst error of each kind over
+    // the audible band.
+    double bell = 0.0, lowShelf = 0.0, highShelf = 0.0, topShelf = 0.0, resonantShelf = 0.0, lowCut = 0.0, highCut = 0.0;
+    double bellBilinear = 0.0, shelfBilinear = 0.0;
+    for (double fs : { 44100.0, 48000.0, 96000.0 })
+    {
+        for (double f0 : { 40.0, 150.0, 600.0, 2500.0, 6000.0, 10000.0 })
+            for (double g : { -18.0, -6.0, 6.0, 18.0 })
+                for (double q : { 0.4, 1.0, 3.0, 8.0 })
+                {
+                    bell = std::max (bell, bandError (1, false, f0, g, q, fs));
+                    bellBilinear = std::max (bellBilinear, bandError (1, false, f0, g, q, fs, true));
+                }
+        for (double g : { -18.0, -9.0, -3.0, 3.0, 9.0, 18.0 })
+            for (double q : { 0.4, 0.707, 1.2 })
+            {
+                for (double f0 : { 30.0, 100.0, 300.0, 1000.0 })
+                    lowShelf = std::max (lowShelf, bandError (0, false, f0, g, q, fs));
+                for (double f0 : { 1500.0, 4000.0 })
+                    highShelf = std::max (highShelf, bandError (0, true, f0, g, q, fs));
+                // a shelf whose upper corner (f0 x sqrt A) lies near or past Nyquist
+                for (double f0 : { 8000.0, 12000.0 })
+                {
+                    topShelf = std::max (topShelf, bandError (0, true, f0, g, q, fs));
+                    shelfBilinear = std::max (shelfBilinear, bandError (0, true, f0, g, q, fs, true));
+                }
+            }
+        for (double g : { -18.0, -6.0, 6.0, 18.0 })
+            for (double q : { 3.0, 8.0 })
+                for (double f0 : { 100.0, 1000.0, 4000.0 })
+                    for (bool high : { false, true })
+                        resonantShelf = std::max (resonantShelf, bandError (0, high, f0, g, q, fs));
+        for (int type : { 2, 3 })
+            for (double q : { 0.5, 0.707, 2.0 })
+            {
+                for (double f0 : { 20.0, 60.0, 200.0, 800.0, 3000.0 })
+                    lowCut = std::max (lowCut, bandError (type, false, f0, 0.0, q, fs));
+                for (double f0 : { 2000.0, 6000.0, 12000.0, 18000.0 })
+                    highCut = std::max (highCut, bandError (type, true, f0, 0.0, q, fs));
+            }
+    }
+    INFO ("worst dB: bell " << bell << " (bilinear " << bellBilinear << "), low shelf " << lowShelf << ", high shelf " << highShelf
+          << ", at 8-12 kHz " << topShelf << " (bilinear " << shelfBilinear << "), resonant shelf " << resonantShelf
+          << ", low cut " << lowCut << ", high cut " << highCut);
+    CHECK (bell < 0.4);
+    CHECK (lowShelf < 0.05);
+    CHECK (highShelf < 0.2);
+    CHECK (topShelf < 0.2);
+    CHECK (resonantShelf < 0.5);
+    CHECK (lowCut < 0.1);
+    CHECK (highCut < 0.5);   // the worst of it in the last half-octave below Nyquist
+    CHECK (bell < bellBilinear / 20.0);
+    CHECK (topShelf < shelfBilinear / 20.0);
+}
+
+TEST_CASE ("The EQ plays its design, and a band at 0 dB passes the signal bit for bit", "[fx][eq]")
+{
+    const double fs = 48000.0;
+    const size_t n = 1 << 14;
+    Eq e;
+    e.prepare ((float) fs);
+    Eq::Settings s;
+    s.lowType = 1; s.lowHz = 3000.f; s.lowDb = 9.f; s.lowQ = 2.f;
+    s.highType = 3; s.highHz = 8000.f; s.highQ = 0.707f;
+    std::vector<float> l (n, 0.f), r (n, 0.f);
+    l[0] = r[0] = 1.f;
+    e.process (l.data(), r.data(), (int) n, s);
+    std::vector<std::complex<double>> spec (n);
+    for (size_t i = 0; i < n; ++i) spec[i] = l[i];
+    testutil::fft (spec);
+    const auto lo = eq::band (1, false, 3000.0, 9.0, 2.0, fs), hi = eq::band (3, true, 8000.0, 0.0, 0.707, fs);
+    double worst = 0.0;
+    for (size_t k = 12; k < n / 2; ++k)
+    {
+        const double f = (double) k * fs / (double) n;
+        if (f > 20000.0) break;
+        const double want = eq::bandDb (lo, f, fs) + eq::bandDb (hi, f, fs);
+        if (want < -60.0) continue;
+        worst = std::max (worst, std::abs (20.0 * std::log10 (std::abs (spec[k])) - want));
+    }
+    INFO ("SVF vs design: worst " << worst << " dB");
+    CHECK (worst < 0.02);
+
+    // shelf and bell at 0 dB: the samples come out as they went in
+    Eq flat;
+    flat.prepare ((float) fs);
+    Eq::Settings z;
+    z.lowType = 1; z.highType = 0;
+    const auto x = busyInput (4096, (float) fs);
+    auto a = x, b = x;
+    flat.process (a.data(), b.data(), (int) a.size(), z);
+    CHECK (a == x);
+    CHECK (b == x);
+}
+
+TEST_CASE ("A swept EQ glides, and fuzzed settings stay finite", "[fx][eq][stress]")
+{
+    // A bell swept from 200 Hz to 5 kHz under a 500 Hz sine, its settings
+    // refreshed every 32 samples like the engine's matrix: nothing lands
+    // above 6 kHz (a zipper would spray it there).
+    const double fs = 48000.0;
+    const size_t total = 48000;
+    Eq e;
+    e.prepare ((float) fs);
+    std::vector<float> out (total);
+    for (size_t at = 0; at < total; at += 32)
+    {
+        Eq::Settings s;
+        s.lowType = 1;
+        s.lowHz = (float) (200.0 * std::pow (25.0, (double) at / (double) total));
+        s.lowDb = 12.f;
+        s.lowQ = 2.f;
+        float l[32], r[32];
+        for (size_t i = 0; i < 32; ++i)
+            l[i] = r[i] = 0.5f * (float) std::sin (2.0 * std::numbers::pi * 500.0 * (double) (at + i) / fs);
+        e.process (l, r, 32, s);
+        std::copy (l, l + 32, out.begin() + (long) at);
+    }
+    const auto db = testutil::spectrumDb (std::vector<float> (out.begin() + 8000, out.end()), 1 << 15);
+    double hiPeak = -300.0;
+    for (size_t k = (size_t) (6000.0 / (fs / 32768.0)); k < db.size(); ++k)
+        hiPeak = std::max (hiPeak, db[k]);
+    const double tone = db[(size_t) std::lround (500.0 / (fs / 32768.0))];
+    INFO ("tone " << tone << " dB, worst above 6 kHz " << hiPeak << " dB");
+    CHECK (hiPeak < tone - 90.0);
+
+    Rng rng (17);
+    Eq f;
+    f.prepare ((float) fs);
+    float peak = 0.f;
+    bool finite = true;
+    for (int block = 0; block < 2000; ++block)
+    {
+        Eq::Settings s;
+        s.lowType = (int) (rng.uniform() * 3.99f);
+        s.highType = (int) (rng.uniform() * 3.99f);
+        s.lowHz = 20.f * std::pow (1000.f, rng.uniform());
+        s.highHz = 20.f * std::pow (1000.f, rng.uniform());
+        s.lowDb = 48.f * rng.uniform() - 24.f;
+        s.highDb = 48.f * rng.uniform() - 24.f;
+        s.lowQ = 0.25f * std::pow (64.f, rng.uniform());
+        s.highQ = 0.25f * std::pow (64.f, rng.uniform());
+        float l[32], r[32];
+        for (int i = 0; i < 32; ++i) { l[i] = 0.5f * rng.bipolar(); r[i] = 0.5f * rng.bipolar(); }
+        f.process (l, r, 32, s);
+        for (int i = 0; i < 32; ++i)
+        {
+            finite = finite && std::isfinite (l[i]) && std::isfinite (r[i]);
+            peak = std::max ({ peak, std::abs (l[i]), std::abs (r[i]) });
+        }
+    }
+    CHECK (finite);
+    CHECK (peak < 1000.f);
+}
+
+TEST_CASE ("An EQ band swept through 0 dB glides on, and rests at 0 dB", "[fx][eq]")
+{
+    // A bell under a 500 Hz sine, its gain swept from +12 dB to -12 dB and
+    // held at 0 dB for a few blocks on the way (the band rests, then wakes):
+    // no zipper above 6 kHz, and once it has glided to 0 dB the band passes
+    // the samples bit for bit.
+    const double fs = 48000.0;
+    const size_t total = 48000;
+    const auto tone = [fs] (size_t i) { return 0.5f * (float) std::sin (2.0 * std::numbers::pi * 500.0 * (double) i / fs); };
+    Eq::Settings s;
+    s.lowType = 1;
+    s.lowHz = 1000.f;
+    s.lowQ = 1.f;
+    Eq e;
+    e.prepare ((float) fs);
+    std::vector<float> out (total);
+    for (size_t at = 0; at < total; at += 32)
+    {
+        const double g = 12.0 - 24.0 * (double) at / (double) total;
+        s.lowDb = std::abs (g) < 0.5 ? 0.f : (float) g;
+        float l[32], r[32];
+        for (size_t i = 0; i < 32; ++i) l[i] = r[i] = tone (at + i);
+        e.process (l, r, 32, s);
+        std::copy (l, l + 32, out.begin() + (long) at);
+    }
+    const auto db = testutil::spectrumDb (std::vector<float> (out.begin() + 8000, out.end()), 1 << 15);
+    double hiPeak = -300.0;
+    for (size_t k = (size_t) (6000.0 / (fs / 32768.0)); k < db.size(); ++k)
+        hiPeak = std::max (hiPeak, db[k]);
+    const double level = db[(size_t) std::lround (500.0 / (fs / 32768.0))];
+    INFO ("tone " << level << " dB, worst above 6 kHz " << hiPeak << " dB");
+    CHECK (hiPeak < level - 90.0);
+
+    s.lowDb = 0.f;
+    std::vector<float> l (64), r (64);
+    e.process (l.data(), r.data(), 64, s);   // the glide to 0 dB
+    std::vector<float> x (256);
+    for (size_t i = 0; i < x.size(); ++i) x[i] = tone (total + 64 + i);
+    auto a = x, b = x;
+    e.process (a.data(), b.data(), (int) a.size(), s);
+    CHECK (a == x);
+    CHECK (b == x);
+}
+
+// ---- Dimension ------------------------------------------------------------------
+
+TEST_CASE ("The dimension expander widens without touching the mono sum or the lows", "[fx][dimension]")
+{
+    const float fs = 48000.f;
+    const size_t n = 48000;
+    Rng rng (3);
+    std::vector<float> x (n);
+    for (auto& v : x) v = 0.3f * rng.bipolar();
+    const auto sideRms = [] (const std::vector<float>& l, const std::vector<float>& r) {
+        double s = 0.0;
+        for (size_t i = 4800; i < l.size(); ++i) s += 0.25 * (double) (l[i] - r[i]) * (l[i] - r[i]);
+        return std::sqrt (s / (double) (l.size() - 4800));
+    };
+    double last = -1.0;
+    for (float mix : { 0.25f, 0.5f, 1.f })
+    {
+        Dimension d;
+        d.prepare (fs);
+        auto l = x, r = x;
+        d.process (l.data(), r.data(), (int) n, 0.5f, mix);
+        float sumErr = 0.f;
+        for (size_t i = 0; i < n; ++i)
+            sumErr = std::max (sumErr, std::abs ((l[i] + r[i]) - 2.f * x[i]));
+        INFO ("mix " << mix);
+        CHECK (sumErr < 1e-5f);   // L + R is the input's: mono-compatible
+        const double side = sideRms (l, r);
+        CHECK (side > last * 1.4);   // wider as the mix goes up
+        last = side;
+    }
+    // full mix: the side carries about half the mid's level, and none of a 60 Hz bass
+    CHECK (last > 0.3 * 0.3 / std::sqrt (3.0));
+    Dimension d;
+    d.prepare (fs);
+    std::vector<float> l (n), r (n);
+    for (size_t i = 0; i < n; ++i) l[i] = r[i] = 0.5f * (float) std::sin (2.0 * std::numbers::pi * 60.0 * (double) i / fs);
+    d.process (l.data(), r.data(), (int) n, 1.f, 1.f);
+    CHECK (sideRms (l, r) < 0.5 * 0.0316 / std::sqrt (2.0));   // the side at least 30 dB under the bass
+}
+
+// ---- drawn LFOs, envelopes, clap bursts --------------------------------------------
+
+TEST_CASE ("A drawn LFO curve passes its points, holds its steps and bends its segments", "[lfo][drawn]")
+{
+    LfoCurve c;
+    const float xs[] = { 0.3f, 0.25f, 0.5f, 0.75f, 0.9f }, ys[] = { -1.f, 1.f, 0.f, 0.5f, -0.5f }, bs[] = { 0.f, 1.f, 0.5f, -1.f, 0.f };
+    c.set (5, xs, ys, bs);
+    CHECK (c.x[0] == 0.f);          // the first point sits at 0
+    CHECK (c.x[1] == 0.25f);
+    CHECK (c.value (0.f) == -1.f);
+    CHECK (c.value (0.125f) == 0.f);                     // straight: halfway up
+    CHECK (c.value (0.4f) == 1.f);                       // a step holds its value...
+    CHECK (c.value (0.5f) == 0.f);                       // ...to the next point
+    CHECK (c.value (0.625f) < 0.25f * 0.2f);             // bent: slow, then fast
+    CHECK (c.value (0.76f) == 0.5f + (-0.5f - 0.5f));    // a jump goes at once
+    CHECK (c.value (0.95f) == -0.75f);                   // after the last point, back to the first's value
+    CHECK (c.value (1.f) == -1.f);
+    // sixteen held points are sixteen steps
+    float sx[16], sy[16], sb[16];
+    for (int k = 0; k < 16; ++k) { sx[k] = (float) k / 16.f; sy[k] = k % 2 == 0 ? 1.f : -0.5f; sb[k] = 1.f; }
+    LfoCurve steps;
+    steps.set (16, sx, sy, sb);
+    CHECK (steps.value (0.99f) == -0.5f);
+    CHECK (steps.value (15.f / 16.f - 0.001f) == 1.f);
+
+    // the LFO plays it: a drawn LFO at 1 Hz traces the curve
+    Lfo lfo;
+    lfo.setSampleRate (1000.f);
+    lfo.reset (0.f);
+    lfo.snap();
+    std::vector<float> got;
+    for (int i = 0; i < 1000; ++i) got.push_back (lfo.process (7, 1.f, &c));
+    CHECK (std::abs (got[124] - c.value (0.125f)) < 0.01f);
+    CHECK (std::abs (got[449] - 1.f) < 1e-3f);
+}
+
+TEST_CASE ("An LFO as an envelope runs once and holds where it ends", "[lfo][env]")
+{
+    Lfo lfo;
+    lfo.setSampleRate (1000.f);
+    lfo.seed (1);
+    lfo.reset (0.f);
+    lfo.snap();
+    float v = 0.f;
+    for (int i = 0; i < 2500; ++i) v = lfo.process (3, 2.f, nullptr, true);   // saw down, 0.5 s, played for 2.5 s
+    CHECK (lfo.hasEnded());
+    CHECK (v == -1.f);   // a saw down ends at the bottom and stays there
+    CHECK (lfo.phase() == 1.f);
+    lfo.reset (0.f);     // the next note starts it over
+    lfo.snap();
+    CHECK (! lfo.hasEnded());
+    CHECK (std::abs (lfo.process (3, 2.f, nullptr, true) - 1.f) < 0.05f);
+}
+
+TEST_CASE ("Clap bursts: the note starts with short hits a gap apart, then the envelope", "[env][clap]")
+{
+    const float fs = 48000.f;
+    Adsr a;
+    a.setSampleRate (fs);
+    a.set (0.f, 150.f, 0.f, 50.f);
+    a.setBursts (4, 10.f);
+    a.noteOn();
+    std::vector<float> e;
+    for (int i = 0; i < 9600; ++i) e.push_back (a.process());
+    // the hits: a peak of 1 at the start of each 10 ms gap, down about 30 dB before the next
+    for (int k = 0; k < 3; ++k)
+    {
+        const size_t start = (size_t) k * 480;
+        const float pk = *std::max_element (e.begin() + (long) start, e.begin() + (long) start + 60);
+        INFO ("burst " << k);
+        CHECK (pk > 0.99f);
+        CHECK (e[start + 470] < 0.05f);
+    }
+    // then the attack and a 150 ms decay
+    CHECK (*std::max_element (e.begin() + 1440, e.begin() + 1500) > 0.99f);
+    CHECK (e[1440 + 7200 - 1] < 0.01f);
+
+    // one burst is the plain envelope, sample for sample
+    Adsr plain, one;
+    for (auto* x : { &plain, &one }) { x->setSampleRate (fs); x->set (5.f, 100.f, 0.5f, 50.f); }
+    one.setBursts (1, 10.f);
+    plain.noteOn();
+    one.noteOn();
+    bool same = true;
+    for (int i = 0; i < 4800; ++i) same = same && plain.process() == one.process();
+    CHECK (same);
 }

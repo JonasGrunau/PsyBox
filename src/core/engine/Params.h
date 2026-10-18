@@ -64,7 +64,8 @@ namespace choices
         subOct, subShape, noiseType, penvDest, filterType, filterRouting, lfoShape, syncDiv,
         modSrc, modDst, distType, chorusMode, compMode, arpMode, engineMode, kickClick, kickDrive,
         energyMode, energyBars, uniMode, uniStack, arpKey, arpScale,
-        phosWave, phosDistModel, phosDistOrder, phosDelayFilter, phosDelayScale;
+        phosWave, phosDistModel, phosDistOrder, phosDelayFilter, phosDelayScale,
+        eqLowType, eqHighType;
 }
 
 // Sync divisions expressed in beats (quarter notes), index-aligned with choices::syncDiv.
@@ -87,7 +88,11 @@ enum class OscType : int { Analog, Supersaw, Wavetable, FM };
 enum class UniMode : int { Linear, Super, Exp, Inv, Random };
 enum class UniStack : int { Off, Oct, OctFifth, TwoOct, CenterDown1, CenterDown2 };
 constexpr int kMaxUnison = 16;
-enum class LfoShape : int { Sine, Triangle, SawUp, SawDown, Square, SampleHold, SmoothRandom };
+// Drawn: the LFO's own curve of points (PSY_LFO_CURVE, see dsp::LfoCurve).
+enum class LfoShape : int { Sine, Triangle, SawUp, SawDown, Square, SampleHold, SmoothRandom, Drawn };
+// An EQ band is a shelf, a bell, or a cut (a high-pass for the low band, a
+// low-pass for the high band) of 12 or 24 dB an octave.
+enum class EqBand : int { Shelf, Bell, Cut12, Cut24 };
 enum class DistType : int { Soft, Hard, Fold, Tube, Rectify };
 enum class CompMode : int { Normal, Multiband };
 enum class ArpMode : int { Up, Down, UpDown, Random, Order };
@@ -122,6 +127,8 @@ enum class ModDst : int
     // patches store the index).
     PhosCutoff, PhosReso, PhosEnvMod, PhosDecay, PhosAccent, PhosTune,
     PhosDistDrive, PhosDistColor, PhosChorusMix, PhosDelayFb, PhosDelayMix, PhosReverbMix,
+    // Our EQ and dimension expander (effects, appended later).
+    EqLowFreq, EqLowGain, EqHighFreq, EqHighGain, DimMix,
     Count
 };
 
@@ -231,19 +238,19 @@ enum class ModDst : int
     X(MenvS,       "menv_s",       "Sustain",     "Env 2", Linear, 0.f, 1.f, 0.f, 1.f, Percent, nullptr, false) \
     X(MenvR,       "menv_r",       "Release",     "Env 2", Power, 1.f, 15000.f, 300.f, 3.f, Ms, nullptr, false) \
     \
-    X(Lfo1Shape,   "lfo1_shape",   "Shape",       "LFO 1", Choice, 0, 6, 0, 1.f, None, &choices::lfoShape, false) \
+    X(Lfo1Shape,   "lfo1_shape",   "Shape",       "LFO 1", Choice, 0, 7, 0, 1.f, None, &choices::lfoShape, false) \
     X(Lfo1Rate,    "lfo1_rate",    "Rate",        "LFO 1", Exp, 0.02f, 40.f, 2.f, 1.f, Hz, nullptr, true) \
     X(Lfo1Sync,    "lfo1_sync",    "Sync",        "LFO 1", Toggle, 0, 1, 0, 1.f, None, nullptr, false) \
     X(Lfo1Div,     "lfo1_div",     "Division",    "LFO 1", Choice, 0, 17, 9, 1.f, None, &choices::syncDiv, false) \
     X(Lfo1Retrig,  "lfo1_retrig",  "Retrig",      "LFO 1", Toggle, 0, 1, 1, 1.f, None, nullptr, false) \
     X(Lfo1Phase,   "lfo1_phase",   "Phase",       "LFO 1", Linear, 0.f, 1.f, 0.f, 1.f, Percent, nullptr, false) \
-    X(Lfo2Shape,   "lfo2_shape",   "Shape",       "LFO 2", Choice, 0, 6, 1, 1.f, None, &choices::lfoShape, false) \
+    X(Lfo2Shape,   "lfo2_shape",   "Shape",       "LFO 2", Choice, 0, 7, 1, 1.f, None, &choices::lfoShape, false) \
     X(Lfo2Rate,    "lfo2_rate",    "Rate",        "LFO 2", Exp, 0.02f, 40.f, 0.5f, 1.f, Hz, nullptr, true) \
     X(Lfo2Sync,    "lfo2_sync",    "Sync",        "LFO 2", Toggle, 0, 1, 0, 1.f, None, nullptr, false) \
     X(Lfo2Div,     "lfo2_div",     "Division",    "LFO 2", Choice, 0, 17, 6, 1.f, None, &choices::syncDiv, false) \
     X(Lfo2Retrig,  "lfo2_retrig",  "Retrig",      "LFO 2", Toggle, 0, 1, 0, 1.f, None, nullptr, false) \
     X(Lfo2Phase,   "lfo2_phase",   "Phase",       "LFO 2", Linear, 0.f, 1.f, 0.f, 1.f, Percent, nullptr, false) \
-    X(Lfo3Shape,   "lfo3_shape",   "Shape",       "LFO 3", Choice, 0, 6, 5, 1.f, None, &choices::lfoShape, false) \
+    X(Lfo3Shape,   "lfo3_shape",   "Shape",       "LFO 3", Choice, 0, 7, 5, 1.f, None, &choices::lfoShape, false) \
     X(Lfo3Rate,    "lfo3_rate",    "Rate",        "LFO 3", Exp, 0.02f, 40.f, 8.f, 1.f, Hz, nullptr, true) \
     X(Lfo3Sync,    "lfo3_sync",    "Sync",        "LFO 3", Toggle, 0, 1, 0, 1.f, None, nullptr, false) \
     X(Lfo3Div,     "lfo3_div",     "Division",    "LFO 3", Choice, 0, 17, 12, 1.f, None, &choices::syncDiv, false) \
@@ -380,7 +387,54 @@ enum class ModDst : int
     \
     PSY_PHOS_PARAMS (X) \
     \
-    X(RenderQuality, "render_quality", "Quality", "Render", Choice, 0, 2, 2, 1.f, None, &choices::quality, false)
+    X(RenderQuality, "render_quality", "Quality", "Render", Choice, 0, 2, 2, 1.f, None, &choices::quality, false) \
+    \
+    PSY_LATER_PARAMS (X)
+
+// Appended after RenderQuality, so no older parameter moves (hosts can keep
+// automation by index, and Mutate draws for every index in order): our EQ
+// and dimension expander with their places in the chain, the LFOs' envelope
+// mode and drawn curves, and the amp envelope's clap bursts.
+#define PSY_LATER_PARAMS(X) \
+    X(EqOn,        "eq_on",        "On",          "EQ", Toggle, 0, 1, 0, 1.f, None, nullptr, false) \
+    X(EqLowType,   "eq_low_type",  "Low Type",    "EQ", Choice, 0, 3, 0, 1.f, None, &choices::eqLowType, false) \
+    X(EqLowFreq,   "eq_low_freq",  "Low Freq",    "EQ", Exp, 20.f, 20000.f, 200.f, 1.f, Hz, nullptr, false) \
+    X(EqLowGain,   "eq_low_gain",  "Low Gain",    "EQ", Linear, -24.f, 24.f, 0.f, 1.f, Db, nullptr, false) \
+    X(EqLowQ,      "eq_low_q",     "Low Q",       "EQ", Exp, 0.25f, 16.f, 0.707f, 1.f, None, nullptr, false) \
+    X(EqHighType,  "eq_high_type", "High Type",   "EQ", Choice, 0, 3, 0, 1.f, None, &choices::eqHighType, false) \
+    X(EqHighFreq,  "eq_high_freq", "High Freq",   "EQ", Exp, 20.f, 20000.f, 6000.f, 1.f, Hz, nullptr, false) \
+    X(EqHighGain,  "eq_high_gain", "High Gain",   "EQ", Linear, -24.f, 24.f, 0.f, 1.f, Db, nullptr, false) \
+    X(EqHighQ,     "eq_high_q",    "High Q",      "EQ", Exp, 0.25f, 16.f, 0.707f, 1.f, None, nullptr, false) \
+    X(DimOn,       "dim_on",       "On",          "Dimension", Toggle, 0, 1, 0, 1.f, None, nullptr, false) \
+    X(DimSize,     "dim_size",     "Size",        "Dimension", Linear, 0.f, 1.f, 0.5f, 1.f, Percent, nullptr, false) \
+    X(DimMix,      "dim_mix",      "Mix",         "Dimension", Linear, 0.f, 1.f, 0.5f, 1.f, Percent, nullptr, false) \
+    X(EqSlot,      "eq_slot",      "EQ Slot",     "FX", Linear, 0, 10, 7, 1.f, Int, nullptr, false) \
+    X(DimSlot,     "dim_slot",     "Dimension Slot", "FX", Linear, 0, 10, 5, 1.f, Int, nullptr, false) \
+    X(Lfo1Env,     "lfo1_env",     "Env",         "LFO 1", Toggle, 0, 1, 0, 1.f, None, nullptr, false) \
+    X(Lfo2Env,     "lfo2_env",     "Env",         "LFO 2", Toggle, 0, 1, 0, 1.f, None, nullptr, false) \
+    X(Lfo3Env,     "lfo3_env",     "Env",         "LFO 3", Toggle, 0, 1, 0, 1.f, None, nullptr, false) \
+    X(AenvBursts,  "aenv_bursts",  "Bursts",      "Amp Env", Linear, 1, 8, 1, 1.f, Int, nullptr, false) \
+    X(AenvGap,     "aenv_gap",     "Gap",         "Amp Env", Power, 2.f, 40.f, 10.f, 2.f, Ms, nullptr, false) \
+    PSY_LFO_CURVE (X, 1) PSY_LFO_CURVE (X, 2) PSY_LFO_CURVE (X, 3)
+
+// An LFO's drawn curve: how many points it uses, then 16 points of x
+// (0..1 of the cycle; the first sits at 0 whatever its own x), y (-1..1) and
+// the bend of the segment from the point to the next; after the last point
+// the curve runs back to the first's value at the cycle's end (see
+// dsp::LfoCurve). The default is a triangle from the bottom.
+#define PSY_LFO_CURVE(X, n) \
+    X(Lfo##n##Points, "lfo" #n "_points", "Points", "LFO " #n " Shape", Linear, 2, 16, 3, 1.f, Int, nullptr, false) \
+    PSY_LFO_POINT (X, n, 1, 0.f, -1.f)  PSY_LFO_POINT (X, n, 2, 0.5f, 1.f)  PSY_LFO_POINT (X, n, 3, 1.f, -1.f) \
+    PSY_LFO_POINT (X, n, 4, 1.f, 0.f)   PSY_LFO_POINT (X, n, 5, 1.f, 0.f)   PSY_LFO_POINT (X, n, 6, 1.f, 0.f) \
+    PSY_LFO_POINT (X, n, 7, 1.f, 0.f)   PSY_LFO_POINT (X, n, 8, 1.f, 0.f)   PSY_LFO_POINT (X, n, 9, 1.f, 0.f) \
+    PSY_LFO_POINT (X, n, 10, 1.f, 0.f)  PSY_LFO_POINT (X, n, 11, 1.f, 0.f)  PSY_LFO_POINT (X, n, 12, 1.f, 0.f) \
+    PSY_LFO_POINT (X, n, 13, 1.f, 0.f)  PSY_LFO_POINT (X, n, 14, 1.f, 0.f)  PSY_LFO_POINT (X, n, 15, 1.f, 0.f) \
+    PSY_LFO_POINT (X, n, 16, 1.f, 0.f)
+
+#define PSY_LFO_POINT(X, n, k, x, y) \
+    X(Lfo##n##X##k, "lfo" #n "_x" #k, "Point " #k " X", "LFO " #n " Shape", Linear, 0.f, 1.f, x, 1.f, Percent, nullptr, false) \
+    X(Lfo##n##Y##k, "lfo" #n "_y" #k, "Point " #k " Y", "LFO " #n " Shape", Linear, -1.f, 1.f, y, 1.f, Percent, nullptr, false) \
+    X(Lfo##n##B##k, "lfo" #n "_b" #k, "Point " #k " Bend", "LFO " #n " Shape", Linear, -1.f, 1.f, 0.f, 1.f, Percent, nullptr, false)
 
 // The Phoscyon engine (EngineMode::Phoscyon): a TB-303 voice with its
 // calibration trims, and the effects that replace ours in its chain. Knobs
@@ -478,7 +532,7 @@ enum class ModDst : int
 // One modulation slot: source, target, bipolar amount.
 #define PSY_MOD_SLOT(X, n) \
     X(Mod##n##Src, "mod" #n "_src", "Source", "Mod " #n, Choice, 0, 18, 0, 1.f, None, &choices::modSrc, false) \
-    X(Mod##n##Dst, "mod" #n "_dst", "Target", "Mod " #n, Choice, 0, 58, 0, 1.f, None, &choices::modDst, false) \
+    X(Mod##n##Dst, "mod" #n "_dst", "Target", "Mod " #n, Choice, 0, 63, 0, 1.f, None, &choices::modDst, false) \
     X(Mod##n##Amt, "mod" #n "_amt", "Amount", "Mod " #n, BiPower, -1.f, 1.f, 0.f, 1.5f, Percent, nullptr, false)
 
 // One step of the arp pattern: plays, accented, slides into the next step,
@@ -550,6 +604,14 @@ PhosFxChain phosFxChain (int orderCode, int eqSlot, int limSlot) noexcept;
 // The inverse: the order code and both slots of an eleven-long chain.
 void phosFxSlots (const PhosFxChain& chain, int& orderCode, int& eqSlot, int& limSlot) noexcept;
 
+// The synth engine's chain is eleven long too: the nine plus our EQ and
+// dimension expander, placed by EqSlot and DimSlot the same way (their ids
+// are the Phoscyon pair's numbers; the two chains never play together).
+constexpr int kEq = kNumFx, kDimension = kNumFx + 1, kNumSynthFx = kNumFx + 2;
+using SynthFxChain = std::array<int, kNumSynthFx>;
+SynthFxChain synthFxChain (int orderCode, int eqSlot, int dimSlot) noexcept;
+void synthFxSlots (const SynthFxChain& chain, int& orderCode, int& eqSlot, int& dimSlot) noexcept;
+
 // The arp's key (ArpKey: 0 off, 1..12 C..B) and scale. With a key the arp
 // plays every note in that scale, and generated lines are written in it.
 constexpr int kNumArpScales = 6;
@@ -573,6 +635,19 @@ struct ParamState
     bool on (P p) const noexcept { return v[(size_t) p] > 0.5f; }
     void set (P p, float plain) noexcept { v[(size_t) p] = def (p).snap (plain); }
 };
+
+// The LFOs' envelope mode and drawn curves (outside the 6-a-LFO block).
+inline P lfoEnvParam (int lfo) noexcept { return (P) ((int) P::Lfo1Env + lfo); }
+constexpr int kLfoPoints = 16;
+enum class LfoLane : int { X, Y, Bend };
+inline P lfoPointsParam (int lfo) noexcept { return (P) ((int) P::Lfo1Points + lfo * (1 + 3 * kLfoPoints)); }
+inline P lfoPointParam (int lfo, int point, LfoLane lane) noexcept
+{
+    return (P) ((int) lfoPointsParam (lfo) + 1 + point * 3 + (int) lane);
+}
+// An LFO runs in each voice, restarting with the note, when Retrig is on
+// or it is an envelope (it runs once from the note and holds its end).
+inline bool lfoPerVoice (const ParamState& p, int lfo) noexcept { return p.on (lfoParam (lfo, 4)) || p.on (lfoEnvParam (lfo)); }
 
 // The arp pattern as one value. Step 0 is the beat when the host plays.
 struct ArpPattern

@@ -7,19 +7,20 @@
 // in signal order (click a row to switch it on or off, drag it up or down to
 // move it in the chain); the rack on the right holds one strip per effect, in
 // the same order: a badge, the controls, a display, the mix and the power
-// switch. Switched-off strips grey out. The Phoscyon engine gets its own rack:
-// the original's distortion, chorus, delay and reverb in ours' places, its EQ
-// and limiter added, eleven strips that scroll.
+// switch. Switched-off strips grey out. Our rack holds the nine effects plus
+// the EQ and dimension expander, eleven strips that scroll; the Phoscyon engine
+// gets its own: the original's distortion, chorus, delay and reverb in ours'
+// places, its EQ and limiter added.
 // ---------------------------------------------------------------------------
 class FxPage : public Page
 {
 public:
     explicit FxPage (PsyBoxProcessor&, bool phoscyon = false);
     void resized() override;
-    void showStrip (int effect);   // scrolls the Phoscyon rack to a strip
+    void showStrip (int effect);   // scrolls the rack to a strip
     void paintOverChildren (juce::Graphics&) override;
 
-    enum class Glyph { Distortion, Crush, Shift, Phaser, Chorus, Compressor, Delay, Reverb, Width, Eq, Limiter };
+    enum class Glyph { Distortion, Crush, Shift, Phaser, Chorus, Compressor, Delay, Reverb, Width, Eq, Limiter, Dimension };
     using Order = std::vector<int>;   // effect ids, first to last
 
     // The square power switch on the right of every strip.
@@ -153,11 +154,11 @@ private:
     const bool phos;
     std::vector<std::unique_ptr<Strip>> strips;   // by effect
     std::unique_ptr<Chain> chain;
-    Strip* tall = nullptr;   // our page: the compressor, two rows and a bigger display
     Order order;
     juce::ParameterAttachment orderAttachment;
-    std::unique_ptr<juce::ParameterAttachment> eqSlot, limSlot;   // the Phoscyon rack's own two slots
-    // The Phoscyon rack scrolls; its strips sit in here, hairlines between them.
+    // the two effects placed by slot: our EQ and dimension expander, or the Phoscyon EQ and limiter
+    std::unique_ptr<juce::ParameterAttachment> slotA, slotB;
+    // The rack scrolls; its strips sit in here, hairlines between them.
     struct RackContent : juce::Component
     {
         std::function<void (juce::Graphics&)> over;

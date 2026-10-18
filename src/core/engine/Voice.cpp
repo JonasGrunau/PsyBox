@@ -58,12 +58,13 @@ void Voice::start (int n, float vel, bool acc, bool stolen, float glideFrom, con
     healthy = true;
 
     sweepT = 0.0;
+    amp.setBursts (p.geti (P::AenvBursts), p.get (P::AenvGap));   // decided as the note starts
     amp.noteOn();
     fenv.noteOn();
     menv.noteOn();
     penv.trigger();
     for (int i = 0; i < kNumLfos; ++i)
-        if (p.on (lfoParam (i, 4)))
+        if (lfoPerVoice (p, i))
             lfos[(size_t) i].reset (p.get (lfoParam (i, 5)));
     if (! stolen)
     {
@@ -213,6 +214,7 @@ void Voice::render (float* outL, float* outR, int chunkOffsetBase, int nBase, co
     amp.set (p.get (P::AenvA), p.get (P::AenvD), p.get (P::AenvS), p.get (P::AenvR));
     amp.setAttackCurve (p.get (P::AenvCurve));
     amp.setAttackStart (p.get (P::AenvStart));
+    amp.setBursts (p.geti (P::AenvBursts), p.get (P::AenvGap));
     const float accentAmt = accent ? p.get (P::Accent) : 0.f;
     // 303-style accent: shorter, harder filter envelope
     fenv.set (p.get (P::FenvA), p.get (P::FenvD) * (1.f - 0.5f * accentAmt), p.get (P::FenvS), p.get (P::FenvR));
@@ -279,11 +281,11 @@ void Voice::render (float* outL, float* outR, int chunkOffsetBase, int nBase, co
         std::array<float, kNumLfos> lfoOut;
         for (int i = 0; i < kNumLfos; ++i)
         {
-            if (p.on (lfoParam (i, 4)))
+            if (ctx.lfoPerVoice[(size_t) i])
             {
                 float hz = ctx.lfoHz[(size_t) i];
                 if (lfoRateMod[(size_t) i] != 0.f) hz *= std::exp2 (lfoRateMod[(size_t) i] * 4.f);
-                lfoOut[(size_t) i] = lfos[(size_t) i].process (p.geti (lfoParam (i, 0)), hz);
+                lfoOut[(size_t) i] = lfos[(size_t) i].process (p.geti (lfoParam (i, 0)), hz, &ctx.lfoCurve[(size_t) i], ctx.lfoEnv[(size_t) i]);
             }
             else
             {

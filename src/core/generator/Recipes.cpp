@@ -249,6 +249,115 @@ namespace
         b.uni (P::CompOut, 4.f, 8.f);
     }
 
+    // ---- EQ, dimension and drawn LFOs, as the Serum corpus uses them -----------
+    // Nearly every psy preset in the corpus runs its EQ. The low band cuts in
+    // nine of ten: a 12 dB high-pass (24 dB in some) between cutLo and cutHi
+    // (200 Hz in the middle for leads), or a shelf 4-24 dB down below
+    // 90-240 Hz (`lowShelf` of them). The high band shapes the top in `high`
+    // of them: a bell at 1.5-8 kHz or a shelf at 1.2-6 kHz, mostly 2-8 dB up
+    // (a dip in `dip` of them), or a low-pass at 4-17 kHz that rounds it off;
+    // `highKinds` weighs bell, shelf and low-pass.
+    void fxEq (B& b, float on, float lowShelf, float cutLo, float cutHi, float high, std::initializer_list<float> highKinds,
+               float dip = 0.25f)
+    {
+        if (! b.chance (on)) return;
+        b.on (P::EqOn, true);
+        if (b.chance (lowShelf))
+        {
+            b.set (P::EqLowType, (float) EqBand::Shelf);
+            b.uni (P::EqLowFreq, 90.f, 240.f);
+            b.uni (P::EqLowGain, -24.f, -4.f);
+            b.uni (P::EqLowQ, 0.5f, 0.9f);
+        }
+        else
+        {
+            b.pick (P::EqLowType, { (int) EqBand::Cut12, (int) EqBand::Cut24 }, { 0.75f, 0.25f });
+            b.uni (P::EqLowFreq, cutLo, cutHi);
+            b.uni (P::EqLowQ, 0.55f, 0.9f);
+        }
+        if (! b.chance (high)) return;
+        const int kind = b.weighted (highKinds);
+        const bool down = b.chance (dip);
+        if (kind == 0)
+        {
+            b.set (P::EqHighType, (float) EqBand::Bell);
+            b.uni (P::EqHighFreq, 1500.f, 8000.f);
+            if (down) b.uni (P::EqHighGain, -10.f, -3.f);
+            else b.uni (P::EqHighGain, 2.f, 8.f);
+            b.uni (P::EqHighQ, 0.7f, 2.f);
+        }
+        else if (kind == 1)
+        {
+            b.set (P::EqHighType, (float) EqBand::Shelf);
+            b.uni (P::EqHighFreq, 1200.f, 6000.f);
+            if (down) b.uni (P::EqHighGain, -9.f, -3.f);
+            else b.uni (P::EqHighGain, 2.f, 7.f);
+            b.uni (P::EqHighQ, 0.5f, 0.9f);
+        }
+        else
+        {
+            b.pick (P::EqHighType, { (int) EqBand::Cut12, (int) EqBand::Cut24 }, { 0.8f, 0.2f });
+            b.uni (P::EqHighFreq, 4000.f, 17000.f);
+            b.uni (P::EqHighQ, 0.6f, 1.f);
+        }
+    }
+
+    // The dimension expander: on in a fifth to a third of the corpus's
+    // presets of most kinds, about a quarter wet (pads half).
+    void fxDim (B& b, float p, float mixLo, float mixHi)
+    {
+        if (! b.chance (p)) return;
+        b.on (P::DimOn, true);
+        b.uni (P::DimSize, 0.15f, 0.75f);
+        b.uni (P::DimMix, mixLo, mixHi);
+    }
+
+    // A drawn LFO curve (see dsp::LfoCurve): points of x, y and bend.
+    struct Pt { float x, y, bend; };
+    void drawLfo (B& b, int lfo, std::initializer_list<Pt> pts)
+    {
+        b.set (lfoParam (lfo, 0), (float) LfoShape::Drawn);
+        b.set (lfoPointsParam (lfo), (float) pts.size());
+        int k = 0;
+        for (const auto& pt : pts)
+        {
+            b.set (lfoPointParam (lfo, k, LfoLane::X), pt.x);
+            b.set (lfoPointParam (lfo, k, LfoLane::Y), pt.y);
+            b.set (lfoPointParam (lfo, k, LfoLane::Bend), pt.bend);
+            ++k;
+        }
+    }
+
+    // A step pattern drawn as held points, synced (Retrig off keeps it on the
+    // host's bar): `count` steps, each one of `levels`.
+    void drawSteps (B& b, int lfo, int count, std::initializer_list<float> levels)
+    {
+        count = std::clamp (count, 2, kLfoPoints);
+        b.set (lfoParam (lfo, 0), (float) LfoShape::Drawn);
+        b.set (lfoPointsParam (lfo), (float) count);
+        const int n = (int) levels.size();
+        for (int k = 0; k < count; ++k)
+        {
+            const int pick = std::min ((int) (b.rnd (0.f, 1.f) * (float) n), n - 1);
+            b.set (lfoPointParam (lfo, k, LfoLane::X), (float) k / (float) count);
+            b.set (lfoPointParam (lfo, k, LfoLane::Y), levels.begin()[pick]);
+            b.set (lfoPointParam (lfo, k, LfoLane::Bend), 1.f);
+        }
+    }
+
+    // An LFO run once from each note as an extra envelope, the way a fifth to
+    // a third of the corpus's leads, plucks and stabs use one: drawn up from
+    // rest to a peak early on, then back down fast-then-slow, and held there.
+    void lfoEnvelope (B& b, int lfo, std::initializer_list<int> divs, std::initializer_list<float> weights)
+    {
+        const float peak = b.rnd (0.06f, 0.45f), rise = b.rnd (-0.4f, 0.2f), fall = b.rnd (-0.7f, -0.2f);
+        drawLfo (b, lfo, { { 0.f, 0.f, rise }, { peak, 1.f, fall }, { 1.f, 0.f, 0.f } });
+        b.set (lfoParam (lfo, 2), 1.f);
+        b.pick (lfoParam (lfo, 3), divs, weights);
+        b.set (lfoParam (lfo, 4), 1.f);
+        b.on (lfoEnvParam (lfo), true);
+    }
+
     // =========================================================================
     // Recipes
     // =========================================================================
@@ -468,6 +577,26 @@ namespace
         b.uni (P::PenvDecay, 20.f, 200.f);
         b.uni (P::PenvCurve, 0.6f, 1.f);
         b.set (P::PenvDest, 0.f);
+        // a third draw the dive the way Serum's zaps do, on an LFO run once:
+        // down fast, then slower (through a knee in some), over a quarter to
+        // two bars and two to four octaves, in place of the pitch envelope
+        const bool drawn = b.chance (0.35f);
+        if (drawn)
+        {
+            const bool knee = b.chance (0.4f);
+            const float b0 = b.rnd (-0.8f, -0.3f), kx = b.rnd (0.1f, 0.35f), ky = b.rnd (0.15f, 0.45f), b1 = b.rnd (-0.5f, 0.3f);
+            if (knee) drawLfo (b, 0, { { 0.f, 1.f, b0 }, { kx, ky, b1 }, { 1.f, 0.f, 0.f } });
+            else drawLfo (b, 0, { { 0.f, 1.f, b0 }, { 1.f, 0.f, 0.f } });
+            b.set (lfoParam (0, 2), 1.f);
+            b.pick (lfoParam (0, 3), { D1_4, D1_2, D1_1, D2_1 }, { 0.3f, 0.35f, 0.25f, 0.1f });
+            b.set (lfoParam (0, 4), 1.f);
+            b.on (lfoEnvParam (0), true);
+            b.set (P::PenvAmt, 0.f);
+            // a route reaches two octaves: two of them
+            b.route (S::Lfo1, D::PitchAll, 0.5f, 1.f);
+            b.route (S::Lfo1, D::PitchAll, 0.5f, 1.f);
+        }
+        const S dive = drawn ? S::Lfo1 : S::PitchEnv;
 
         if (b.chance (0.15f)) { b.pick (P::NoiseType, { 0, 2 }); b.uni (P::NoiseLevel, 0.02f, 0.12f); }
 
@@ -485,11 +614,11 @@ namespace
                 break;
         }
         const bool follow = b.chance (0.65f);
-        if (follow) b.route (S::PitchEnv, D::F1Cutoff, 0.15f, 0.4f);
+        if (follow) b.route (dive, D::F1Cutoff, 0.15f, 0.4f);
 
         const bool ring = b.chance (0.4f);   // the bottom of the dive rings on in some
         ampEnv (b, 0.f, 1.f, 120.f, 600.f, 0.f, ring ? 0.3f : 0.f, 15.f, 60.f);
-        if (b.chance (0.3f)) b.route (S::PitchEnv, D::FmA, 0.2f, 0.5f);
+        if (b.chance (0.3f)) b.route (dive, D::FmA, 0.2f, 0.5f);
         b.route (S::Macro1, D::PitchEnvAmt, 0.2f, 0.4f);
 
         fxDist (b, 0.67f, { (int) DistType::Tube, (int) DistType::Soft, (int) DistType::Rectify, (int) DistType::Hard, (int) DistType::Fold },
@@ -502,6 +631,8 @@ namespace
         fxChorus (b, 0.33f);
         fxWidth (b, 0.44f, 0.3f, 0.8f);
         fxShift (b, 0.15f, 20.f, 300.f, 0.f, 0.5f);
+        fxEq (b, 0.8f, 0.06f, 80.f, 250.f, 0.6f, { 0.4f, 0.18f, 0.42f });
+        fxDim (b, 0.29f, 0.2f, 0.5f);
         b.macros ({ D::FmA, D::F1Cutoff, D::DelayMix, D::ReverbMix, D::ShiftHz, D::NoiseLevel });
     }
 
@@ -697,6 +828,15 @@ namespace
         fxChorus (b, 0.29f);
         fxPhaser (b, 0.09f);
         fxWidth (b, 0.3f, 0.3f, 0.7f);
+        // an extra filter envelope from LFO 2 run once, in a fifth (where it doesn't sweep)
+        const bool lfoEnv = b.chance (0.2f);
+        if (lfoEnv && ! sweep && fil != 4)
+        {
+            lfoEnvelope (b, 1, { D1_4, D1_2, D1_8 }, { 0.6f, 0.25f, 0.15f });
+            b.route (S::Lfo2, D::F1Cutoff, 0.08f, 0.25f);
+        }
+        fxEq (b, 0.92f, 0.09f, 100.f, 340.f, 0.73f, { 0.44f, 0.28f, 0.28f });
+        fxDim (b, 0.3f, 0.15f, 0.45f);
         b.macros ({ D::F1Reso, D::WtPosA, D::FmA, D::DetuneA, D::FilterEnvAmt, D::DelayMix, D::ReverbMix, D::ChorusMix, D::DistDrive });
     }
 
@@ -772,6 +912,15 @@ namespace
         fxReverb (b, 0.7f, 1.2f, 3.5f, 0.14f, 0.38f);
         fxChorus (b, 0.4f);
         fxWidth (b, 0.45f, 0.3f, 0.7f);
+        // an extra filter envelope from LFO 2 run once, in a quarter
+        const bool lfoEnv = b.chance (0.25f);
+        if (lfoEnv && fil != 5)
+        {
+            lfoEnvelope (b, 1, { D1_8, D1_4, D1_2 }, { 0.45f, 0.35f, 0.2f });
+            b.route (S::Lfo2, D::F1Cutoff, 0.08f, 0.22f);
+        }
+        fxEq (b, 0.94f, 0.06f, 100.f, 340.f, 0.8f, { 0.32f, 0.47f, 0.21f });
+        fxDim (b, 0.37f, 0.15f, 0.4f);
         b.macros ({ D::F1Cutoff, D::F1Reso, D::WtPosA, D::FmA, D::DelayMix, D::ReverbMix, D::DistDrive });
     }
 
@@ -846,6 +995,20 @@ namespace
         if (squash == 0) fxCompMulti (b);
         else if (squash == 1) fxCompGlue (b);
         fxWidth (b, 0.35f, 0.3f, 0.7f);
+        // a quarter open slowly over the bar: LFO 2 run once, drawn up (the
+        // corpus's stabs ramp their filter that way where it isn't on the beat)
+        const bool swell = b.chance (0.25f);
+        if (swell && ! beat && fil < 3)
+        {
+            drawLfo (b, 1, { { 0.f, 0.f, b.rnd (-0.3f, 0.5f) }, { 1.f, 1.f, 0.f } });
+            b.set (lfoParam (1, 2), 1.f);
+            b.pick (lfoParam (1, 3), { D1_1, D1_2, D2_1 }, { 0.55f, 0.25f, 0.2f });
+            b.set (lfoParam (1, 4), 1.f);
+            b.on (lfoEnvParam (1), true);
+            b.route (S::Lfo2, D::F1Cutoff, 0.08f, 0.25f);
+        }
+        fxEq (b, 0.9f, 0.08f, 100.f, 340.f, 0.75f, { 0.42f, 0.27f, 0.31f });
+        fxDim (b, 0.18f, 0.1f, 0.3f);
         b.macros ({ D::F1Reso, D::FilterEnvAmt, D::DetuneA, D::FmA, D::ReverbMix, D::DelayMix, D::ChorusMix, D::DistDrive });
     }
 
@@ -953,6 +1116,8 @@ namespace
         fxDist (b, 0.3f, { (int) DistType::Soft, (int) DistType::Tube, (int) DistType::Hard }, 4.f, 14.f, 0.3f, 0.7f);
         fxChorus (b, 0.35f);
         fxWidth (b, 0.4f, 0.3f, 0.8f);
+        fxEq (b, 0.92f, 0.08f, 70.f, 200.f, 0.7f, { 0.11f, 0.56f, 0.33f });
+        fxDim (b, 0.3f, 0.15f, 0.4f);
         b.macros ({ D::F1Cutoff, D::FilterEnvAmt, D::FmA, D::F1Reso, D::DelayMix, D::DistDrive, D::ReverbMix });
     }
 
@@ -1468,8 +1633,22 @@ namespace
         }
         if (b.chance (0.05f)) { b.pick (P::NoiseType, { 0, 2 }); b.uni (P::NoiseLevel, 0.05f, 0.2f); }
 
-        b.lfoSync (0, LfoShape::SampleHold, { D1_16, D1_32, D1_16T, D1_32T }, true);
-        b.route (S::Lfo1, D::PitchAll, 0.1f, 0.4f);
+        // the pitch jumps: a sample & hold, or (as the corpus's glitches draw
+        // them) a stepped line of semitones over the bar, the same every time
+        const bool stepped = b.chance (0.4f);
+        if (stepped)
+        {
+            drawSteps (b, 0, b.chance (0.6f) ? 16 : 8, { 0.f, 0.f, 0.f, 0.f, 1.f, -1.f, 7.f / 12.f, 5.f / 12.f, -5.f / 12.f, 3.f / 12.f });
+            b.set (lfoParam (0, 2), 1.f);
+            b.pick (lfoParam (0, 3), { D1_1, D1_2, D2_1 }, { 0.5f, 0.3f, 0.2f });
+            b.set (lfoParam (0, 4), 1.f);
+            b.route (S::Lfo1, D::PitchAll, 0.5f, 0.5f);   // a step of 1/12 is a semitone
+        }
+        else
+        {
+            b.lfoSync (0, LfoShape::SampleHold, { D1_16, D1_32, D1_16T, D1_32T }, true);
+            b.route (S::Lfo1, D::PitchAll, 0.1f, 0.4f);
+        }
         b.lfoSync (1, LfoShape::Square, { D1_32, D1_64, D1_16T }, true);
         b.route (S::Lfo2, D::Amp, 0.6f, 1.f);
         filter1 (b, b.chance (0.6f) ? ft (FilterType::Ladder24) : ft (FilterType::BP12), 800.f, 5000.f, 0.05f, 0.5f, 0.f, 0.f);
@@ -1504,6 +1683,7 @@ namespace
         }
         fxDist (b, 0.3f, { 1, 2 }, 4.f, 14.f, 0.3f, 0.6f);
         fxReverb (b, 0.7f, 0.8f, 3.f, 0.15f, 0.35f, 0.2f, 0.5f);
+        fxEq (b, 0.35f, 0.3f, 100.f, 300.f, 0.5f, { 0.5f, 0.25f, 0.25f });
         b.macros ({ D::CrushMix, D::F1Cutoff, D::F1Reso, D::FmA, D::ShiftHz, D::DelayMix, D::DistDrive });
     }
 
@@ -1997,9 +2177,17 @@ namespace
         // the references gate their notes (the rhythm is the sequence's), so the body holds
         ampEnv (b, 0.f, 3.f, 120.f, 500.f, 0.5f, 1.f, 15.f, 80.f);
 
-        // a new brightness per note in some (the drawn 1/16 steps of the references), accents brighter in some
-        const bool steps = b.chance (0.2f);
-        if (steps) b.route (S::Random, D::F1Cutoff, 0.05f, 0.15f);
+        // a quarter step the cutoff through the bar as the references draw it:
+        // 16 (or 8) held steps on LFO 1, synced to the bar; accents brighter in some
+        const bool steps = b.chance (0.25f);
+        if (steps)
+        {
+            drawSteps (b, 0, b.chance (0.65f) ? 16 : 8, { 0.f, 0.25f, 0.5f, 0.75f, 1.f });
+            b.set (lfoParam (0, 2), 1.f);
+            b.pick (lfoParam (0, 3), { D1_1, D2_1 }, { 0.8f, 0.2f });
+            b.set (lfoParam (0, 4), 0.f);
+            b.route (S::Lfo1, D::F1Cutoff, 0.06f, 0.18f);
+        }
         const bool bright = b.chance (0.25f);
         if (bright) b.route (S::Velocity, D::F1Cutoff, 0.05f, 0.15f);
         b.route (S::Macro1, D::F1Cutoff, 0.2f, 0.4f);
@@ -2022,6 +2210,8 @@ namespace
         fxChorus (b, 0.2f);
         fxPhaser (b, 0.08f);
         fxWidth (b, 0.26f, 0.3f, 0.7f);
+        fxEq (b, 0.93f, 0.29f, 100.f, 340.f, 0.62f, { 0.29f, 0.46f, 0.25f });
+        fxDim (b, 0.26f, 0.15f, 0.4f);
         b.macros ({ D::F1Cutoff, D::F1Reso, D::FilterEnvAmt, D::Lfo2Rate, D::DelayMix, D::DistDrive, D::WtPosA, D::FmA, D::ReverbMix });
     }
 
@@ -2143,6 +2333,8 @@ namespace
         fxReverb (b, 0.5f, 0.8f, 3.f, 0.05f, 0.25f, 0.2f, 0.5f);
         fxChorus (b, 0.3f);
         fxWidth (b, 0.2f, 0.3f, 0.7f);
+        fxEq (b, 0.95f, 0.06f, 70.f, 220.f, 0.65f, { 0.7f, 0.15f, 0.15f });
+        fxDim (b, 0.17f, 0.08f, 0.25f);
         b.macros ({ index, D::F1Cutoff, D::F1Reso, D::Lfo1Rate, D::DistDrive, D::DelayMix, D::ReverbMix });
     }
 
@@ -2249,6 +2441,19 @@ namespace
         const int squash = b.weighted ({ 0.2f, 0.3f, 0.5f });   // multiband, glue, none
         if (squash == 0) fxCompMulti (b);
         else if (squash == 1) fxCompGlue (b);
+        // a gated pad now and then (the corpus's pads chop their volume with
+        // drawn steps): 16 sixteenths on or off over the bar, on LFO 1
+        const bool gated = b.chance (0.12f);
+        if (gated && life == 0)
+        {
+            drawSteps (b, 0, 16, { 0.f, 0.f, -1.f });
+            b.set (lfoParam (0, 2), 1.f);
+            b.set (lfoParam (0, 3), (float) D1_1);
+            b.set (lfoParam (0, 4), 0.f);
+            b.route (S::Lfo1, D::Amp, 0.85f, 1.f);
+        }
+        fxEq (b, 0.88f, 0.19f, 90.f, 300.f, 0.7f, { 0.32f, 0.27f, 0.41f });
+        fxDim (b, 0.26f, 0.3f, 0.6f);
         b.macros ({ D::F1Cutoff, D::F1Reso, D::DetuneA, D::WtPosA, D::Lfo2Rate, D::ReverbMix, D::ChorusMix, D::DelayMix, D::NoiseLevel });
     }
 
@@ -2256,13 +2461,14 @@ namespace
     // closed and open hats (noise high-passed at 2-9 kHz, 30-450 ms, a
     // ring-modded metal layer in some), snares with a short body or a laser
     // dive, tonal percs and toms (a sine or soft FM pair falling a few
-    // semitones), and alien percs (inharmonic FM or ring mod through a
-    // band-pass or comb). One hit per note, so no arp.
+    // semitones), alien percs (inharmonic FM or ring mod through a band-pass
+    // or comb) and claps (band-passed noise in bursts a few ms apart, the
+    // amp envelope's Bursts). One hit per note, so no arp.
     void perc (B& b)
     {
         polyVoice (b, 4, 8);
         b.uni (P::VelSens, 0.5f, 0.8f);
-        const int kind = b.weighted ({ 0.3f, 0.16f, 0.2f, 0.18f, 0.16f });
+        const int kind = b.weighted ({ 0.27f, 0.14f, 0.17f, 0.15f, 0.13f, 0.14f });
         switch (kind)
         {
             case 0:   // closed hat (a shaker when its attack is soft)
@@ -2343,7 +2549,7 @@ namespace
                 b.pick (P::Octave, { -1, 0, 1 }, { 0.3f, 0.5f, 0.2f });
                 break;
             }
-            default:  // alien perc: inharmonic FM or ring mod through a band-pass or comb
+            case 4:   // alien perc: inharmonic FM or ring mod through a band-pass or comb
             {
                 const bool fmBody = b.chance (0.55f);
                 if (fmBody)
@@ -2377,16 +2583,37 @@ namespace
                 b.pick (P::Octave, { -1, 0, 1 }, { 0.3f, 0.45f, 0.25f });
                 break;
             }
+            default:  // clap: three to five bursts of band-passed noise 7-14 ms apart, then a short tail
+            {
+                b.on (P::OscAOn, false);
+                b.pick (P::NoiseType, { 0, 1 }, { 0.7f, 0.3f });
+                b.uni (P::NoiseLevel, 0.5f, 0.7f);
+                filter1 (b, ft (FilterType::BP12), 900.f, 2400.f, 0.15f, 0.45f, 0.f, 0.f);
+                b.pick (P::AenvBursts, { 3, 4, 5 }, { 0.3f, 0.45f, 0.25f });
+                b.uni (P::AenvGap, 7.f, 14.f);
+                ampEnv (b, 0.f, 1.f, 120.f, 380.f, 0.f, 0.f, 30.f, 120.f);
+                const bool body = b.chance (0.3f);   // a snare's knock under some
+                if (body)
+                {
+                    analogA (b, kTri, 0.35f);
+                    b.set (P::PenvAttack, 0.f);
+                    b.set (P::PenvDest, 0.f);
+                    b.uni (P::PenvAmt, 5.f, 12.f);
+                    b.uni (P::PenvDecay, 15.f, 40.f);
+                    b.uni (P::PenvCurve, 0.4f, 0.8f);
+                }
+                b.pick (P::Octave, { 0, 1 }, { 0.6f, 0.4f });
+                break;
+            }
         }
 
-        // hats open up on soft hits and thin out on hard ones; tonal hits brighten
-        // hats open up on soft hits and thin out on hard ones, tonal hits
-        // brighten (in some); no two hits quite alike
+        // hats open up on soft hits and thin out on hard ones, tonal hits and
+        // claps brighten (in some); no two hits quite alike
         const bool hat = kind < 2;
         const bool touch = b.chance (0.3f);
         if (touch) b.route (S::Velocity, D::F1Cutoff, hat ? -0.15f : 0.1f, hat ? -0.05f : 0.25f);
         b.route (S::Random, D::F1Cutoff, 0.03f, 0.1f);
-        b.route (S::Macro1, hat ? D::F1Cutoff : D::PitchEnvAmt, 0.2f, 0.4f);
+        b.route (S::Macro1, hat || kind == 5 ? D::F1Cutoff : D::PitchEnvAmt, 0.2f, 0.4f);
 
         fxDist (b, 0.45f, { (int) DistType::Soft, (int) DistType::Tube, (int) DistType::Hard }, 3.f, 12.f, 0.2f, 0.6f);
         if (b.chance (0.12f))
@@ -2396,10 +2623,14 @@ namespace
             b.uni (P::CrushRate, 1.f, 6.f);
             b.uni (P::CrushMix, 0.2f, 0.5f);
         }
-        fxReverb (b, 0.5f, 0.3f, 1.5f, 0.06f, 0.25f, 0.2f, 0.5f);
+        fxReverb (b, kind == 5 ? 0.8f : 0.5f, 0.3f, 1.5f, 0.06f, 0.25f, 0.2f, 0.5f);   // claps want a room
         fxDelay (b, 0.2f, { D1_8D, D1_16, D1_16D, D1_4 }, 0.1f, 0.35f, 0.05f, 0.2f);
         fxWidth (b, 0.35f, 0.3f, 0.8f);
         if (b.chance (0.35f)) fxCompGlue (b);
+        // the corpus's percs only lift their top, and a hat's top is its sound: never cut
+        if (hat) fxEq (b, 0.85f, 0.1f, 120.f, 400.f, 0.6f, { 0.25f, 0.75f, 0.f }, 0.f);
+        else fxEq (b, 0.85f, 0.1f, 120.f, 400.f, 0.6f, { 0.2f, 0.55f, 0.25f }, 0.f);
+        fxDim (b, 0.3f, 0.15f, 0.4f);
         b.macros ({ D::F1Cutoff, D::NoiseLevel, D::PitchEnvAmt, D::F1Reso, D::DistDrive, D::ReverbMix, D::DelayMix });
     }
 } // namespace

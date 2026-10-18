@@ -424,6 +424,8 @@ ModPanel::ModPanel (PsyBoxProcessor& p, bool phoscyon)
                 pages[(size_t) e].push_back (ks.add (*this, p, envIds[e][i]));
         pages[AmpEnv].push_back (ks.add (*this, p, P::AenvCurve));   // the attack's bend: RC charge to swell
         pages[AmpEnv].push_back (ks.add (*this, p, P::AenvStart));   // the level the attack starts from
+        pages[AmpEnv].push_back (ks.add (*this, p, P::AenvBursts));  // a clap's hits before the attack
+        pages[AmpEnv].push_back (ks.add (*this, p, P::AenvGap));     // and the time between them
     }
 
     if (! phos)
@@ -448,10 +450,11 @@ ModPanel::ModPanel (PsyBoxProcessor& p, bool phoscyon)
         lfoDiv[(size_t) i] = ks.add (*this, p, psy::lfoParam (i, 3), "Division");
         pg.push_back (lfoRate[(size_t) i]);
         pg.push_back (lfoDiv[(size_t) i]);
-        for (auto [off, name, tip] : { std::tuple { 2, "Sync", "Lock the rate to the host tempo" },
-                                       std::tuple { 4, "Retrig", "Restart for every note (per voice); off runs free for all voices" } })
+        for (auto [prm, name, tip] : { std::tuple { psy::lfoParam (i, 2), "Sync", "Lock the rate to the host tempo" },
+                                       std::tuple { psy::lfoParam (i, 4), "Retrig", "Restart for every note (per voice); off runs free for all voices" },
+                                       std::tuple { psy::lfoEnvParam (i), "Env", "Run once from every note and hold where it ends: an envelope of this shape" } })
         {
-            auto t = std::make_unique<ToggleDot> (p, psy::lfoParam (i, off), name);
+            auto t = std::make_unique<ToggleDot> (p, prm, name);
             t->setStacked (true);
             t->setTooltip (tip);
             addAndMakeVisible (*t);
@@ -501,6 +504,12 @@ void ModPanel::timerCallback()
     const int l = current - Lfo1;
     if ((proc.plain (psy::lfoParam (l, 2)) > 0.5f) != lastSync[(size_t) l])
         show (current);
+    const int shape = (int) std::lround (proc.plain (psy::lfoParam (l, 0)));
+    if (shape != lastShape)
+    {
+        lastShape = shape;
+        repaint();   // the hint follows a drawn shape
+    }
 }
 
 void ModPanel::paint (juce::Graphics& g)
@@ -516,11 +525,16 @@ void ModPanel::paint (juce::Graphics& g)
     // a hint beside the knobs, centred on their dials
     const auto b = body();
     const int knobsY = b.getBottom() - kCtrlH - sp::md - kCellH;
-    const int used = current == PitchEnv || current >= Lfo1 ? 6 : (int) pages[(size_t) current].size();
+    const int used = current == PitchEnv ? 6 : (current >= Lfo1 ? 7 : (int) pages[(size_t) current].size());
     auto hint = juce::Rectangle<int> (b.getX() + used * kCellW, knobsY, b.getRight() - b.getX() - used * kCellW, kKnobD);
     g.setFont (label (10.5f));
-    g.drawFittedText ("Drag a source's arrows onto any knob to modulate it. Drag the ring that appears to set the amount, "
-                      "right-click it to invert or remove.", hint.withTrimmedLeft (sp::lg), juce::Justification::centredRight, 3, 1.f);
+    // a drawn LFO is edited in the display above; a narrow hint keeps to the first sentence
+    const bool drawnLfo = current >= Lfo1 && (int) std::lround (proc.plain (psy::lfoParam (current - Lfo1, 0))) == (int) psy::LfoShape::Drawn;
+    const juce::String text = drawnLfo ? "Drag a point, double-click to add or remove one, drag a segment's dot to bend it. Right-click for shapes."
+                              : hint.getWidth() < 260 ? "Drag a source's arrows onto any knob to modulate it."
+                                                      : "Drag a source's arrows onto any knob to modulate it. Drag the ring that appears to set the amount, "
+                                                        "right-click it to invert or remove.";
+    g.drawFittedText (text, hint.withTrimmedLeft (sp::lg), juce::Justification::centredRight, 4, 1.f);
 }
 
 void ModPanel::resized()
@@ -567,7 +581,8 @@ void ModPanel::resized()
         pg[2]->setBounds (gr.cell (2, 0));           // division
         pg[3]->setBounds (gr.cell (3, 0));           // sync
         pg[4]->setBounds (gr.cell (4, 0));           // retrig
-        pg[5]->setBounds (gr.cell (5, 0));           // phase
+        pg[5]->setBounds (gr.cell (5, 0));           // env
+        pg[6]->setBounds (gr.cell (6, 0));           // phase
     }
 
     stripCaption = strip.removeFromLeft (juce::GlyphArrangement::getStringWidthInt (label (10.f), "SOURCES") + sp::lg);
