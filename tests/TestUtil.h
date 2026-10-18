@@ -75,6 +75,27 @@ inline double worstAliasDb (const std::vector<float>& x, double fs, double f0, d
     return worst - peak;
 }
 
+// What share of the power in [lo, hi) Hz lies off the harmonics of f0, in
+// dB: what a distortion folded back (the last 2^16 samples, 4-term
+// Blackman-Harris, 4 bins either side of a harmonic count as on it).
+inline double inharmonicDb (const std::vector<float>& x, double fs, double f0, double lo, double hi)
+{
+    const size_t n = 1 << 16;
+    const std::vector<float> tail (x.end() - (long) n, x.end());
+    const auto db = spectrumDb (tail, n);
+    const double bin = fs / (double) n;
+    double off = 0.0, all = 0.0;
+    for (size_t i = 1; i < db.size(); ++i)
+    {
+        const double f = (double) i * bin;
+        if (f < lo || f >= hi) continue;
+        const double p = std::pow (10.0, db[i] / 10.0);
+        all += p;
+        if (std::abs (f - std::round (f / f0) * f0) > 4.0 * bin) off += p;
+    }
+    return 10.0 * std::log10 (off / all + 1e-30);
+}
+
 inline double rms (const std::vector<float>& x, size_t from = 0)
 {
     double s = 0.0;

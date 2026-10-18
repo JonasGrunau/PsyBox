@@ -190,7 +190,7 @@ enum class ModDst : int
     X(SubOct,      "sub_oct",      "Sub Oct",     "Mixer", Choice, 0, 1, 0, 1.f, None, &choices::subOct, false) \
     X(SubShape,    "sub_shape",    "Sub Wave",    "Mixer", Choice, 0, 2, 0, 1.f, None, &choices::subShape, false) \
     X(NoiseLevel,  "noise_level",  "Noise",       "Mixer", Power, 0.f, 1.f, 0.f, 2.f, Percent, nullptr, true) \
-    X(NoiseType,   "noise_type",   "Noise Type",  "Mixer", Choice, 0, 3, 0, 1.f, None, &choices::noiseType, false) \
+    X(NoiseType,   "noise_type",   "Noise Type",  "Mixer", Choice, 0, 4, 0, 1.f, None, &choices::noiseType, false) \
     X(NoiseDirect, "noise_direct", "Noise Direct","Mixer", Toggle, 0, 1, 0, 1.f, None, nullptr, false) \
     X(RingLevel,   "ring_level",   "Ring",        "Mixer", Linear, 0.f, 1.f, 0.f, 1.f, Percent, nullptr, true) \
     \

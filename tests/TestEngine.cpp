@@ -734,6 +734,36 @@ TEST_CASE ("The effect order round-trips and changes the sound; the default is t
     CHECK (wetFirst.peak < 1.f);
 }
 
+TEST_CASE ("Jilax's clipper at the end of the chain doesn't fold back", "[engine][fx][alias]")
+{
+    // A high-passed saw on G#1 into a hard clip with Auto Level at 23 dB,
+    // last in the chain, as Jilax plays it. The voices' oversampling is gone
+    // there: at the base rate the top octaves came back about 13 dB under
+    // the harmonics.
+    ParamState p;
+    p.set (P::OscAUnison, 1.f);
+    p.set (P::F1Type, (float) FilterType::Off);
+    p.set (P::F2Type, (float) FilterType::HP24);
+    p.set (P::F2Cutoff, 200.f);
+    p.set (P::AenvS, 1.f);
+    p.set (P::DistOn, 1.f);
+    p.set (P::DistType, 1.f);
+    p.set (P::DistAuto, 1.f);
+    p.set (P::DistDrive, 23.f);
+    p.set (P::DistTone, 20000.f);
+    p.set (P::DistMix, 1.f);
+    p.set (P::DistLowCut, 140.f);
+    p.set (P::FxOrder, (float) fxOrderCode (FxChain { (int) Fx::Crush, (int) Fx::Shift, (int) Fx::Phaser, (int) Fx::Chorus, (int) Fx::Compressor,
+                                                     (int) Fx::Delay, (int) Fx::Reverb, (int) Fx::Width, (int) Fx::Distortion }));
+    const double f0 = 440.0 * std::pow (2.0, (32 - 69) / 12.0);
+    const auto out = hold (p, 2.0, -1.0, 32);
+    const double top = testutil::inharmonicDb (out.l, 48000.0, f0, 6000.0, 20000.0);
+    const double mid = testutil::inharmonicDb (out.l, 48000.0, f0, 2000.0, 6000.0);
+    INFO ("off the harmonics: 6-20 kHz " << top << " dB, 2-6 kHz " << mid << " dB");
+    CHECK (top < -45.0);
+    CHECK (mid < -45.0);
+}
+
 TEST_CASE ("Reverse Bass stays in its references' family and varies from patch to patch", "[engine][bass]")
 {
     // The bright reverse shots in Bass Shots 2 (017 E, 024, 043, 049-051,

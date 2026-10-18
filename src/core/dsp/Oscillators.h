@@ -5,6 +5,7 @@
 #include "Wavetable.h"
 
 #include <array>
+#include <vector>
 
 namespace psy::dsp
 {
@@ -304,8 +305,17 @@ private:
 
 // ---------------------------------------------------------------------------
 // Noise: white, pink (Kellet's refined 7-pole filter), "digital" sample &
-// hold noise clocked from the note pitch, and hiss: white noise above about
-// 10 kHz (three one-pole high-passes), the fizz on top of a distorted bass.
+// hold noise clocked from the note pitch, hiss: white noise above about
+// 10 kHz (three one-pole high-passes), the fizz on top of a distorted bass,
+// and tuned: white noise through a comb on the note's period, so its energy
+// sits on the note's harmonics (lines about 25 dB over the gaps between
+// them). White noise as the air on top of a saw stack fills the gaps between
+// the harmonics: the stack's top turns to hiss (spectral flatness 0.3-0.5
+// from 6 to 16 kHz, where the psytrance shots Jilax was fitted to keep
+// theirs tonal, 0.1). Tuned noise brings the air and keeps the top tonal.
+// The comb is linear (no saturator in its loop, unlike the filter's comb),
+// follows the pitch per sample (glides, zaps), stops at 20 Hz, and its level
+// is the white noise's: the feedback's power gain 1 / (1 - g^2) is taken off.
 //
 // It runs at the oversampled rate, and what reaches the output is its band
 // up to the base rate's Nyquist, so white noise of a fixed amplitude would
@@ -325,6 +335,18 @@ class Noise
 {
 public:
     Noise() noexcept { setRate (96000.f); }
+
+    // The tuned noise's comb, for the highest rate it will run at (allocates).
+    void prepare (float maxSampleRate)
+    {
+        int size = 1;
+        while (size < (int) (maxSampleRate / kTunedLowestHz) + 8)
+            size <<= 1;
+        comb.assign ((size_t) size, 0.f);
+        combMask = size - 1;
+        combW = 0;
+        combUsed = false;
+    }
 
     // The rate the noise runs at, for the level and the hiss's corner.
     void setRate (float sampleRate) noexcept
@@ -346,9 +368,15 @@ public:
         held = 0.f;
         clock = 0.0;
         hp1 = hp2 = hp3 = 0.f;
+        if (combUsed)
+            std::fill (comb.begin(), comb.end(), 0.f);
+        combUsed = false;
+        apIn = apOut = 0.f;
     }
 
-    float process (int type, double clockInc) noexcept
+    // clockInc: the digital noise's clock in cycles a sample; pitchInc: the
+    // note's, for the tuned noise's period.
+    float process (int type, double clockInc, double pitchInc = 0.0) noexcept
     {
         const float white = rng.bipolar();
         switch (type)
@@ -381,6 +409,8 @@ public:
                 const float b = hp (hp2, a);
                 return hp (hp3, b) * hissGain;
             }
+            case 4:
+                return tuned (white * whiteGain * 0.7f, pitchInc);
             default:
                 return white * whiteGain * 0.7f;
         }
@@ -400,7 +430,40 @@ private:
         return x - lp;
     }
 
+    static constexpr float kTunedFeedback = 0.92f;
+    static constexpr float kTunedLowestHz = 20.f;
+
+    // y = x + g y[n - period]: the whole samples from the line, the rest by
+    // a first-order allpass (Thiran), whose gain is 1 at every frequency, so
+    // the loop keeps its feedback (and the comb its lines) up to the top at
+    // any rate; an interpolating read dulls the loop a little more on every
+    // pass and left the noise 2 dB down, more at 1x.
+    float tuned (float x, double pitchInc) noexcept
+    {
+        if (comb.empty())
+            return x;
+        combUsed = true;
+        const float maxPeriod = (float) (combMask - 4);
+        const float period = std::clamp (pitchInc > 0.0 ? (float) (1.0 / pitchInc) : maxPeriod, 2.f, maxPeriod);
+        const int whole = (int) (period - 0.5f);   // the allpass takes 0.5 .. 1.5 samples
+        const float frac = period - (float) whole;
+        const float a = (1.f - frac) / (1.f + frac);
+        const float d = comb[(size_t) ((combW - whole) & combMask)];
+        const float ap = flushDenormal (a * d + apIn - a * apOut);
+        apIn = d;
+        apOut = ap;
+        const float y = flushDenormal (x + kTunedFeedback * ap);
+        comb[(size_t) combW] = y;
+        combW = (combW + 1) & combMask;
+        return y * kTunedNorm;
+    }
+    static constexpr float kTunedNorm = 0.39191836f;   // sqrt (1 - 0.92^2)
+
     Rng rng;
+    std::vector<float> comb;
+    int combMask = 0, combW = 0;
+    float apIn = 0.f, apOut = 0.f;
+    bool combUsed = false;
     float b0 = 0, b1 = 0, b2 = 0, b3 = 0, b4 = 0, b5 = 0, b6 = 0;
     float held = 0.f;
     double clock = 0.0;

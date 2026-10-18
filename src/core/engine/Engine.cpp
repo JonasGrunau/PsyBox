@@ -109,6 +109,7 @@ void Engine::applyQuality()
     ctx.osFactor = osFactor;
     ctx.harmonicLimit = harmonicLimitFor (osFactor);
     dist.prepare (osRate);  // runs before decimation, so it is oversampled for free
+    distLate.setQuality (osFactor);   // anywhere else it oversamples itself, more than the voices
     decimL.reset();
     decimR.reset();
 }
@@ -894,7 +895,8 @@ void Engine::followQuality() noexcept
 // What the effects switched on in the patch delay the audio by, at the base
 // rate: the Phoscyon limiter's lookahead (3.3 ms), the Phoscyon distortion's
 // oversampling filters (~0.5 ms), our distortion's top restoration below
-// 60 kHz (one sample). It changes when one of them is switched.
+// 60 kHz when it is first (one sample) or its own oversampling filters
+// anywhere else (~1 ms). It changes when one of them is switched.
 int Engine::effectLatency() const noexcept
 {
     const auto atBase = [this] (int osSamples) { return (int) std::lround ((double) osSamples / osFactor); };

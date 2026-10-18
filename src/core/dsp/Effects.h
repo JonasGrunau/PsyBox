@@ -4,6 +4,7 @@
 
 #include "Common.h"
 #include "Filters.h"
+#include "Oversampling.h"
 #include "Shapers.h"
 
 #include <array>
@@ -226,6 +227,197 @@ private:
     FxSwitch sw;
     Glide rGain, rScale, rMix;
     int glideLen = 34;   // samples: 0.7 ms
+};
+
+// ---------------------------------------------------------------------------
+// The distortion anywhere but first in the chain (Jilax's clipper sits last,
+// after the compressor and the tails). The voices' oversampling is behind it
+// there, so it brings its own: up to at least 176.4 kHz times the voices'
+// factor (Eco 4x, Standard 8x, High 16x at 44.1 and 48 kHz; High is what
+// renders and bounces use), the Distortion at that rate, and back down. At
+// the base rate the hard clip of a dense stack folded its harmonics back as
+// inharmonic fizz, about 13 dB under the top octaves at Jilax's drives.
+//
+// The first stage up is a full low-pass (Fir2x), flat to 19.5 kHz (20 kHz
+// from 45 kHz up) and closed at the base Nyquist, 100 dB: the voices'
+// decimator leaves a little folded content between 20 kHz and Nyquist, which
+// a half-band lets through and the clip brings down as fizz (-30 dB on a
+// clipped saw, under -55 dB with this filter). The first stage down is shut
+// from fs - 19.5 kHz, so nothing the clip makes folds into the audio band.
+// The stages above 2x are half-bands that guard the band under the base
+// Nyquist. Not less than 4x: at 2x the shaper's pair average (ADAA) costs
+// 1.9 dB at 18 kHz, at 4x 0.45. Standard at 8x: the low cut's peak trim (a
+// second clip, of the spikes the cut raises) settles slowly with the rate,
+// its top octave 2 dB high at 4x and 0.7 dB at 8x against 16x on a
+// hard-driven stack. At 8x the whole costs about 2 % of a core.
+//
+// prepare() designs the first stage for the rate (it allocates: the message
+// thread); setQuality() only picks the stages, so a quality change on the
+// audio thread allocates nothing.
+//
+// On/off as for the others. The switch blends the input as it arrives with
+// the delayed, distorted signal, so nothing jumps when the delay comes and
+// goes (a switch while playing combs for its 10 ms).
+// ---------------------------------------------------------------------------
+class LateDistortion
+{
+public:
+    LateDistortion()
+    {
+        for (auto& c : ch)
+            for (size_t k = 1; k < kStages; ++k)
+            {
+                c.up[k].design (kQ[k], 100.0);
+                c.down[k].design (kQ[k], 0.0, 100.0);
+            }
+        for (auto& b : buf) b.assign ((size_t) (kChunk << kStages), 0.f);
+        tmp.assign ((size_t) (kChunk << kStages), 0.f);
+        prepare (48000.f);
+        setQuality (2);
+    }
+
+    // Designs the first stage for the base rate (allocates).
+    void prepare (float sampleRate)
+    {
+        fs = sampleRate;
+        const double pass = std::min (20000.0, 0.442 * fs);
+        for (auto& c : ch)
+        {
+            c.up1.design (pass, 0.5 * fs, 2.0 * fs, 100.0);
+            c.down1.design (pass, fs - pass, 2.0 * fs, 100.0);
+        }
+        setQuality (quality);
+    }
+
+    // engineFactor: the oversampling of the voices (1, 2 or 4).
+    void setQuality (int engineFactor) noexcept
+    {
+        quality = std::clamp (engineFactor, 1, 4);
+        const float want = 176400.f * (float) quality;
+        stages = 0;
+        while (stages < (int) kStages && fs * (float) (1 << stages) < 0.999f * want) ++stages;
+        inner.prepare (fs * (float) (1 << stages));
+        sw.prepare (fs);
+        reset();
+    }
+
+    void reset() noexcept
+    {
+        inner.reset();
+        for (auto& c : ch)
+        {
+            c.up1.reset();
+            c.down1.reset();
+            for (size_t k = 1; k < kStages; ++k)
+            {
+                c.up[k].reset();
+                c.down[k].reset();
+            }
+        }
+        sw.reset();
+    }
+
+    bool isActive (bool on) noexcept { return sw.isActive (on); }
+
+    // The oversampling factor it runs at (1 to 16).
+    int factor() const noexcept { return 1 << stages; }
+
+    // Samples the output lags the input while it runs, to the nearest. The
+    // first stage up delays by half its length at 2x, down by one 2x sample
+    // less (it ends on the odd phase of its pair); each half-band above by
+    // its q input samples up and 2q - 1 down.
+    int latencySamples() const noexcept
+    {
+        if (stages == 0) return inner.latencySamples();
+        double lat = 0.5 * ch[0].up1.delay2x() + 0.5 * (ch[0].down1.delay2x() - 1);
+        for (int k = 1; k < stages; ++k)
+            lat += (double) kQ[(size_t) k] / (double) (1 << k) + (double) (2 * kQ[(size_t) k] - 1) / (double) (2 << k);
+        return (int) std::lround (lat) + inner.latencySamples();
+    }
+
+    // The Distortion's controls (see there), with `on` for the switch.
+    void process (float* l, float* r, int n, int type, float driveDb, float toneHz, float mix, float lowCutHz,
+                  bool autoLevel, bool on) noexcept
+    {
+        if (! sw.wake (on, [this] { reset(); }))   // off for a while: start clean
+            return;
+        const int f = 1 << stages;
+        for (int pos = 0; pos < n; pos += kChunk)
+        {
+            const int m = std::min (kChunk, n - pos);
+            up (0, l + pos, m);
+            up (1, r + pos, m);
+            // always on inside: the switch here fades it
+            inner.process (buf[0].data(), buf[1].data(), m * f, type, driveDb, toneHz, mix, lowCutHz, autoLevel, true);
+            down (0, m);
+            down (1, m);
+            for (int i = 0; i < m; ++i)
+            {
+                const float fade = sw.tick (on);
+                l[pos + i] = FxSwitch::blend (l[pos + i], buf[0][(size_t) i], fade);
+                r[pos + i] = FxSwitch::blend (r[pos + i], buf[1][(size_t) i], fade);
+                if (sw.done (on))
+                {
+                    sw.stop();   // the rest of the block passes through
+                    return;
+                }
+            }
+        }
+    }
+
+private:
+    static constexpr size_t kStages = 4;
+    static constexpr std::array<int, kStages> kQ { 0, 6, 4, 4 };   // half-bands to 4x, 8x, 16x: 25, 17 and 17 taps
+    static constexpr int kChunk = 64;                            // base samples per pass
+
+    struct Chan
+    {
+        Fir2x up1, down1;   // base rate <-> 2x
+        std::array<HalfbandInterpolator, kStages> up;   // [1..]: 2x <-> 4x and on
+        std::array<HalfbandDecimator, kStages> down;
+    };
+    std::array<Chan, 2> ch;
+    std::array<std::vector<float>, 2> buf;   // the oversampled signal, then the wet one
+    std::vector<float> tmp;
+    Distortion inner;
+    FxSwitch sw;
+    float fs = 48000.f;
+    int stages = 0, quality = 2;
+
+    // m base samples up into buf[c], through tmp so the last stage lands there
+    void up (int c, const float* x, int m) noexcept
+    {
+        auto& s = ch[(size_t) c];
+        float* out = buf[(size_t) c].data();
+        if (stages == 0)
+        {
+            std::copy (x, x + m, out);
+            return;
+        }
+        const float* src = x;
+        int len = m;
+        for (int k = 0; k < stages; ++k)
+        {
+            float* dst = (stages - 1 - k) % 2 == 0 ? out : tmp.data();
+            for (int i = 0; i < len; ++i)
+            {
+                if (k == 0) s.up1.up (src[i], dst + 2 * i);
+                else s.up[(size_t) k].process (src[i], dst + 2 * i);
+            }
+            src = dst;
+            len *= 2;
+        }
+    }
+
+    // buf[c] back down to m base samples, in place
+    void down (int c, int m) noexcept
+    {
+        auto& s = ch[(size_t) c];
+        float* b = buf[(size_t) c].data();
+        for (int k = stages - 1; k >= 1; --k)
+            s.down[(size_t) k].process (b, b, m << k);
+        if (stages > 0) s.down1.down (b, b, m);
+    }
 };
 
 // ---------------------------------------------------------------------------

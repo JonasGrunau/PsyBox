@@ -293,18 +293,19 @@ TEST_CASE ("Noise keeps its base-rate level at 1x, 2x and 4x", "[osc][noise]")
     // factor: the level below 19 kHz (the band the decimator passes at 2x
     // and 4x). White and hiss used to fall 3 dB per doubling of the rate,
     // and the hiss rose by 7 dB between 1x and 4x.
-    for (int type : { 0, 1, 3 })
+    for (int type : { 0, 1, 3, 4 })
     {
         double levelDb[3] {};
         int k = 0;
         for (int factor : { 1, 2, 4 })
         {
             Noise noise;
+            noise.prepare (48000.f * 4.f);
             noise.setRate (48000.f * (float) factor);
             noise.reset (7);
             const size_t n = 1 << 16;
             std::vector<float> os (n * (size_t) factor), out (n);
-            for (auto& v : os) v = noise.process (type, 0.01);
+            for (auto& v : os) v = noise.process (type, 0.01, 51.913 / (48000.0 * factor));
             Decimator dec;
             dec.prepare ((int) n);
             dec.process (os.data(), out.data(), (int) n, factor);
@@ -318,6 +319,68 @@ TEST_CASE ("Noise keeps its base-rate level at 1x, 2x and 4x", "[osc][noise]")
         CHECK (std::abs (levelDb[0] - levelDb[1]) < 0.5);
         CHECK (std::abs (levelDb[2] - levelDb[1]) < 0.5);
     }
+}
+
+TEST_CASE ("Tuned noise sits on the note's harmonics, follows the pitch and keeps white's level", "[osc][noise]")
+{
+    // A comb on the note's period: the power between the harmonics is a
+    // small share (white noise has nearly all of it there), at the level of
+    // white noise, and tonal up top (spectral flatness 6-16 kHz).
+    const double fs = 96000.0, f0 = 51.913;
+    const size_t n = 1 << 16;
+    const auto run = [&] (int type, double hz, size_t len, uint64_t seed) {
+        Noise noise;
+        noise.prepare ((float) fs);
+        noise.setRate ((float) fs);
+        noise.reset (seed);
+        std::vector<float> x (len);
+        for (auto& v : x) v = noise.process (type, 0.01, hz / fs);
+        return x;
+    };
+    const auto flatness = [&] (const std::vector<float>& x) {
+        const auto db = testutil::spectrumDb (std::vector<float> (x.end() - (long) n, x.end()), n);
+        double logSum = 0.0, sum = 0.0;
+        int c = 0;
+        for (size_t i = (size_t) (6000.0 / fs * n); i < (size_t) (16000.0 / fs * n); ++i, ++c)
+        {
+            const double p = std::pow (10.0, db[i] / 10.0);
+            logSum += std::log (p);
+            sum += p;
+        }
+        return std::exp (logSum / c) / (sum / c);
+    };
+    const auto tuned = run (4, f0, 2 * n, 3), white = run (0, f0, 2 * n, 3);
+    const double offTuned = testutil::inharmonicDb (tuned, fs, f0, 200.0, 20000.0);
+    const double offWhite = testutil::inharmonicDb (white, fs, f0, 200.0, 20000.0);
+    const double level = testutil::rms (tuned, n) / testutil::rms (white, n);
+    INFO ("off the harmonics: tuned " << offTuned << " dB, white " << offWhite << " dB; level " << 20.0 * std::log10 (level)
+          << " dB; flatness 6-16 kHz tuned " << flatness (tuned) << ", white " << flatness (white));
+    CHECK (offTuned < -9.0);
+    CHECK (offWhite > -2.0);
+    CHECK (std::abs (20.0 * std::log10 (level)) < 1.0);
+    CHECK (flatness (tuned) < 0.2);
+    CHECK (flatness (white) > 0.45);
+
+    // an octave up halfway: the odd harmonics of the old note go (the lines
+    // are twice as wide in Hz an octave up, the same feedback over half the
+    // period, so a little more spills past the 4 bins either side)
+    Noise noise;
+    noise.prepare ((float) fs);
+    noise.setRate ((float) fs);
+    noise.reset (5);
+    std::vector<float> x (3 * n);
+    for (size_t i = 0; i < x.size(); ++i) x[i] = noise.process (4, 0.01, (i < n ? f0 : 2.0 * f0) / fs);
+    const double octaveUp = testutil::inharmonicDb (x, fs, 2.0 * f0, 200.0, 20000.0);
+    INFO ("an octave up: " << octaveUp << " dB off its harmonics");
+    CHECK (octaveUp < -7.0);
+
+    // a reset leaves nothing ringing from the last note
+    for (int i = 0; i < 4096; ++i) noise.process (4, 0.01, f0 / fs);
+    noise.reset (5);
+    const auto fresh = run (4, f0, 64, 5);
+    bool same = true;
+    for (size_t i = 0; i < fresh.size(); ++i) same = same && fresh[i] == noise.process (4, 0.01, f0 / fs);
+    CHECK (same);
 }
 
 TEST_CASE ("Hiss is white above ~10 kHz and falls steeply under it", "[osc][noise]")

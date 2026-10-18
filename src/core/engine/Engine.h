@@ -151,7 +151,7 @@ private:
     dsp::Decimator decimL, decimR;
 
     dsp::Distortion dist;
-    dsp::Distortion distLate;   // the distortion moved later in the chain, at the base rate
+    dsp::LateDistortion distLate;   // the distortion moved later in the chain, with its own oversampling
     dsp::Bitcrusher crush;
     dsp::FrequencyShifter fshift;
     dsp::Phaser phaser;

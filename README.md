@@ -324,8 +324,10 @@ Laid out like Serum. The tabs in the top bar switch views:
   order: badge, knobs, a display of what it does (curve, steps, echoes, reverb
   tail, stereo fan...), Mix and a power switch. Switched-off strips grey out.
   The order is saved with the patch and undoable; Generate starts a new patch
-  in the default order. Distortion first runs oversampled; later in the chain
-  it runs at the base rate (its shaper is anti-aliased).
+  in the default order. Distortion first runs at the voices' oversampled
+  rate; anywhere later in the chain it oversamples itself (Eco 4x, Standard
+  8x, High and every render 16x at 44.1 and 48 kHz), adding about 1-2 ms of
+  latency the host compensates.
 - **Matrix**: the 16 modulation routes as rows: source, amount, target.
 - **Arp** (Main, FX, Background): the step editor (play, note, accent and
   slide lanes, a ruler for the loop length), rate, octaves, gate, swing,
@@ -435,9 +437,14 @@ ceiling, without bringing the lows back. **Auto Level** measures the drive from 
 level instead of from full scale (an RMS follower in front of the shaper, the
 level given back after it): the clipper bites the same on a quiet patch as on a
 loud one, and a decaying sound keeps its decay instead of being held up at the
-clip level. When the distortion runs at the base rate (anywhere but first in the
-chain, or at 1x quality) a small filter undoes the dulling its anti-aliasing
-would cause (from -6 dB at 15 kHz to within 2 dB).
+clip level. First in the chain it runs on the voices' oversampled signal (at
+Eco's 1x a small filter undoes the dulling its anti-aliasing would cause, from
+-6 dB at 15 kHz to within 2 dB). Anywhere later it brings its own
+oversampling, at least 176 kHz: a steep low-pass up to 2x (flat to 19.5 kHz,
+shut at the base Nyquist, so nothing near Nyquist reaches the shaper), then
+half-bands. At the base rate a hard clip of a dense saw stack folded back
+inharmonic fizz about 13 dB under the top octaves; oversampled it is under
+-50 dB, and a render sounds like live playback.
 
 The compressor has two modes. **Normal** is a single-band, soft-knee compressor
 with a parallel mix. **Multi** is a three-band upward + downward compressor in
@@ -455,7 +462,12 @@ stereo out of mono voices (a short Haas side from the mid). Left + right
 never changes, so the mix stays mono-compatible.
 
 The Noise section's **Direct** switch adds the noise after the filters, for
-bright grit over a dark sound.
+bright grit over a dark sound. Its types: White, Pink, Digital (sample and
+hold clocked from the note), Hiss (white above 10 kHz) and **Tuned**: white
+noise through a comb on the note's period, so its energy sits on the note's
+harmonics, about 25 dB above the gaps between them. It brings air that stays
+tonal, the way a Serum noise oscillator tracking the pitch does, where white
+noise on top of a saw stack turns its top into hiss.
 
 ## Building
 

@@ -478,11 +478,11 @@ namespace
     // Every effect that fades with `on`, in the settings of a busy patch.
     struct AllFx
     {
-        static constexpr size_t kCount = 13;
+        static constexpr size_t kCount = 14;
         static const char* name (size_t i)
         {
             static const char* n[kCount] = { "Distortion", "Bitcrusher", "FrequencyShifter", "Phaser", "ChorusFlanger", "StereoDelay", "Reverb",
-                                             "PhosDistortion", "PhosEq", "PhosDelay", "PhosReverb", "PhosChorus", "PhosLimiter" };
+                                             "PhosDistortion", "PhosEq", "PhosDelay", "PhosReverb", "PhosChorus", "PhosLimiter", "LateDistortion" };
             return n[i];
         }
 
@@ -499,12 +499,13 @@ namespace
         PhosReverb phosReverb;
         PhosChorus phosChorus;
         PhosLimiter phosLimiter;
+        LateDistortion lateDist;
 
         void prepare (float fs)
         {
             dist.prepare (fs); crush.prepare (fs); shift.prepare (fs); phaser.prepare (fs); chorus.prepare (fs); delay.prepare (fs);
             reverb.prepare (fs); phosDist.prepare (fs); phosEq.prepare (fs); phosDelay.prepare (fs); phosReverb.prepare (fs);
-            phosChorus.prepare (fs); phosLimiter.prepare (fs);
+            phosChorus.prepare (fs); phosLimiter.prepare (fs); lateDist.prepare (fs); lateDist.setQuality (2);
         }
 
         bool active (size_t i, bool on)
@@ -523,7 +524,8 @@ namespace
                 case 9: return phosDelay.isActive (on);
                 case 10: return phosReverb.isActive (on);
                 case 11: return phosChorus.isActive (on);
-                default: return phosLimiter.isActive (on);
+                case 12: return phosLimiter.isActive (on);
+                default: return lateDist.isActive (on);
             }
         }
 
@@ -555,7 +557,8 @@ namespace
                     break;
                 }
                 case 11: phosChorus.process (l, r, n, 0.5f, 0.6f, 0.5f, 0.5f, 0.5f, 0.2f, 0.f, 0.5f, on); break;
-                default: phosLimiter.process (l, r, n, 0.5f, 8.f, 1.f, 100.f, -12.f, 0.f, true, on); break;
+                case 12: phosLimiter.process (l, r, n, 0.5f, 8.f, 1.f, 100.f, -12.f, 0.f, true, on); break;
+                default: lateDist.process (l, r, n, 1, 18.f, 12000.f, 1.f, 150.f, true, on); break;
             }
         }
     };
@@ -748,6 +751,154 @@ TEST_CASE ("Distortion and the limiter report the samples they delay by", "[fx][
             INFO ("fs " << fs << ": peak " << peakAt (l) - 1024 << ", reported " << d.latencySamples());
             CHECK (std::abs (peakAt (l) - 1024 - d.latencySamples()) <= 1);
         }
+    }
+    SECTION ("LateDistortion's half-bands, at the rate the quality asks for")
+    {
+        for (float fs : { 44100.f, 48000.f, 96000.f, 192000.f })
+            for (int quality : { 1, 2, 4 })
+            {
+                // (at 192 kHz the 20 kHz tone filter's own delay, 2 to 3
+                // samples, moves the peak: that is the sound, not latency)
+                const int slack = fs > 100000.f ? 3 : 1;
+                LateDistortion d;
+                d.prepare (fs);
+                d.setQuality (quality);
+                // at least 176.4 kHz times the voices' factor, at most 16x
+                int want = 1;
+                while (want < 16 && fs * (float) want < 176400.f * (float) quality * 0.999f) want *= 2;
+                CHECK (d.factor() == want);
+                std::vector<float> l (4096, 0.f), r (4096, 0.f);
+                d.process (l.data(), r.data(), 1024, 1, 0.f, 20000.f, 1.f, 20.f, false, true);
+                l[1024] = r[1024] = 0.01f;   // small: the clipper is linear
+                d.process (l.data() + 1024, r.data() + 1024, 3072, 1, 0.f, 20000.f, 1.f, 20.f, false, true);
+                INFO ("fs " << fs << " quality " << quality << ": peak " << peakAt (l) - 1024 << ", reported " << d.latencySamples());
+                CHECK (std::abs (peakAt (l) - 1024 - d.latencySamples()) <= slack);
+            }
+    }
+}
+
+namespace
+{
+    // A saw on f0 with every harmonic from the 3rd to 20 kHz, high-passed
+    // around 200 Hz like a Jilax stack in front of its clipper.
+    std::vector<float> fullSaw (int n, double fs, double f0)
+    {
+        std::vector<float> x ((size_t) n);
+        for (int k = 3; k * f0 < 20000.0; ++k)
+        {
+            const double f = k * f0, hp = std::pow (f / 200.0, 4.0), a = 0.2 * std::sqrt (hp / (1.0 + hp)) / k;
+            for (int i = 0; i < n; ++i)
+                x[(size_t) i] += (float) (a * std::sin (2.0 * std::numbers::pi * f * i / fs + 0.7 * k));
+        }
+        return x;
+    }
+
+} // namespace
+
+TEST_CASE ("A distortion late in the chain runs oversampled: a hard-clipped saw stack doesn't fold back", "[fx][alias]")
+{
+    // Jilax's clipper: hard, Auto Level, 19-27 dB of drive, a low cut under
+    // the voice's high-pass, last in the chain. At the base rate the top
+    // octaves came back about 13 dB under the harmonics.
+    const double fs = 44100.0, f0 = 51.913;   // G#1
+    const int n = 1 << 17;
+    const auto src = fullSaw (n, fs, f0);
+    const auto run = [&] (int quality) {
+        auto l = src, r = src;
+        LateDistortion d;
+        d.prepare ((float) fs);
+        d.setQuality (quality);
+        for (int i = 0; i < n; i += 256)
+            d.process (l.data() + i, r.data() + i, std::min (256, n - i), 1, 23.f, 20000.f, 1.f, 140.f, true, true);
+        return l;
+    };
+    auto base = src, baseR = src;
+    Distortion old;
+    old.prepare ((float) fs);
+    old.process (base.data(), baseR.data(), n, 1, 23.f, 20000.f, 1.f, 140.f, true);
+    const double before = testutil::inharmonicDb (base, fs, f0, 6000.0, 20000.0);
+    const double eco = testutil::inharmonicDb (run (1), fs, f0, 6000.0, 20000.0);
+    const double standard = testutil::inharmonicDb (run (2), fs, f0, 6000.0, 20000.0);
+    const auto highOut = run (4);
+    const double high = testutil::inharmonicDb (highOut, fs, f0, 6000.0, 20000.0);
+    const double highMid = testutil::inharmonicDb (highOut, fs, f0, 2000.0, 6000.0);
+    INFO ("6-20 kHz off the harmonics: base rate " << before << " dB, Eco " << eco << ", Standard " << standard << ", High " << high
+          << "; 2-6 kHz at High " << highMid);
+    CHECK (before > -20.0);    // what it was
+    CHECK (eco < -42.0);       // 4x
+    CHECK (standard < -50.0);  // 8x, live by default
+    CHECK (high < -50.0);      // 16x, renders and bounces
+    CHECK (highMid < -50.0);
+}
+
+TEST_CASE ("A late distortion keeps the top: flat to 18 kHz when it doesn't clip", "[fx]")
+{
+    // The half-bands and the shaper's pair average at the oversampled rate,
+    // against the tone filter alone (a 2-pole Butterworth at 20 kHz): within
+    // 0.6 dB from 1 to 18 kHz at every quality (the pair average is 0.45 dB
+    // down at 18 kHz at 4x).
+    for (float fs : { 44100.f, 48000.f })
+        for (int quality : { 1, 2, 4 })
+        {
+            LateDistortion d;
+            d.prepare (fs);
+            d.setQuality (quality);
+            const int n = 1 << 14;
+            std::vector<float> l ((size_t) n, 0.f), r ((size_t) n, 0.f);
+            l[100] = r[100] = 0.01f;
+            d.process (l.data(), r.data(), n, 0, 0.f, 20000.f, 1.f, 20.f, false, true);   // soft at 0 dB: linear this small
+            std::vector<std::complex<double>> a ((size_t) n);
+            for (int i = 0; i < n; ++i) a[(size_t) i] = l[(size_t) i];
+            testutil::fft (a);
+            const double ref = std::abs (a[(size_t) std::lround (1000.0 * n / fs)]);
+            for (double f : { 5000.0, 10000.0, 14000.0, 16000.0, 18000.0 })
+            {
+                const double got = 20.0 * std::log10 (std::abs (a[(size_t) std::lround (f * n / fs)]) / ref);
+                const double tone = -10.0 * std::log10 (1.0 + std::pow (f / 20000.0, 4.0));
+                INFO ("fs " << fs << " quality " << quality << " at " << f << " Hz: " << got << " dB, the tone filter alone " << tone);
+                CHECK (std::abs (got - tone) < 0.6);
+            }
+        }
+}
+
+TEST_CASE ("A late distortion sounds the same live and in a render", "[fx][offline]")
+{
+    // Standard (8x, live) and High (16x, renders): the same octave bands
+    // within a tenth of a dB up to 8 kHz on a full saw stack hard-clipped as
+    // hard as Jilax draws it (20 dB over its own level), and within half a
+    // dB from 8 to 16 kHz: the low cut's peak trim (a second clip, of the
+    // spikes the cut raises) settles slowly with the rate. On generated
+    // Jilax shots the top octave is 0.03 dB apart (0.2 at worst).
+    const double fs = 48000.0;
+    const int n = 1 << 16;
+    const auto src = fullSaw (n, fs, 41.2);
+    std::array<std::vector<float>, 2> out;
+    for (int k = 0; k < 2; ++k)
+    {
+        auto l = src, r = src;
+        LateDistortion d;
+        d.prepare ((float) fs);
+        d.setQuality (k == 0 ? 2 : 4);
+        for (int i = 0; i < n; i += 64)
+            d.process (l.data() + i, r.data() + i, 64, 1, 20.f, 19000.f, 0.95f, 140.f, true, true);
+        out[(size_t) k] = l;
+    }
+    double edge = 125.0;
+    while (edge < 16000.0)
+    {
+        const double a = 10.0 * std::log10 ([&] {
+            const auto db = testutil::spectrumDb (std::vector<float> (out[0].end() - 32768, out[0].end()), 32768);
+            double s = 0.0;
+            for (size_t i = 0; i < db.size(); ++i) { const double f = (double) i * fs / 32768.0; if (f >= edge && f < 2 * edge) s += std::pow (10.0, db[i] / 10.0); }
+            return s; }());
+        const double b = 10.0 * std::log10 ([&] {
+            const auto db = testutil::spectrumDb (std::vector<float> (out[1].end() - 32768, out[1].end()), 32768);
+            double s = 0.0;
+            for (size_t i = 0; i < db.size(); ++i) { const double f = (double) i * fs / 32768.0; if (f >= edge && f < 2 * edge) s += std::pow (10.0, db[i] / 10.0); }
+            return s; }());
+        INFO (edge << "-" << 2 * edge << " Hz: live " << a << " dB, render " << b);
+        CHECK (std::abs (a - b) < (edge < 8000.0 ? 0.1 : 0.5));
+        edge *= 2.0;
     }
 }
 

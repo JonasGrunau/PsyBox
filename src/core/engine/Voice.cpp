@@ -11,6 +11,7 @@ void Voice::prepare (float baseRate, float maxOsRate)
     f2.prepare (maxOsRate);
     f1R.prepare (maxOsRate);
     f2R.prepare (maxOsRate);
+    noise.prepare (maxOsRate);
     setRates (baseRate, maxOsRate);
     for (auto& w : wtA) w.setBank (&WavetableBank::shared());
     for (auto& w : wtB) w.setBank (&WavetableBank::shared());
@@ -496,7 +497,7 @@ void Voice::render (float* outL, float* outR, int chunkOffsetBase, int nBase, co
             float direct = 0.f;
             if (lvlNoise > 0.f)
             {
-                const float nz = noise.process (noiseType, incA * 4.0) * lvlNoise;
+                const float nz = noise.process (noiseType, incA * 4.0, incA) * lvlNoise;
                 if (noiseDirect) direct = nz;
                 else { x += nz; xR += nz; }
             }

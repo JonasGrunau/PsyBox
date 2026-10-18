@@ -18,7 +18,7 @@ namespace choices
                                                "Digital Grit", "Sync Sweep", "Bell Spectra", "Acid Morph" };
     const std::vector<std::string> subOct { "-1 Oct", "-2 Oct" };
     const std::vector<std::string> subShape { "Sine", "Triangle", "Square" };
-    const std::vector<std::string> noiseType { "White", "Pink", "Digital", "Hiss" };
+    const std::vector<std::string> noiseType { "White", "Pink", "Digital", "Hiss", "Tuned" };
     const std::vector<std::string> penvDest { "A + B", "Osc A", "Osc B" };
     const std::vector<std::string> filterType { "Off", "LP 6", "LP 12", "LP 18", "LP 24", "HP 6", "HP 12", "HP 18", "HP 24",
                                                 "BP 12", "BP 24", "Notch", "Ladder LP 12", "Ladder LP 24", "Ladder HP",

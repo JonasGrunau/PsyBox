@@ -160,6 +160,106 @@ private:
     int q = 0, histLen = 0, pos = 0;
 };
 
+// A linear-phase low-pass for a 2x rate change, designed from its pass and
+// stop edges with a Kaiser window, in polyphase form: the way up computes
+// both phases of each input sample, the way down one output per input pair.
+// Unlike a half-band (whose edges sit symmetric about the base Nyquist) its
+// stop edge can sit at the base Nyquist: in front of a clipper nothing
+// between 20 kHz and Nyquist gets through (the voices' decimator leaves a
+// little there, folded, and a clip brings it down as inharmonic fizz), and
+// on the way down nothing above fs - 20 kHz folds into the audio band.
+class Fir2x
+{
+public:
+    // Edges in Hz at the doubled rate `rate2x`; allocates.
+    void design (double passHz, double stopHz, double rate2x, double attenuationDb)
+    {
+        const double dw = 2.0 * kPiD * (stopHz - passHz) / rate2x;
+        int n = (int) std::ceil ((attenuationDb - 7.95) / (2.285 * dw)) + 1;
+        n |= 1;   // odd: the delay is a whole number of samples at the doubled rate
+        const double beta = 0.1102 * (attenuationDb - 8.7);
+        const double fc = 0.5 * (passHz + stopHz) / rate2x;
+        const auto i0 = [] (double x) {
+            double sum = 1.0, term = 1.0;
+            for (int k = 1; k < 60; ++k)
+            {
+                term *= (x / (2.0 * k)) * (x / (2.0 * k));
+                sum += term;
+            }
+            return sum;
+        };
+        std::vector<double> h ((size_t) n);
+        double dc = 0.0;
+        const int m = (n - 1) / 2;
+        for (int i = 0; i < n; ++i)
+        {
+            const int k = i - m;
+            const double sinc = k == 0 ? 2.0 * fc : std::sin (2.0 * kPiD * fc * k) / (kPiD * k);
+            const double r = (2.0 * i) / (n - 1) - 1.0;
+            h[(size_t) i] = sinc * i0 (beta * std::sqrt (std::max (0.0, 1.0 - r * r))) / i0 (beta);
+            dc += h[(size_t) i];
+        }
+        taps.assign ((size_t) n, 0.f);
+        even.clear();
+        odd.clear();
+        for (int i = 0; i < n; ++i)
+        {
+            taps[(size_t) i] = (float) (h[(size_t) i] / dc);
+            (i % 2 == 0 ? even : odd).push_back (2.f * taps[(size_t) i]);   // the way up: gain 2 per phase
+        }
+        half = m;
+        histLen = n + 8;
+        hist.assign ((size_t) histLen * 2, 0.f);
+        pos = 0;
+    }
+
+    void reset() noexcept
+    {
+        std::fill (hist.begin(), hist.end(), 0.f);
+        pos = 0;
+    }
+
+    // Delay at the doubled rate: (length - 1) / 2.
+    int delay2x() const noexcept { return half; }
+
+    // One base-rate sample in, two out.
+    void up (float in, float* out2) noexcept
+    {
+        push (in);
+        const float* x = hist.data() + pos + histLen - 1;   // x[0] newest
+        float a = 0.f, b = 0.f;
+        for (size_t j = 0; j < even.size(); ++j) a += even[j] * x[-(int) j];
+        for (size_t j = 0; j < odd.size(); ++j) b += odd[j] * x[-(int) j];
+        out2[0] = a;
+        out2[1] = b;
+    }
+
+    // numOut outputs from 2 * numOut inputs (out may alias in).
+    void down (const float* in, float* out, int numOut) noexcept
+    {
+        for (int i = 0; i < numOut; ++i)
+        {
+            push (in[2 * i]);
+            push (in[2 * i + 1]);
+            const float* x = hist.data() + pos + histLen - 1;
+            float acc = 0.f;
+            for (size_t k = 0; k < taps.size(); ++k) acc += taps[k] * x[-(int) k];
+            out[i] = acc;
+        }
+    }
+
+private:
+    std::vector<float> taps, even, odd, hist;
+    int half = 0, histLen = 0, pos = 0;
+
+    void push (float v) noexcept
+    {
+        hist[(size_t) pos] = v;
+        hist[(size_t) (pos + histLen)] = v;
+        pos = (pos + 1) % histLen;
+    }
+};
+
 // Decimates a block rendered at 1x, 2x or 4x down to the base rate.
 class Decimator
 {
