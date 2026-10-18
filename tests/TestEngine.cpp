@@ -148,7 +148,7 @@ TEST_CASE ("Every category generates playable, finite, non-silent patches", "[en
             const auto cat = (Category) c;
             // energy sounds are one gesture per note: hold one through its
             // length and a second of tail (a one-beat shot would drown in six)
-            const bool sustained = cat == Category::Atmos || cat == Category::Drone;
+            const bool sustained = cat == Category::Atmos || cat == Category::Drone || cat == Category::Pad;
             const double length = p.geti (P::EnergyMode) == (int) EnergyMode::Time ? (double) p.get (P::EnergySec)
                                                                                    : energyBarsValue (p.geti (P::EnergyBars)) * 4.0 * 60.0 / 145.0;
             const Render out = hasLength (cat) ? hold (p, std::min (6.0, length + 1.0))
@@ -157,6 +157,22 @@ TEST_CASE ("Every category generates playable, finite, non-silent patches", "[en
             CHECK (out.preClip <= 1.0f);   // leveled patches stay under 0 dBFS before the soft clip too
             CHECK (out.rmsDb > -60.0);
         }
+}
+
+TEST_CASE ("A perc hit dies away while its key is still held", "[engine][generator][perc]")
+{
+    Generator g;
+    for (uint32_t seed = 1; seed <= 24; ++seed)
+    {
+        const auto p = g.generate (Category::Perc, seed, ParamState(), LockSet());
+        const Render out = hold (p, 3.0);
+        double tail = 0.0;
+        const size_t from = (size_t) (2.5 * 48000.0);
+        for (size_t i = from; i < out.l.size(); ++i) tail = std::max (tail, (double) std::abs (out.l[i]));
+        INFO ("seed " << seed << ": peak " << out.peak << ", tail " << tail);
+        CHECK (out.peak > 0.01f);
+        CHECK (tail < out.peak * 0.01);   // 40 dB down two and a half seconds on
+    }
 }
 
 TEST_CASE ("All three quality settings render the same patch", "[engine]")

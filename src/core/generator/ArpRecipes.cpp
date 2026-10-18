@@ -255,6 +255,38 @@ namespace
         b.pick (P::ArpOctaves, { 1, 2 }, { 0.7f, 0.3f });
         gate (b, 1.2f, 1.5f);
     }
+
+    // Pads ring into each other: slow steps, gates past the next step.
+    void pad (B& b)
+    {
+        b.pick (P::ArpDiv, { D1_4, D1_2, D1_1, D1_8 }, { 0.35f, 0.3f, 0.2f, 0.15f });
+        b.pick (P::ArpMode, { UpDown, Order, Random }, { 0.4f, 0.4f, 0.2f });
+        b.pick (P::ArpOctaves, { 1, 2 }, { 0.7f, 0.3f });
+        gate (b, 1.f, 1.5f);
+    }
+
+    // ---- sequences ---------------------------------------------------------------
+
+    // Straight sixteenths in played order: the note lane carries the line,
+    // the gate shapes the notes (a sixteenth or less).
+    void psyArp (B& b)
+    {
+        b.pick (P::ArpDiv, { D1_16 });
+        b.pick (P::ArpMode, { Order });
+        b.pick (P::ArpOctaves, { 1 });
+        gate (b, 0.45f, 0.95f);
+        swing (b, 0.04f);
+    }
+
+    // FM riffs roll on sixteenths mostly, now and then on eighths or triplets.
+    void fm (B& b)
+    {
+        b.pick (P::ArpDiv, { D1_16, D1_8, D1_16T }, { 0.7f, 0.15f, 0.15f });
+        b.pick (P::ArpMode, { Order });
+        b.pick (P::ArpOctaves, { 1 });
+        gate (b, 0.3f, 0.85f);
+        swing (b, 0.06f);
+    }
     // ---- patterns ---------------------------------------------------------------
     //
     // Patterns are composed, not rolled per step: each category has a small
@@ -468,11 +500,14 @@ namespace
     using Degrees = std::array<int, kArpSteps>;
 
     // The scale set next to the Arp switch when a key is set, otherwise one
-    // of the five psy scales (always drawn, so seeds stay put either way).
+    // of the five psy scales (always drawn, so seeds stay put either way),
+    // weighted as the Serum preset corpus's arp banks and notes use them:
+    // Phrygian and Phrygian dominant most, harmonic minor, natural minor,
+    // Dorian seldom.
     Scale scale (B& b)
     {
         const int all[] = { 0, 1, 2, 3, 4 };
-        const int drawn = choose (b, all, { 0.35f, 0.25f, 0.15f, 0.15f, 0.1f });
+        const int drawn = choose (b, all, { 0.35f, 0.15f, 0.2f, 0.25f, 0.05f });
         const auto& st = b.state();
         return arpScaleSteps (st.geti (P::ArpKey) > 0 ? st.geti (P::ArpScale) : drawn);
     }
@@ -712,6 +747,35 @@ namespace
             if (p.has (i % std::clamp (p.length, 1, kArpSteps), On))
                 d[(size_t) i] = roots[(size_t) sec] + shape.tones[(size_t) (n++ % shape.size)];
         }
+    }
+
+    // The psy sequence line, as the Serum preset corpus's arp clips play it:
+    // a run of sixteenths with an octave pedal under it (about a third of the
+    // notes, on any sixteenth of the beat) and between the pedal notes a
+    // melody that walks the scale by steps, leans on the key, the b2 and the
+    // third, and leaps to the fifth, b6, seventh or octave. One bar loops.
+    Motion pedalMotion (int lo, int hi)
+    {
+        return { 0.12f, 0.5f, { { 0, 4.f }, { 1, 2.f }, { 2, 1.3f }, { 4, 1.3f }, { 5, 1.f }, { 6, 1.2f }, { 7, 1.f }, { -1, 0.8f } }, lo, hi };
+    }
+
+    // `pedal` is the share of played steps that go to the pedal (`at`: the
+    // octave below the key, or the key itself for a line that must stay
+    // above the bass); the others move the melody on.
+    void pedalLine (B& b, const ArpPattern& p, Degrees& d, float pedal, const Motion& m, int at = -7)
+    {
+        const int len = std::clamp (p.length, 1, kArpSteps);
+        int note = 0;
+        for (int i = 0; i < len; ++i)
+        {
+            const bool low = b.chance (pedal);
+            const int next = move (b, note, m);
+            d[(size_t) i] = i > 0 ? d[(size_t) i - 1] : 0;
+            if (! p.has (i, On)) continue;
+            if (low) d[(size_t) i] = at;
+            else d[(size_t) i] = note = next;
+        }
+        for (int i = len; i < kArpSteps; ++i) d[(size_t) i] = d[(size_t) (i % len)];
     }
 
     // ---- lines -----------------------------------------------------------------
@@ -967,6 +1031,18 @@ namespace
                 if (p.has (i, On) && p.has ((i + 1) % p.length, On)) p.setFlag (i, Slide, true);
         if (b.chance (0.3f)) p.setFlag (0, Accent, true);
 
+        // a quarter of them run the corpus's sequence line over the octave pedal instead
+        const bool pedal = b.chance (0.25f);
+        if (pedal)
+        {
+            const Scale s = scale (b);
+            Degrees d {};
+            pedalLine (b, p, d, b.rnd (0.25f, 0.4f), pedalMotion (-2, 9));
+            setNotes (p, s, d);
+            write (b, p);
+            return;
+        }
+
         const std::array<int, 4> figures[] = { { 0, 2, 4, 7 }, { 7, 4, 2, 0 }, { 0, 4, 7, 4 }, { 0, 2, 4, 2 }, { 0, 7, 4, 2 },
                                                { 0, 1, 0, -1 }, { 4, 2, 1, 0 }, { 0, 0, 7, 0 }, { 0, 4, 2, 4 } };
         const float fw[] = { 0.15f, 0.12f, 0.12f, 0.1f, 0.12f, 0.1f, 0.1f, 0.09f, 0.1f };
@@ -1014,6 +1090,17 @@ namespace
 
         const Motion m { 0.15f, 0.4f, { { 0, 3.f }, { 4, 2.5f }, { 2, 2.f }, { 7, 2.f }, { 3, 1.f }, { 5, 0.8f }, { 6, 0.6f }, { -1, 0.8f }, { -3, 0.8f } }, -3, 9 };
         const Scale s = scale (b);
+        // some sing over the octave pedal, the corpus's sequence line
+        const bool pedal = b.chance (0.15f);
+        if (pedal)
+        {
+            Degrees d {};
+            pedalLine (b, p, d, b.rnd (0.2f, 0.35f), pedalMotion (-3, 9));
+            enliven (b, p, d, lively (b), m);
+            setNotes (p, s, d);
+            write (b, p);
+            return;
+        }
         auto d = line (b, p, 8, m);
         const auto how = answerOf (b, 0.2f, 0.5f, 0.3f);
         const int shifts[] = { 1, 2, -1, 3 };
@@ -1088,6 +1175,14 @@ namespace
         if (b.chance (0.3f))
             for (int i = p.length - 1; i >= 0; --i)
                 if (p.has (i, On)) { d[(size_t) i] += 7; break; }
+        // now and then the chord pumps down to the octave below, the corpus's pedal
+        const bool pump = b.chance (0.1f);
+        int k = 0;
+        for (int i = 0; i < p.length; ++i)
+        {
+            const bool low = b.chance (0.35f);
+            if (pump && p.has (i, On) && k++ > 0 && low) d[(size_t) i] -= 7;
+        }
         accentChords (b, p, p);
         enliven (b, p, d, lively (b), Motion { 0.f, 0.3f, { { 0, 2.f }, { 2, 2.f }, { 4, 2.f }, { -1, 1.f }, { 7, 1.f }, { 1, 0.6f } }, -3, 9 });
         setNotes (p, scale (b), d);
@@ -1198,9 +1293,17 @@ namespace
 
         const Motion m { 0.4f, 0.1f, { { 0, 4.f }, { 7, 3.f }, { 4, 2.f }, { -3, 1.f }, { 9, 0.6f }, { 1, 0.8f }, { -1, 0.8f }, { 2, 0.6f } }, -3, 9 };
         const Scale s = scale (b);
-        auto d = line (b, p, 8, m);
-        const int shifts[] = { 4, 3, -1, 1 };
-        answer (b, p, d, 8, m, answerOf (b, 0.3f, 0.5f, 0.2f), choose (b, shifts, { 0.35f, 0.3f, 0.2f, 0.15f }));
+        Degrees d {};
+        // a fifth of them hammer the key between the notes of a sequence line
+        // (the corpus's pedal, kept on the key so it stays above the bass)
+        const bool pedal = b.chance (0.2f);
+        if (pedal) pedalLine (b, p, d, b.rnd (0.3f, 0.5f), pedalMotion (-1, 9), 0);
+        else
+        {
+            d = line (b, p, 8, m);
+            const int shifts[] = { 4, 3, -1, 1 };
+            answer (b, p, d, 8, m, answerOf (b, 0.3f, 0.5f, 0.2f), choose (b, shifts, { 0.35f, 0.3f, 0.2f, 0.15f }));
+        }
         enliven (b, p, d, 3, m);
         setNotes (p, s, d);
         write (b, p);
@@ -1388,7 +1491,83 @@ namespace
         write (b, p);
     }
 
+    // ---- sequences ------------------------------------------------------------------
+
+    // Psy Arp, after the corpus's sequences: every sixteenth plays in most (a
+    // rest or two in some, a 12-step loop now and then), a note in twelve
+    // held into the next step, the line over the octave pedal. Few accents:
+    // none, the beat, or the offbeats.
+    void psyArpPattern (B& b)
+    {
+        const char* bars[] = { "xxxx", "xxxxxxxxxxxxxxx-", "xxx-xxxxxxx-xxxx", "xxxxxxx-xxxxxxx-", "xx-xxxxxxx-xxxxx", "x-xxxxxxxxxxx-xx" };
+        auto p = ArpPattern::parse (choose (b, bars, { 0.55f, 0.1f, 0.1f, 0.1f, 0.08f, 0.07f }));
+        if (b.chance (0.1f)) p.length = 12;
+        const int rule = b.weighted ({ 0.5f, 0.25f, 0.25f });
+        if (rule == 1) accent (p, Accents::FigureStart, 0, 4);
+        else if (rule == 2) accent (p, Accents::Offbeats);
+        for (int i = 0; i + 1 < p.length; ++i)
+        {
+            const bool tie = b.chance (0.08f);
+            if (tie && p.has (i, On) && p.has (i + 1, On)) p.setFlag (i, Slide, true);
+        }
+
+        const Scale s = scale (b);
+        Degrees d {};
+        pedalLine (b, p, d, b.rnd (0.22f, 0.4f), pedalMotion (-2, 9));
+        // a tie holds its note
+        for (int i = 0; i + 1 < kArpSteps; ++i)
+            if (p.has (i, Slide)) d[(size_t) i + 1] = d[(size_t) i];
+        setNotes (p, s, d);
+        write (b, p);
+    }
+
+    // FM lines roll like a psy riff: an 8-step motif (a rest or two) and its
+    // answer, accents on the offbeats or three against four, a slide now and
+    // then; the notes run over the octave pedal, closer to the key than an
+    // arp's.
+    void fmPattern (B& b)
+    {
+        const char* motifs[] = { "xxxxxxxx", "xxx-xxxx", "xxxxx-xx", "xx-xxxxx", "x-xxxxxx", "xx-xx-xx", "xxx-xx-x", "x-xx-xxx" };
+        const float w[] = { 1.2f, 1.f, 1.f, 1.f, 1.f, 0.8f, 0.8f, 0.8f };
+        const std::string a = choose (b, motifs, w);
+        const int shape = b.weighted ({ 0.35f, 0.25f, 0.2f, 0.2f });
+        const std::string second = shape == 0 ? vary (b, a)
+                                 : shape == 1 ? otherThan (b, motifs, w, a)
+                                 : shape == 2 ? a : fill (b, a);
+        auto p = ArpPattern::parse (a + second);
+        if (b.chance (0.12f)) p.length = 12;
+        const int rule = b.weighted ({ 0.4f, 0.35f, 0.25f });
+        if (rule == 0) accent (p, Accents::Offbeats);
+        else if (rule == 1) accent (p, Accents::EveryThird, integer (b, 0, 2));
+        slideOnWeakSteps (b, p, 2, 0.12f);
+
+        const Scale s = scale (b);
+        const auto m = pedalMotion (-1, 7);
+        Degrees d {};
+        pedalLine (b, p, d, b.rnd (0.3f, 0.5f), m);
+        enliven (b, p, d, 3, m);
+        setNotes (p, s, d);
+        write (b, p);
+    }
+
     // ---- beds ---------------------------------------------------------------------
+
+    // Pads hold chords: one chord tone per step (the arp plays one note at
+    // a time), mostly tied into the next so the voices ring on, the root
+    // walking a progression over the pattern's quarters or halves.
+    void padPattern (B& b)
+    {
+        const char* rhythms[] = { "s", "x", "xs", "x-xs", "ss-x", "x--x--x-", "xsxs", "sx" };
+        auto p = ArpPattern::parse (choose (b, rhythms, { 0.2f, 0.12f, 0.14f, 0.1f, 0.1f, 0.12f, 0.1f, 0.12f }));
+        const int lengths[] = { 16, 8, 12 };
+        p.length = choose (b, lengths, { 0.5f, 0.35f, 0.15f });
+        const auto roots = moving (b);
+        Degrees d {};
+        brokenChords (p, d, b.chance (0.35f) ? twoChords (roots) : roots, chordShape (b), std::max (1, p.length / 4), b.chance (0.6f));
+        enliven (b, p, d, std::max (4, lively (b)), Motion { 0.f, 0.4f, { { 0, 2.f }, { 2, 2.f }, { 4, 2.f }, { 7, 1.5f }, { -1, 1.f } }, -3, 9 });
+        setNotes (p, scale (b), d);
+        write (b, p);
+    }
 
     // Slow broken chords that ring into each other (the gates overlap),
     // the root walking a progression; some figures tie a note into the next
@@ -1435,8 +1614,8 @@ namespace
         write (b, p);
     }
 
-    // Basses, kicks and energy sounds never get an arp (hasArp): you play
-    // their rhythm, or they are one gesture over their length.
+    // Basses, kicks, percs and energy sounds never get an arp (hasArp): you
+    // play their rhythm, or they are one gesture over their length.
     void noArp (B&) {}
 } // namespace
 
@@ -1481,6 +1660,10 @@ Recipe arpPatternRecipeFor (Category c) noexcept
         case Category::Glitch:      return glitchPattern;
         case Category::Atmos:       return atmosPattern;
         case Category::Drone:       return dronePattern;
+        case Category::PsyArp:      return psyArpPattern;
+        case Category::Fm:          return fmPattern;
+        case Category::Pad:         return padPattern;
+        case Category::Perc:
         case Category::Riser:
         case Category::Uplifter:
         case Category::Downlifter:
@@ -1529,6 +1712,10 @@ Recipe arpRecipeFor (Category c) noexcept
         case Category::Drone:       return drone;
         case Category::Gate:        return gated;
         case Category::Glitch:      return glitch;
+        case Category::PsyArp:      return psyArp;
+        case Category::Fm:          return fm;
+        case Category::Pad:         return pad;
+        case Category::Perc:
         case Category::Riser:
         case Category::Downlifter:
         case Category::NoiseFx:

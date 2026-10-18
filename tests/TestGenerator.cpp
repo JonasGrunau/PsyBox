@@ -326,7 +326,9 @@ TEST_CASE ("The sidebar lists sections in order, alphabetical inside each", "[ge
     {
         const auto g = info[(size_t) c].group;
         INFO (info[(size_t) c].name);
-        CHECK ((g == CategoryGroup::Kick) == (familyOf ((Category) c) == Family::Kick));
+        // the kicks' tab (Drums) holds the percs too, a synth sound
+        if (familyOf ((Category) c) == Family::Kick) CHECK (g == CategoryGroup::Kick);
+        if (g == CategoryGroup::Kick) CHECK ((familyOf ((Category) c) == Family::Kick || (Category) c == Category::Perc));
         CHECK ((g == CategoryGroup::Bass) == (familyOf ((Category) c) == Family::Bass));
     }
 
@@ -374,13 +376,15 @@ TEST_CASE ("The sidebar tabs hold the sounds they are named for", "[generator][c
         const auto& l = categoriesIn (g);
         return std::find (l.begin(), l.end(), c) != l.end();
     };
-    for (auto c : { GhostStab, Grid, Jilax, PsyLead, Stab, Pluck }) CHECK (in (CategoryGroup::Main, c));
-    CHECK (categoriesIn (CategoryGroup::Main).size() == 6);
+    for (auto c : { GhostStab, Grid, Jilax, PsyLead, Stab, Pluck, PsyArp, Fm }) CHECK (in (CategoryGroup::Main, c));
+    CHECK (categoriesIn (CategoryGroup::Main).size() == 8);
     for (auto c : { Acid, Phoscyon }) CHECK (in (CategoryGroup::Acid, c));
     CHECK (categoriesIn (CategoryGroup::Acid).size() == 2);
     for (auto c : { Squelch, Zap, Laser, Screech, AlienVoice, Bubble, Gurgle, Wobble, Metallic, Glitch }) CHECK (in (CategoryGroup::Fx, c));
     for (auto c : { Riser, Downlifter, NoiseFx, Uplifter, Impact, Reverse }) CHECK (in (CategoryGroup::Energy, c));
-    for (auto c : { Atmos, Drone, Gate }) CHECK (in (CategoryGroup::Background, c));
+    for (auto c : { Atmos, Drone, Gate, Pad }) CHECK (in (CategoryGroup::Background, c));
+    CHECK (in (CategoryGroup::Kick, Perc));
+    CHECK (std::string_view (categoryGroupName (CategoryGroup::Kick)) == "Drums");
     int listed = 0;
     for (int g = 0; g < kNumCategoryGroups; ++g) listed += (int) categoriesIn ((CategoryGroup) g).size();
     CHECK (listed == kNumCategories);
@@ -937,6 +941,124 @@ TEST_CASE ("Grids are short hits on a 16th arp that leaves most beats to the kic
     CHECK (offKick > total * 7 / 10);   // mostly the "e", "and" and "a"
     CHECK (highPassed > n * 7 / 10);    // above the bass
     CHECK (varied > n * 6 / 10);        // each hit a little different
+}
+
+TEST_CASE ("Psy Arp writes 16th lines over an octave pedal, the filter swept or snapped", "[generator][psyarp]")
+{
+    Generator g;
+    const int n = 200;
+    int pedalled = 0, swept = 0, full = 0;
+    for (uint32_t seed = 1; seed <= (uint32_t) n; ++seed)
+    {
+        INFO ("seed " << seed);
+        const auto p = g.generate (Category::PsyArp, seed, ParamState(), LockSet(), true);
+        REQUIRE (p.on (P::ArpOn));
+        CHECK (p.geti (P::ArpDiv) == 12);   // 1/16
+        CHECK (p.geti (P::ArpMode) == (int) ArpMode::Order);
+        const auto pat = ArpPattern::from (p);
+        int hits = 0, low = 0;
+        for (int i = 0; i < pat.length; ++i)
+            if (pat.has (i, ArpPattern::On))
+            {
+                ++hits;
+                low += pat.notes[(size_t) i] == -12 ? 1 : 0;
+                CHECK (pat.notes[(size_t) i] >= -12);   // the pedal is the lowest note
+                CHECK (pat.notes[(size_t) i] <= 16);
+            }
+        pedalled += low > 0 ? 1 : 0;
+        full += hits >= pat.length - 2 ? 1 : 0;
+        CHECK (p.geti (P::F1Type) != (int) FilterType::Off);
+        bool lfoOnCutoff = false;
+        for (int i = 0; i < kNumModSlots; ++i)
+        {
+            const int src = p.geti (modSrcParam (i));
+            if (p.geti (modDstParam (i)) == (int) ModDst::F1Cutoff && src >= (int) ModSrc::Lfo1 && src <= (int) ModSrc::Lfo3) lfoOnCutoff = true;
+        }
+        swept += lfoOnCutoff ? 1 : 0;
+        CHECK ((lfoOnCutoff || p.get (P::F1Env) >= 0.14f));   // swept with the bars or snapped per note
+    }
+    CHECK (pedalled > n * 8 / 10);
+    CHECK (full > n * 7 / 10);    // the run plays nearly every sixteenth
+    CHECK (swept > n * 6 / 10);
+    CHECK (hasArp (Category::PsyArp));
+    CHECK (groupOf (Category::PsyArp) == CategoryGroup::Main);
+}
+
+TEST_CASE ("FM patches move an FM index, mostly through a band-pass or high-pass", "[generator][fm]")
+{
+    Generator g;
+    const int n = 200;
+    int bandOrHigh = 0, driven = 0;
+    for (uint32_t seed = 1; seed <= (uint32_t) n; ++seed)
+    {
+        INFO ("seed " << seed);
+        const auto p = g.generate (Category::Fm, seed, ParamState(), LockSet(), false);
+        const bool pairA = p.on (P::OscAOn) && p.geti (P::OscAType) == (int) OscType::FM;
+        const bool carrierB = p.on (P::OscBOn) && p.geti (P::OscBType) == (int) OscType::FM && p.get (P::OscBXMod) > 0.1f;
+        CHECK ((pairA || carrierB));
+        bool moved = false;
+        for (int i = 0; i < kNumModSlots; ++i)
+        {
+            const int dst = p.geti (modDstParam (i)), src = p.geti (modSrcParam (i));
+            if ((dst == (int) ModDst::FmA || dst == (int) ModDst::XMod) && (src == (int) ModSrc::Lfo1 || src == (int) ModSrc::ModEnv)) moved = true;
+        }
+        CHECK (moved);
+        const int f = p.geti (P::F1Type);
+        bandOrHigh += (f == (int) FilterType::BP12 || f == (int) FilterType::HP12 || f == (int) FilterType::HP18 || f == (int) FilterType::HP24) ? 1 : 0;
+        driven += p.on (P::DistOn) ? 1 : 0;
+    }
+    CHECK (bandOrHigh > n / 2);
+    CHECK (driven > n / 2);
+    CHECK (hasArp (Category::Fm));
+    CHECK (groupOf (Category::Fm) == CategoryGroup::Main);
+}
+
+TEST_CASE ("Pads swell in, hold and ring out, spread and wet", "[generator][pad]")
+{
+    Generator g;
+    const int n = 200;
+    int wet = 0, spread = 0;
+    for (uint32_t seed = 1; seed <= (uint32_t) n; ++seed)
+    {
+        INFO ("seed " << seed);
+        const auto p = g.generate (Category::Pad, seed, ParamState(), LockSet(), false);
+        CHECK (p.geti (P::VoiceMode) == (int) VoiceMode::Poly);
+        CHECK (p.get (P::AenvA) >= 150.f);
+        CHECK (p.get (P::AenvS) >= 0.7f);
+        CHECK (p.get (P::AenvR) >= 600.f);
+        wet += p.on (P::ReverbOn) ? 1 : 0;
+        const bool unisonA = p.geti (P::OscAType) == (int) OscType::Supersaw || p.geti (P::OscAUnison) > 1;
+        const bool unisonB = p.on (P::OscBOn) && p.geti (P::OscBUnison) > 1;
+        spread += unisonA || unisonB ? 1 : 0;
+    }
+    CHECK (wet > n * 9 / 10);
+    CHECK (spread > n * 7 / 10);
+    CHECK (hasArp (Category::Pad));
+    CHECK (groupOf (Category::Pad) == CategoryGroup::Background);
+}
+
+TEST_CASE ("Percs are one short hit per note, with no arp", "[generator][perc]")
+{
+    Generator g;
+    const int n = 200;
+    int noisy = 0, tonal = 0;
+    for (uint32_t seed = 1; seed <= (uint32_t) n; ++seed)
+    {
+        INFO ("seed " << seed);
+        const auto p = g.generate (Category::Perc, seed, ParamState(), LockSet(), true);
+        CHECK_FALSE (p.on (P::ArpOn));
+        CHECK (p.geti (P::VoiceMode) == (int) VoiceMode::Poly);
+        CHECK (p.get (P::AenvS) == 0.f);   // the hit dies away while the key is held
+        CHECK (p.get (P::AenvD) <= 600.f);
+        noisy += p.get (P::NoiseLevel) > 0.3f ? 1 : 0;
+        tonal += std::abs (p.get (P::PenvAmt)) >= 4.f ? 1 : 0;
+    }
+    CHECK (noisy > n / 4);   // hats and snares
+    CHECK (tonal > n / 4);   // snares, toms and alien percs fall in pitch
+    CHECK (familyOf (Category::Perc) == Family::Synth);
+    CHECK (groupOf (Category::Perc) == CategoryGroup::Kick);
+    CHECK_FALSE (hasArp (Category::Perc));
+    CHECK_FALSE (hasLength (Category::Perc));
 }
 
 TEST_CASE ("Acid comes both ways: the classic wet 303 and the psy kind, cut and driven", "[generator][acid]")

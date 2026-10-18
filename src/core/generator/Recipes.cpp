@@ -146,6 +146,15 @@ namespace
         b.uni (P::EnergySec, secLo, secHi);
     }
 
+    // A synced LFO whose division is drawn with weights.
+    void lfoSyncW (B& b, int index, LfoShape shape, std::initializer_list<int> divs, std::initializer_list<float> weights, bool retrig)
+    {
+        b.set (lfoParam (index, 0), (float) shape);
+        b.set (lfoParam (index, 2), 1.f);
+        b.pick (lfoParam (index, 3), divs, weights);
+        b.set (lfoParam (index, 4), retrig ? 1.f : 0.f);
+    }
+
     // ---- effects --------------------------------------------------------------
 
     void fxDist (B& b, float p, std::initializer_list<int> types, float dLo, float dHi, float mixLo, float mixHi)
@@ -430,16 +439,28 @@ namespace
         b.macros ({ D::F1Reso, D::FilterEnvAmt, D::F1Vowel, D::DistDrive, D::PhaserMix, D::DelayMix });
     }
 
+    // Zaps, refitted to the corpus's 48 zap presets: a pitch dive from two to
+    // five octaves up (Serum draws it as an LFO; here the pitch envelope), an
+    // FM pair or a plain wave with a second osc an octave or two down in
+    // some, through a band-pass or ladder that follows the dive. Poly, driven
+    // hard, squashed by a multiband compressor, widened, and an echo on the
+    // dotted quarter.
     void zap (B& b)
     {
-        if (b.chance (0.6f)) polyVoice (b, 4, 8);
+        if (b.chance (0.9f)) polyVoice (b, 4, 8);
         else monoVoice (b, false, 0.f, 0.f);
-        b.pick (P::Octave, { 0, 1 }, { 0.6f, 0.4f });
+        b.pick (P::Octave, { -1, 0, 1 }, { 0.3f, 0.5f, 0.2f });
 
         if (b.chance (0.5f))
             fmA (b, { 0.5f, 1.f, 2.f, 3.5f, 7.f }, 0.5f, 6.f, 0.f, 0.4f);
         else
             analogA (b, b.rnd (0.f, 1.2f));
+        const bool second = b.chance (0.4f);
+        if (second)
+        {
+            analogB (b, b.chance (0.5f) ? kSaw : kSine, 0.3f, 0.6f);
+            b.pick (P::OscBCoarse, { 0, -24, -12, 12 }, { 0.42f, 0.22f, 0.22f, 0.14f });
+        }
 
         b.set (P::PenvAttack, 0.f);
         if (b.chance (0.9f)) b.uni (P::PenvAmt, 24.f, 60.f);
@@ -448,18 +469,39 @@ namespace
         b.uni (P::PenvCurve, 0.6f, 1.f);
         b.set (P::PenvDest, 0.f);
 
-        if (b.chance (0.3f)) { b.pick (P::NoiseType, { 0, 2 }); b.uni (P::NoiseLevel, 0.02f, 0.15f); }
+        if (b.chance (0.15f)) { b.pick (P::NoiseType, { 0, 2 }); b.uni (P::NoiseLevel, 0.02f, 0.12f); }
 
-        if (b.chance (0.6f)) b.set (P::F1Type, (float) ft (FilterType::Off));
-        else filter1 (b, ft (FilterType::LP12), 3000.f, 16000.f, 0.f, 0.3f, 0.f, 0.f);
+        // band-pass or ladder mostly, the cutoff falling with the pitch
+        switch (b.weighted ({ 0.42f, 0.21f, 0.12f, 0.1f, 0.1f, 0.05f }))
+        {
+            case 0: filter1 (b, ft (FilterType::BP12), 300.f, 3000.f, 0.2f, 0.6f, 0.f, 0.f); break;
+            case 1: filter1 (b, ft (FilterType::Ladder24), 200.f, 2500.f, 0.2f, 0.6f, 0.f, 0.f); break;
+            case 2: filter1 (b, ft (FilterType::HP12), 60.f, 300.f, 0.1f, 0.4f, 0.f, 0.f); break;
+            case 3: filter1 (b, ft (FilterType::LP12), 1500.f, 8000.f, 0.1f, 0.4f, 0.f, 0.f); break;
+            case 4: b.set (P::F1Type, (float) ft (FilterType::Off)); break;
+            default:
+                filter1 (b, ft (FilterType::CombPos), 200.f, 1200.f, 0.4f, 0.7f, 0.f, 0.f);
+                b.uni (P::F1Key, 0.8f, 1.f);
+                break;
+        }
+        const bool follow = b.chance (0.65f);
+        if (follow) b.route (S::PitchEnv, D::F1Cutoff, 0.15f, 0.4f);
 
-        ampEnv (b, 0.f, 0.5f, 60.f, 350.f, 0.f, 0.f, 30.f, 150.f);
+        const bool ring = b.chance (0.4f);   // the bottom of the dive rings on in some
+        ampEnv (b, 0.f, 1.f, 120.f, 600.f, 0.f, ring ? 0.3f : 0.f, 15.f, 60.f);
         if (b.chance (0.3f)) b.route (S::PitchEnv, D::FmA, 0.2f, 0.5f);
         b.route (S::Macro1, D::PitchEnvAmt, 0.2f, 0.4f);
 
-        fxDelay (b, 0.7f, { D1_8, D1_16D, D1_8D }, 0.3f, 0.6f, 0.15f, 0.35f);
-        fxReverb (b, 0.4f, 1.f, 3.f, 0.1f, 0.25f);
-        fxShift (b, 0.2f, 20.f, 300.f, 0.f, 0.5f);
+        fxDist (b, 0.67f, { (int) DistType::Tube, (int) DistType::Soft, (int) DistType::Rectify, (int) DistType::Hard, (int) DistType::Fold },
+                8.f, 20.f, 0.6f, 1.f);
+        const int squash = b.weighted ({ 0.73f, 0.12f, 0.15f });   // multiband, glue, none
+        if (squash == 0) fxCompMulti (b);
+        else if (squash == 1) fxCompGlue (b);
+        fxDelay (b, 0.9f, { D1_4D, D1_4D, D1_4D, D1_4D, D1_4D, D1_4, D1_4, D1_8D, D1_2 }, 0.17f, 0.65f, 0.14f, 0.3f);
+        fxReverb (b, 0.67f, 1.f, 3.f, 0.05f, 0.2f);
+        fxChorus (b, 0.33f);
+        fxWidth (b, 0.44f, 0.3f, 0.8f);
+        fxShift (b, 0.15f, 20.f, 300.f, 0.f, 0.5f);
         b.macros ({ D::FmA, D::F1Cutoff, D::DelayMix, D::ReverbMix, D::ShiftHz, D::NoiseLevel });
     }
 
@@ -532,85 +574,279 @@ namespace
         b.macros ({ D::F1Reso, D::PitchEnvAmt, D::F1Drive });
     }
 
+    // Psy leads, refitted to the corpus's 400 lead presets: a saw, square,
+    // wavetable or FM voice (a supersaw now and then) with a second osc on
+    // the note or an octave away in most, mono in half and gliding in a
+    // third; a ladder or band-pass that a synced LFO sweeps in half (an
+    // envelope snaps it in a few); driven, squashed by a multiband or glue
+    // compressor, a dotted-eighth echo and a little room. A noise layer or
+    // a sub in one of six, a 16th tremolo or a vibrato now and then.
     void psyLead (B& b)
     {
-        if (b.chance (0.4f)) monoVoice (b, true, 30.f, 120.f);
-        else polyVoice (b, 6, 8);
+        const int voice = b.weighted ({ 0.48f, 0.16f, 0.36f });   // poly, mono, legato with glide
+        if (voice == 0) polyVoice (b, 6, 8);
+        else monoVoice (b, voice == 2, voice == 2 ? 30.f : 0.f, voice == 2 ? 140.f : 0.f);
 
-        switch (b.weighted ({ 0.5f, 0.3f, 0.2f }))
+        const int kind = b.weighted ({ 0.35f, 0.25f, 0.22f, 0.18f });
+        switch (kind)
         {
-            case 0: supersawA (b, 0.2f, 0.6f); break;
+            case 0: analogA (b, b.chance (0.65f) ? kSaw : kSquare); break;
             case 1:
-                wavetableA (b, { 0, 1, 5, 7 }, 0.2f, 0.8f);
-                b.lfoSync (1, LfoShape::Triangle, { D1_4, D1_2, D1_1 }, false);
-                b.route (S::Lfo2, D::WtPosA, 0.15f, 0.4f);
+            {
+                wavetableA (b, { 0, 1, 5, 7, 4 }, 0.2f, 0.8f);
+                const bool scan = b.chance (0.6f);
+                if (scan)
+                {
+                    lfoSyncW (b, 2, LfoShape::Triangle, { D2_1, D1_1, D4_1, D1_4, D1_2 }, { 0.25f, 0.25f, 0.2f, 0.15f, 0.15f }, false);
+                    b.route (S::Lfo3, D::WtPosA, 0.15f, 0.4f);
+                }
                 break;
-            default: analogA (b, kSaw); break;
+            }
+            case 2:   // FM: osc A's own pair, its index on an envelope or the bars
+            {
+                fmA (b, { 1.f, 2.f, 3.f, 0.5f, 1.5f }, 0.5f, 5.f, 0.f, 0.4f);
+                const bool bite = b.chance (0.5f);
+                if (bite)
+                {
+                    modEnv (b, 0.f, 2.f, 80.f, 600.f, 0.f, 0.4f, 30.f, 200.f);
+                    b.route (S::ModEnv, D::FmA, 0.15f, 0.4f);
+                }
+                else
+                {
+                    lfoSyncW (b, 2, LfoShape::Triangle, { D1_1, D2_1, D1_4 }, { 0.4f, 0.35f, 0.25f }, false);
+                    b.route (S::Lfo3, D::FmA, 0.1f, 0.3f);
+                }
+                break;
+            }
+            default: supersawA (b, 0.2f, 0.6f); break;
         }
-        if (b.chance (0.6f))
+        const bool second = b.chance (0.7f);
+        if (second)
         {
             analogB (b, b.chance (0.6f) ? kSaw : kSquare, 0.4f, 0.7f);
-            b.among (P::OscBCoarse, { 0.f, 7.f, 12.f, -12.f });
-            b.uni (P::OscBFine, 5.f, 15.f);
+            b.pick (P::OscBCoarse, { 0, 12, -12, -24, 24, 7 }, { 0.52f, 0.22f, 0.14f, 0.04f, 0.04f, 0.04f });
+            b.uni (P::OscBFine, 4.f, 15.f);
         }
-        filter1 (b, b.chance (0.6f) ? ft (FilterType::LP12) : ft (FilterType::Ladder24), 1500.f, 6000.f, 0.15f, 0.45f, 0.1f, 0.35f);
-        filterEnv (b, 0.f, 10.f, 300.f, 1200.f, 0.3f, 0.6f, 150.f, 500.f);
-        ampEnv (b, 2.f, 20.f, 400.f, 1000.f, 0.6f, 0.9f, 150.f, 500.f);
+        const bool air = b.chance (0.17f);
+        if (air) { b.pick (P::NoiseType, { 0, 1, 3 }); b.uni (P::NoiseLevel, 0.02f, 0.1f); }
+        const bool sub = b.chance (0.16f);
+        if (sub) b.uni (P::SubLevel, 0.1f, 0.3f);
 
-        if (b.chance (0.6f))
+        // the filter: ladder or band-pass mostly, swept by a synced LFO in half
+        const int fil = b.weighted ({ 0.3f, 0.27f, 0.12f, 0.1f, 0.1f, 0.06f, 0.05f });
+        const bool snap = b.chance (0.3f);
+        const float eLo = snap ? 0.15f : 0.f, eHi = snap ? 0.4f : 0.05f;
+        switch (fil)
+        {
+            case 0: filter1 (b, ft (FilterType::Ladder24), 800.f, 5000.f, 0.05f, 0.6f, eLo, eHi); break;
+            case 1: filter1 (b, ft (FilterType::BP12), 600.f, 3000.f, 0.15f, 0.6f, eLo, eHi); break;
+            case 2: filter1 (b, ft (FilterType::LP12), 1200.f, 7000.f, 0.05f, 0.5f, eLo, eHi); break;
+            case 3: filter1 (b, ft (FilterType::HP12), 100.f, 500.f, 0.05f, 0.4f, eLo * 0.5f, eHi * 0.5f); break;
+            case 4: b.set (P::F1Type, (float) ft (FilterType::Off)); break;
+            case 5:
+                filter1 (b, ft (FilterType::Formant), 700.f, 2000.f, 0.3f, 0.7f, eLo, eHi);
+                b.uni (P::F1Vowel, 0.f, 1.f);
+                break;
+            default:
+                filter1 (b, ft (FilterType::CombPos), 200.f, 1200.f, 0.3f, 0.7f, eLo * 0.5f, eHi * 0.5f);
+                b.uni (P::F1Key, 0.8f, 1.f);
+                break;
+        }
+        filterEnv (b, 0.f, 10.f, 200.f, 900.f, 0.f, 0.4f, 30.f, 200.f);
+        const bool sweep = b.chance (0.55f);
+        if (sweep && fil != 4)
+        {
+            lfoSyncW (b, 1, b.chance (0.65f) ? LfoShape::Triangle : LfoShape::Sine, { D2_1, D1_1, D4_1, D1_4, D1_2 },
+                      { 0.25f, 0.25f, 0.2f, 0.15f, 0.15f }, false);
+            b.route (S::Lfo2, D::F1Cutoff, 0.1f, 0.35f);
+        }
+        const bool drive = b.chance (0.5f);
+        if (drive) b.uni (P::F1Drive, 0.f, 0.5f);
+        ampEnv (b, 0.5f, 6.f, 300.f, 1000.f, 0.6f, 1.f, 15.f, 150.f);
+
+        // a vibrato, or a 16th tremolo, now and then
+        const int life = b.weighted ({ 0.65f, 0.2f, 0.15f });
+        if (life == 1)
         {
             b.lfo (0, LfoShape::Sine, 4.5f, 6.5f, false);
             b.route (S::Lfo1, D::PitchAll, 0.004f, 0.01f);
         }
+        else if (life == 2)
+        {
+            lfoSyncW (b, 0, b.chance (0.5f) ? LfoShape::Triangle : LfoShape::Square, { D1_16, D1_8 }, { 0.7f, 0.3f }, true);
+            b.route (S::Lfo1, D::Amp, 0.3f, 0.6f);
+        }
+        const bool bright = b.chance (0.12f);
+        if (bright) b.route (S::Velocity, D::F1Cutoff, 0.05f, 0.15f);
         b.route (S::ModWheel, D::F1Cutoff, 0.2f, 0.4f);
         b.route (S::Macro1, D::F1Cutoff, 0.25f, 0.45f);
 
-        fxDelay (b, 0.9f, { D1_8D, D1_4D, D1_4 }, 0.35f, 0.55f, 0.2f, 0.35f);
-        fxReverb (b, 0.7f, 2.f, 5.f, 0.15f, 0.3f);
-        fxChorus (b, 0.3f, false);
-        fxDist (b, 0.2f, { 0, 3 }, 4.f, 12.f, 0.3f, 0.6f);
-        b.macros ({ D::F1Reso, D::WtPosA, D::DetuneA, D::FilterEnvAmt, D::DelayMix, D::ReverbMix, D::ChorusMix, D::DistDrive });
+        fxDist (b, 0.6f, { (int) DistType::Tube, (int) DistType::Soft, (int) DistType::Hard, (int) DistType::Fold }, 4.f, 16.f, 0.4f, 1.f);
+        if (b.chance (0.1f))
+        {
+            b.on (P::CrushOn, true);
+            b.uni (P::CrushBits, 6.f, 12.f);
+            b.uni (P::CrushRate, 1.f, 6.f);
+            b.uni (P::CrushMix, 0.2f, 0.5f);
+        }
+        const int squash = b.weighted ({ 0.48f, 0.3f, 0.22f });   // multiband, glue, none
+        if (squash == 0) fxCompMulti (b);
+        else if (squash == 1) fxCompGlue (b);
+        fxDelay (b, 0.65f, { D1_8D, D1_8D, D1_8D, D1_8D, D1_4, D1_4, D1_8, D1_4D }, 0.2f, 0.6f, 0.15f, 0.45f);
+        fxReverb (b, 0.65f, 2.f, 5.f, 0.12f, 0.34f);
+        fxChorus (b, 0.29f);
+        fxPhaser (b, 0.09f);
+        fxWidth (b, 0.3f, 0.3f, 0.7f);
+        b.macros ({ D::F1Reso, D::WtPosA, D::FmA, D::DetuneA, D::FilterEnvAmt, D::DelayMix, D::ReverbMix, D::ChorusMix, D::DistDrive });
     }
 
+    // Plucks, refitted to the corpus's 108 pluck presets: a saw or square
+    // (a wavetable or soft FM pair in some) with a second osc on the note or
+    // an octave up in most, a little unison; a ladder low-pass snapped shut
+    // from a few kHz by an envelope (a noise click or a sub in one of four);
+    // the body decays over 0.15-1 s. Drive, chorus, width and multiband
+    // compression in about half, a dotted or straight echo and some room.
     void pluck (B& b)
     {
-        polyVoice (b, 6, 10);
-        switch (b.weighted ({ 0.45f, 0.25f, 0.3f }))
+        const int voice = b.weighted ({ 0.73f, 0.15f, 0.12f });   // poly, mono, legato with glide
+        if (voice == 0) polyVoice (b, 6, 10);
+        else monoVoice (b, voice == 2, voice == 2 ? 10.f : 0.f, voice == 2 ? 60.f : 0.f);
+        switch (b.weighted ({ 0.55f, 0.25f, 0.2f }))
         {
             case 0: analogA (b, b.chance (0.6f) ? kSaw : kSquare); break;
-            case 1: wavetableA (b, { 6, 0, 3 }, 0.f, 0.7f); break;
-            default: fmA (b, { 2.f, 3.f, 4.f }, 1.f, 3.f, 0.f, 0.2f); break;
+            case 1: wavetableA (b, { 6, 0, 3, 1 }, 0.f, 0.7f); break;
+            default: fmA (b, { 2.f, 3.f, 4.f, 1.f }, 1.f, 3.f, 0.f, 0.2f); break;
         }
-        filter1 (b, b.chance (0.5f) ? ft (FilterType::LP12) : ft (FilterType::Ladder24), 300.f, 1500.f, 0.1f, 0.5f, 0.4f, 0.8f);
-        filterEnv (b, 0.f, 0.f, 80.f, 300.f, 0.f, 0.f, 80.f, 250.f);
-        ampEnv (b, 0.f, 0.5f, 150.f, 600.f, 0.f, 0.f, 100.f, 400.f);
-        b.route (S::Velocity, D::F1Cutoff, 0.15f, 0.3f);
+        const bool second = b.chance (0.75f);
+        if (second)
+        {
+            analogB (b, b.chance (0.6f) ? kSaw : kSquare, 0.35f, 0.65f);
+            b.pick (P::OscBCoarse, { 0, 12, -12, -24, 7 }, { 0.56f, 0.24f, 0.08f, 0.06f, 0.06f });
+            b.uni (P::OscBFine, 3.f, 12.f);
+        }
+        const bool click = b.chance (0.28f);
+        if (click) { b.pick (P::NoiseType, { 0, 3, 2 }); b.uni (P::NoiseLevel, 0.03f, 0.12f); }
+        const bool sub = b.chance (0.21f);
+        if (sub) b.uni (P::SubLevel, 0.1f, 0.3f);
+
+        // a ladder low-pass snapped shut in most; a few keep the filter still
+        const int fil = b.weighted ({ 0.65f, 0.12f, 0.1f, 0.05f, 0.04f, 0.04f });
+        const bool still = b.chance (0.15f);
+        const float cLo = still ? 800.f : 90.f, cHi = still ? 4000.f : 800.f, eLo = still ? 0.f : 0.4f, eHi = still ? 0.1f : 0.8f;
+        switch (fil)
+        {
+            case 0: filter1 (b, ft (FilterType::Ladder24), cLo, cHi, 0.f, 0.4f, eLo, eHi); break;
+            case 1: filter1 (b, ft (FilterType::LP12), cLo, cHi, 0.f, 0.4f, eLo, eHi); break;
+            case 2: filter1 (b, ft (FilterType::BP12), cLo * 2.f, cHi * 2.f, 0.1f, 0.45f, eLo * 0.8f, eHi * 0.8f); break;
+            case 3: filter1 (b, ft (FilterType::HP12), 80.f, 300.f, 0.f, 0.3f, 0.f, 0.05f); break;
+            case 4:
+                filter1 (b, ft (FilterType::CombPos), 200.f, 1200.f, 0.3f, 0.7f, eLo * 0.5f, eHi * 0.5f);
+                b.uni (P::F1Key, 0.8f, 1.f);
+                break;
+            default: b.set (P::F1Type, (float) ft (FilterType::Off)); break;
+        }
+        filterEnv (b, 0.f, 0.f, 120.f, 700.f, 0.f, 0.2f, 15.f, 300.f);
+        ampEnv (b, 0.f, 6.f, 150.f, 1000.f, 0.f, 0.f, 30.f, 600.f);
+        const bool drift = b.chance (0.15f);
+        if (drift)
+        {
+            b.lfo (0, LfoShape::SmoothRandom, 0.2f, 1.f, false);
+            b.route (S::Lfo1, D::PitchAll, 0.002f, 0.006f);
+        }
+        const bool touch = b.chance (0.3f);
+        if (touch) b.route (S::Velocity, D::F1Cutoff, 0.15f, 0.3f);
         b.route (S::Macro1, D::FilterEnvAmt, 0.2f, 0.4f);
 
-        fxDelay (b, 0.8f, { D1_8D, D1_8, D1_16D }, 0.3f, 0.5f, 0.15f, 0.3f);
-        fxReverb (b, 0.6f, 1.2f, 3.5f, 0.1f, 0.25f);
-        b.macros ({ D::F1Cutoff, D::F1Reso, D::WtPosA, D::FmA, D::DelayMix, D::ReverbMix });
+        fxDist (b, 0.45f, { (int) DistType::Tube, (int) DistType::Soft, (int) DistType::Fold }, 3.f, 12.f, 0.3f, 0.8f);
+        if (b.chance (0.1f))
+        {
+            b.on (P::CrushOn, true);
+            b.uni (P::CrushBits, 6.f, 12.f);
+            b.uni (P::CrushRate, 1.f, 6.f);
+            b.uni (P::CrushMix, 0.2f, 0.5f);
+        }
+        const int squash = b.weighted ({ 0.38f, 0.3f, 0.32f });   // multiband, glue, none
+        if (squash == 0) fxCompMulti (b);
+        else if (squash == 1) fxCompGlue (b);
+        fxDelay (b, 0.8f, { D1_8D, D1_8D, D1_8D, D1_8, D1_8, D1_16, D1_16, D1_4, D1_4, D1_4D }, 0.3f, 0.6f, 0.18f, 0.45f);
+        fxReverb (b, 0.7f, 1.2f, 3.5f, 0.14f, 0.38f);
+        fxChorus (b, 0.4f);
+        fxWidth (b, 0.45f, 0.3f, 0.7f);
+        b.macros ({ D::F1Cutoff, D::F1Reso, D::WtPosA, D::FmA, D::DelayMix, D::ReverbMix, D::DistDrive });
     }
 
+    // Chord stabs, refitted to the corpus's 60 stab and chord presets: two
+    // oscillators (saws, a supersaw or an FM pair; osc B on the note, an
+    // octave away or a third up), a fifth or an octave in the unison stack
+    // in some, a noise layer in four of ten; a ladder low-pass that an
+    // envelope opens from low down, or a synced LFO on the beat. The note
+    // holds while it is played; driven, compressed, a dotted-eighth echo and
+    // a room around it.
     void stab (B& b)
     {
         polyVoice (b, 8, 12);
-        if (b.chance (0.5f)) supersawA (b, 0.15f, 0.45f);
-        else analogA (b, kSaw);
+        const int kind = b.weighted ({ 0.45f, 0.25f, 0.3f });
+        if (kind == 0)
+        {
+            analogA (b, kSaw);
+            const bool stacked = b.chance (0.35f);
+            if (stacked)
+            {
+                b.pick (P::OscAUniStack, { (int) UniStack::OctFifth, (int) UniStack::Oct }, { 0.6f, 0.4f });
+                b.uni (P::OscAUnison, 5.f, 7.f);
+            }
+        }
+        else if (kind == 1) supersawA (b, 0.15f, 0.45f);
+        else fmA (b, { 1.f, 2.f, 3.f, 0.5f }, 0.8f, 4.f, 0.f, 0.3f);
         analogB (b, kSaw, 0.4f, 0.7f);
-        b.among (P::OscBCoarse, { 12.f, 7.f, 0.f });
+        b.pick (P::OscBCoarse, { 0, 12, -12, 3, 4, 24, 7 }, { 0.3f, 0.24f, 0.16f, 0.1f, 0.08f, 0.06f, 0.06f });
         b.uni (P::OscBFine, -10.f, 10.f);
+        const bool air = b.chance (0.42f);
+        if (air) { b.pick (P::NoiseType, { 0, 1, 3 }); b.uni (P::NoiseLevel, 0.02f, 0.1f); }
+        const bool sub = b.chance (0.23f);
+        if (sub) b.uni (P::SubLevel, 0.1f, 0.3f);
 
-        filter1 (b, ft (FilterType::LP12), 800.f, 3000.f, 0.1f, 0.4f, 0.3f, 0.6f);
-        filterEnv (b, 0.f, 2.f, 150.f, 400.f, 0.1f, 0.3f, 150.f, 400.f);
-        ampEnv (b, 0.f, 2.f, 200.f, 500.f, 0.f, 0.3f, 150.f, 400.f);
+        const int fil = b.weighted ({ 0.6f, 0.12f, 0.1f, 0.06f, 0.06f, 0.06f });
+        switch (fil)
+        {
+            case 0: filter1 (b, ft (FilterType::Ladder24), 200.f, 1500.f, 0.f, 0.45f, 0.3f, 0.6f); break;
+            case 1: filter1 (b, ft (FilterType::LP12), 250.f, 1800.f, 0.f, 0.4f, 0.3f, 0.6f); break;
+            case 2: filter1 (b, ft (FilterType::BP12), 500.f, 2500.f, 0.1f, 0.45f, 0.2f, 0.5f); break;
+            case 3: filter1 (b, ft (FilterType::HP12), 80.f, 300.f, 0.f, 0.3f, 0.f, 0.05f); break;
+            case 4:
+                filter1 (b, ft (FilterType::CombPos), 200.f, 1200.f, 0.3f, 0.7f, 0.1f, 0.3f);
+                b.uni (P::F1Key, 0.8f, 1.f);
+                break;
+            default: b.set (P::F1Type, (float) ft (FilterType::Off)); break;
+        }
+        filterEnv (b, 0.f, 10.f, 80.f, 900.f, 0.f, 0.5f, 15.f, 400.f);
+        const bool beat = b.chance (0.35f);   // a synced LFO opens it on the beat
+        if (beat && fil < 3)
+        {
+            lfoSyncW (b, 1, LfoShape::Triangle, { D1_4, D1_2, D1_8, D1_1 }, { 0.3f, 0.3f, 0.2f, 0.2f }, true);
+            b.route (S::Lfo2, D::F1Cutoff, 0.08f, 0.25f);
+        }
+        ampEnv (b, 0.5f, 10.f, 250.f, 900.f, 0.1f, 0.8f, 15.f, 250.f);
+        const bool touch = b.chance (0.22f);
+        if (touch) b.route (S::Velocity, D::F1Cutoff, 0.1f, 0.25f);
         b.route (S::Macro1, D::F1Cutoff, 0.2f, 0.4f);
 
-        fxReverb (b, 0.8f, 1.5f, 4.f, 0.15f, 0.3f);
-        fxDelay (b, 0.5f, { D1_8D, D1_4 }, 0.25f, 0.45f, 0.1f, 0.25f);
+        fxReverb (b, 0.85f, 1.5f, 4.f, 0.18f, 0.42f);
+        fxDelay (b, 0.75f, { D1_8D, D1_8D, D1_8D, D1_8, D1_8, D1_4D, D1_4, D1_16 }, 0.35f, 0.7f, 0.2f, 0.45f);
         fxChorus (b, 0.4f, false);
-        fxDist (b, 0.3f, { 0, 3 }, 4.f, 10.f, 0.3f, 0.5f);
-        b.macros ({ D::F1Reso, D::FilterEnvAmt, D::DetuneA, D::ReverbMix, D::DelayMix, D::ChorusMix, D::DistDrive });
+        fxDist (b, 0.5f, { (int) DistType::Tube, (int) DistType::Soft, (int) DistType::Hard }, 3.f, 12.f, 0.4f, 1.f);
+        if (b.chance (0.12f))
+        {
+            b.on (P::CrushOn, true);
+            b.uni (P::CrushBits, 6.f, 12.f);
+            b.uni (P::CrushRate, 1.f, 6.f);
+            b.uni (P::CrushMix, 0.2f, 0.5f);
+        }
+        const int squash = b.weighted ({ 0.38f, 0.35f, 0.27f });   // multiband, glue, none
+        if (squash == 0) fxCompMulti (b);
+        else if (squash == 1) fxCompGlue (b);
+        fxWidth (b, 0.35f, 0.3f, 0.7f);
+        b.macros ({ D::F1Reso, D::FilterEnvAmt, D::DetuneA, D::FmA, D::ReverbMix, D::DelayMix, D::ChorusMix, D::DistDrive });
     }
 
     // The short hits a full-on track's groove is built from, the "grids" of
@@ -618,8 +854,10 @@ namespace
     // ticks that answer the kick and the rolling bass on the 16ths. Each one
     // is over in a sixteenth or two and sits above the bass (a high-pass
     // keeps it out of the bass's octaves); every hit comes out a little
-    // different, the way a grid of layered one-shots does. Dry, with an
-    // echo that lands on the grid too.
+    // different, the way a grid of layered one-shots does. Squashed by a
+    // multiband compressor and dry but for a short echo on the grid and a
+    // small room; a grain of noise in four of ten and a chorus in a third
+    // (the corpus's grid presets).
     void grid (B& b)
     {
         polyVoice (b, 4, 8);
@@ -669,7 +907,13 @@ namespace
         if (openBlip)
             filter1 (b, ft (FilterType::LP12), 6000.f, 16000.f, 0.f, 0.2f, 0.f, 0.f);
         else
-            filter1 (b, b.chance (0.6f) ? ft (FilterType::LP12) : ft (FilterType::Ladder24), 350.f, 2200.f, 0.1f, 0.55f, 0.4f, 0.85f);
+        {
+            // a low-pass mostly; a band-pass or a notch (the corpus's band-reject) in some
+            const int types[] = { ft (FilterType::LP12), ft (FilterType::Ladder24), ft (FilterType::BP12), ft (FilterType::Notch) };
+            filter1 (b, types[b.weighted ({ 0.45f, 0.25f, 0.15f, 0.15f })], 350.f, 2200.f, 0.1f, 0.55f, 0.4f, 0.85f);
+        }
+        const bool grain = b.chance (0.4f);
+        if (grain) { b.pick (P::NoiseType, { 2, 0 }); b.uni (P::NoiseLevel, 0.03f, 0.12f); }
         filterEnv (b, 0.f, 0.f, 30.f, 160.f, 0.f, 0.f, 20.f, 80.f);
         if (b.chance (0.8f))
         {
@@ -698,13 +942,16 @@ namespace
             b.lfoSync (0, LfoShape::SampleHold, { D1_16, D1_8, D1_16D }, false);
             b.route (S::Lfo1, target, 0.1f, 0.25f);
         }
-        b.route (S::Velocity, D::F1Cutoff, 0.1f, 0.25f);
+        const bool touch = b.chance (0.3f);
+        if (touch) b.route (S::Velocity, D::F1Cutoff, 0.1f, 0.25f);
         // the open blip's filter envelope is 0, so its macro opens the FM index instead
         b.route (S::Macro1, openBlip ? D::FmA : D::FilterEnvAmt, 0.2f, 0.4f);
 
-        fxDelay (b, 0.75f, { D1_8D, D1_16D, D1_8, D1_16 }, 0.2f, 0.45f, 0.1f, 0.25f);
-        fxReverb (b, 0.4f, 0.6f, 1.8f, 0.05f, 0.15f);
+        if (b.chance (0.8f)) fxCompMulti (b);
+        fxDelay (b, 0.35f, { D1_16, D1_16, D1_4D, D1_8D }, 0.25f, 0.6f, 0.05f, 0.2f);
+        fxReverb (b, 0.6f, 0.6f, 1.8f, 0.05f, 0.2f);
         fxDist (b, 0.3f, { (int) DistType::Soft, (int) DistType::Tube, (int) DistType::Hard }, 4.f, 14.f, 0.3f, 0.7f);
+        fxChorus (b, 0.35f);
         fxWidth (b, 0.4f, 0.3f, 0.8f);
         b.macros ({ D::F1Cutoff, D::FilterEnvAmt, D::FmA, D::F1Reso, D::DelayMix, D::DistDrive, D::ReverbMix });
     }
@@ -1200,37 +1447,63 @@ namespace
         b.macros ({ D::F1Reso, D::WtPosA, D::DetuneA, D::DelayMix, D::ReverbMix, D::ChorusMix, D::PhaserMix });
     }
 
-    // Stepped random pitch and a stuttering gain on the grid, through a crusher.
+    // Glitches, refitted to the corpus's glitch presets: a stepped random
+    // pitch and a stuttering gain on the grid, a cutoff and wavetable thrown
+    // around by sample & hold; poly, through a ladder or band-pass, a
+    // downsampler in some, squashed by a multiband compressor, a free-timed
+    // echo and a small room.
     void glitch (B& b)
     {
-        if (b.chance (0.6f)) monoVoice (b, false, 0.f, 0.f);
-        else polyVoice (b, 2, 4);
-        if (b.chance (0.4f)) { fmA (b, { 1.f, 2.f, 3.5f, 7.f }, 1.f, 6.f, 0.f, 0.5f); b.set (P::OscALevel, 0.5f); }
-        else if (b.chance (0.5f)) { wavetableA (b, { 1, 3, 4, 5 }, 0.f, 1.f); b.set (P::OscALevel, 0.5f); }
+        if (b.chance (0.8f)) polyVoice (b, 2, 4);
+        else monoVoice (b, false, 0.f, 0.f);
+        const int kind = b.weighted ({ 0.45f, 0.35f, 0.2f });
+        if (kind == 0) { fmA (b, { 1.f, 2.f, 3.5f, 7.f }, 1.f, 6.f, 0.f, 0.5f); b.set (P::OscALevel, 0.5f); }
+        else if (kind == 1) { wavetableA (b, { 1, 3, 4, 5 }, 0.f, 1.f); b.set (P::OscALevel, 0.5f); }
         else analogA (b, kSquare, 0.5f);
-        if (b.chance (0.3f)) { b.pick (P::NoiseType, { 0, 2 }); b.uni (P::NoiseLevel, 0.1f, 0.3f); }
+        const bool second = b.chance (0.4f);
+        if (second)
+        {
+            analogB (b, b.chance (0.5f) ? kSaw : kSquare, 0.2f, 0.4f);
+            b.pick (P::OscBCoarse, { 0, -24, 12 }, { 0.5f, 0.25f, 0.25f });
+        }
+        if (b.chance (0.05f)) { b.pick (P::NoiseType, { 0, 2 }); b.uni (P::NoiseLevel, 0.05f, 0.2f); }
 
         b.lfoSync (0, LfoShape::SampleHold, { D1_16, D1_32, D1_16T, D1_32T }, true);
         b.route (S::Lfo1, D::PitchAll, 0.1f, 0.4f);
         b.lfoSync (1, LfoShape::Square, { D1_32, D1_64, D1_16T }, true);
         b.route (S::Lfo2, D::Amp, 0.6f, 1.f);
-        filter1 (b, b.chance (0.5f) ? ft (FilterType::BP12) : ft (FilterType::LP12), 800.f, 5000.f, 0.2f, 0.6f, 0.f, 0.f);
+        filter1 (b, b.chance (0.6f) ? ft (FilterType::Ladder24) : ft (FilterType::BP12), 800.f, 5000.f, 0.05f, 0.5f, 0.f, 0.f);
         b.lfo (2, LfoShape::SampleHold, 8.f, 30.f, false);
-        b.route (S::Lfo3, D::F1Cutoff, 0.2f, 0.5f);
-        ampEnv (b, 0.f, 0.f, 150.f, 800.f, 0.f, 0.6f, 30.f, 150.f);
+        b.route (S::Lfo3, D::F1Cutoff, 0.25f, 0.55f);
+        // the S&H throws the wavetable or the FM index around too
+        const bool scatter = b.chance (0.4f);
+        if (scatter && kind < 2) b.route (S::Lfo3, kind == 0 ? D::FmA : D::WtPosA, 0.2f, 0.5f);
+        ampEnv (b, 0.2f, 5.f, 300.f, 1500.f, 0.3f, 1.f, 5.f, 40.f);
         b.route (S::Macro1, D::Lfo3Rate, 0.2f, 0.4f);
 
-        if (b.chance (0.8f))
+        if (b.chance (0.4f))
         {
             b.on (P::CrushOn, true);
             b.uni (P::CrushBits, 3.f, 8.f);
             b.uni (P::CrushRate, 2.f, 16.f);
             b.uni (P::CrushMix, 0.4f, 0.9f);
         }
-        fxShift (b, 0.4f, 20.f, 400.f, 0.f, 0.5f);
-        fxDelay (b, 0.5f, { D1_16, D1_32, D1_16T }, 0.2f, 0.5f, 0.1f, 0.3f);
+        if (b.chance (0.85f)) fxCompMulti (b);
+        fxShift (b, 0.3f, 20.f, 400.f, 0.f, 0.5f);
+        // a free-timed echo (the references leave the delay unsynced)
+        if (b.chance (0.6f))
+        {
+            b.on (P::DelayOn, true);
+            b.set (P::DelaySync, 0.f);
+            b.uni (P::DelayMs, 20.f, 300.f);
+            b.uni (P::DelayFb, 0.4f, 0.6f);
+            b.uni (P::DelayMix, 0.15f, 0.45f);
+            b.on (P::DelayPing, b.chance (0.4f));
+            b.uni (P::DelayLowCut, 150.f, 500.f);
+            b.uni (P::DelayHighCut, 3500.f, 9000.f);
+        }
         fxDist (b, 0.3f, { 1, 2 }, 4.f, 14.f, 0.3f, 0.6f);
-        fxReverb (b, 0.3f, 0.5f, 1.5f, 0.1f, 0.2f);
+        fxReverb (b, 0.7f, 0.8f, 3.f, 0.15f, 0.35f, 0.2f, 0.5f);
         b.macros ({ D::CrushMix, D::F1Cutoff, D::F1Reso, D::FmA, D::ShiftHz, D::DelayMix, D::DistDrive });
     }
 
@@ -1618,6 +1891,517 @@ namespace
         fxGainBass (b, 4.f, 6.f);
         b.macros ({ D::DistDrive, D::LevelB, D::F1Cutoff });
     }
+
+    // =========================================================================
+    // Psy Arp, FM, Pad and Perc come from about 2,800 psytrance Serum presets
+    // (Ghosthack, Outerverse, Lunatica, PME, InterSys, Tunecraft, WeirDDose
+    // and more), decoded and read as a population: how many presets use each
+    // module, and the spread of its settings. The ranges and odds below are
+    // those shares and spreads, mapped onto this engine.
+    // =========================================================================
+
+    // Goa and psy sequences: one 16th line over an octave pedal (the arp
+    // writes it). The 245 reference sequences mostly run a saw, square or
+    // wavetable through a ladder or band-pass that a slow synced LFO sweeps
+    // over one to four bars (about five octaves), or that snaps per note;
+    // an FM pair or a synced osc in some. A dotted-eighth echo on nearly
+    // all, multiband compression and grit on most.
+    void psyArp (B& b)
+    {
+        const int voice = b.weighted ({ 0.69f, 0.19f, 0.12f });   // poly, mono, legato with glide
+        if (voice == 0) polyVoice (b, 4, 8);
+        else monoVoice (b, voice == 2, voice == 2 ? 20.f : 0.f, voice == 2 ? 120.f : 0.f);
+        b.pick (P::Octave, { -1, 0, 1 }, { 0.35f, 0.5f, 0.15f });
+
+        // most of the references layer a second oscillator: the same note, an octave away or a fifth up
+        const auto secondOsc = [&b] (float chance) {
+            const bool second = b.chance (chance);
+            if (! second) return;
+            analogB (b, b.chance (0.55f) ? kSaw : kSquare, 0.35f, 0.7f);
+            b.pick (P::OscBCoarse, { 0, 12, -12, 7 }, { 0.5f, 0.22f, 0.2f, 0.08f });
+            b.uni (P::OscBFine, 4.f, 14.f);
+        };
+        switch (b.weighted ({ 0.38f, 0.3f, 0.26f, 0.06f }))
+        {
+            case 0:   // saw or square
+                analogA (b, b.chance (0.6f) ? kSaw : kSquare);
+                secondOsc (0.75f);
+                break;
+            case 1:   // a wavetable, scanned over the bars in most
+            {
+                wavetableA (b, { 0, 1, 5, 7, 4 }, 0.1f, 0.8f);
+                secondOsc (0.5f);
+                const bool scan = b.chance (0.75f);
+                if (scan)
+                {
+                    lfoSyncW (b, 2, LfoShape::Triangle, { D1_1, D2_1, D4_1 }, { 0.5f, 0.3f, 0.2f }, false);
+                    b.route (S::Lfo3, D::WtPosA, 0.15f, 0.4f);
+                }
+                break;
+            }
+            case 2:   // FM: the index snapped per note or swept with the bars
+            {
+                fmA (b, { 1.f, 2.f, 3.f, 0.5f, 1.5f }, 0.5f, 4.f, 0.f, 0.4f);
+                secondOsc (0.4f);
+                if (b.chance (0.5f))
+                {
+                    modEnv (b, 0.f, 0.f, 40.f, 250.f, 0.f, 0.2f, 20.f, 80.f);
+                    b.route (S::ModEnv, D::FmA, 0.15f, 0.4f);
+                }
+                else
+                {
+                    lfoSyncW (b, 2, LfoShape::Triangle, { D1_1, D2_1, D1_2 }, { 0.5f, 0.3f, 0.2f }, false);
+                    b.route (S::Lfo3, D::FmA, 0.1f, 0.3f);
+                }
+                break;
+            }
+            default:  // hard sync: osc B synced to A, its pitch swept with the bars
+                analogA (b, kSaw, 0.4f);
+                analogB (b, kSaw, 0.7f, 0.9f);
+                b.on (P::OscBSync, true);
+                b.uni (P::OscBCoarse, 5.f, 19.f);
+                lfoSyncW (b, 2, LfoShape::Triangle, { D1_1, D2_1, D1_2 }, { 0.5f, 0.3f, 0.2f }, false);
+                b.route (S::Lfo3, D::PitchB, 0.1f, 0.3f);
+                break;
+        }
+
+        // A ladder or plain low-pass in half, a band-pass in a quarter, a
+        // high-pass, comb or formant filter now and then. The cutoff knob sits
+        // in the middle of where the LFO sweeps it (it swings both ways).
+        const int fil = b.weighted ({ 0.38f, 0.15f, 0.25f, 0.1f, 0.06f, 0.06f });
+        const int motion = b.weighted ({ 0.65f, 0.2f, 0.15f });   // the bars' sweep, a per-note snap, or both
+        const float envLo = motion == 0 ? 0.f : 0.3f, envHi = motion == 0 ? 0.05f : 0.65f;
+        switch (fil)
+        {
+            case 0:  filter1 (b, ft (FilterType::Ladder24), 500.f, 3500.f, 0.1f, 0.5f, envLo, envHi); break;
+            case 1:  filter1 (b, ft (FilterType::LP12), 600.f, 4000.f, 0.1f, 0.45f, envLo, envHi); break;
+            case 2:  filter1 (b, ft (FilterType::BP12), 500.f, 2000.f, 0.15f, 0.55f, envLo, envHi); break;
+            case 3:  filter1 (b, ft (FilterType::HP12), 150.f, 600.f, 0.05f, 0.35f, envLo * 0.5f, envHi * 0.5f); break;
+            case 4:
+                filter1 (b, ft (FilterType::CombPos), 200.f, 1200.f, 0.3f, 0.7f, envLo * 0.5f, envHi * 0.5f);
+                b.uni (P::F1Key, 0.8f, 1.f);
+                break;
+            default:
+                filter1 (b, ft (FilterType::Formant), 600.f, 2000.f, 0.3f, 0.7f, envLo * 0.5f, envHi * 0.5f);
+                b.uni (P::F1Vowel, 0.f, 1.f);
+                break;
+        }
+        if (motion != 1)
+        {
+            lfoSyncW (b, 1, b.chance (0.7f) ? LfoShape::Triangle : LfoShape::Sine, { D1_1, D2_1, D4_1, D1_2 }, { 0.4f, 0.25f, 0.2f, 0.15f }, false);
+            b.route (S::Lfo2, D::F1Cutoff, 0.12f, 0.32f);
+        }
+        filterEnv (b, 0.f, 0.f, 60.f, 280.f, 0.f, 0.15f, 30.f, 120.f);
+        const bool drive = b.chance (0.6f);
+        if (drive) b.uni (P::F1Drive, 0.f, 0.4f);
+        // the references gate their notes (the rhythm is the sequence's), so the body holds
+        ampEnv (b, 0.f, 3.f, 120.f, 500.f, 0.5f, 1.f, 15.f, 80.f);
+
+        // a new brightness per note in some (the drawn 1/16 steps of the references), accents brighter in some
+        const bool steps = b.chance (0.2f);
+        if (steps) b.route (S::Random, D::F1Cutoff, 0.05f, 0.15f);
+        const bool bright = b.chance (0.25f);
+        if (bright) b.route (S::Velocity, D::F1Cutoff, 0.05f, 0.15f);
+        b.route (S::Macro1, D::F1Cutoff, 0.2f, 0.4f);
+
+        fxDelay (b, 0.78f, { D1_8D, D1_8D, D1_8D, D1_8, D1_4, D1_4D, D1_16D }, 0.2f, 0.6f, 0.2f, 0.5f);
+        fxReverb (b, 0.6f, 1.2f, 4.f, 0.1f, 0.35f, 0.25f, 0.6f);
+        // grit: a drive or a downsampler
+        fxDist (b, 0.45f, { (int) DistType::Tube, (int) DistType::Soft, (int) DistType::Hard }, 3.f, 14.f, 0.3f, 0.8f);
+        if (b.chance (0.15f))
+        {
+            b.on (P::CrushOn, true);
+            b.uni (P::CrushBits, 6.f, 12.f);
+            b.uni (P::CrushRate, 1.f, 6.f);
+            b.uni (P::CrushMix, 0.2f, 0.6f);
+        }
+        // squashed: a multiband compressor in half, a glue compressor in some of the rest
+        const int squash = b.weighted ({ 0.47f, 0.3f, 0.23f });
+        if (squash == 0) fxCompMulti (b);
+        else if (squash == 1) fxCompGlue (b);
+        fxChorus (b, 0.2f);
+        fxPhaser (b, 0.08f);
+        fxWidth (b, 0.26f, 0.3f, 0.7f);
+        b.macros ({ D::F1Cutoff, D::F1Reso, D::FilterEnvAmt, D::Lfo2Rate, D::DelayMix, D::DistDrive, D::WtPosA, D::FmA, D::ReverbMix });
+    }
+
+    // Hi-tech and full-on FM, from the corpus's 62 FM presets: a two-operator
+    // voice whose index moves with a synced LFO (the talking growl), an
+    // envelope (the bite) or the bars, through a band-pass or high-pass that
+    // a slow LFO sweeps. Mostly one oscillator, mono in four of ten, an
+    // octave down, driven, squashed by a multiband compressor and thrown
+    // into a dotted-eighth echo.
+    void fm (B& b)
+    {
+        const int voice = b.weighted ({ 0.6f, 0.35f, 0.05f });   // poly, mono, legato with glide
+        if (voice == 0) polyVoice (b, 4, 6);
+        else monoVoice (b, voice == 2, voice == 2 ? 15.f : 0.f, voice == 2 ? 70.f : 0.f);
+        b.pick (P::Octave, { -1, 0, -2 }, { 0.45f, 0.4f, 0.15f });
+
+        // osc A's own FM pair (a second pair on osc B now and then), or osc A
+        // (a saw, square or sine) phase-modulating an FM carrier on osc B
+        const bool pair = b.chance (0.6f);
+        if (pair)
+        {
+            fmA (b, { 1.f, 2.f, 3.f, 0.5f, 1.5f, 4.f, 7.f }, 1.f, 7.f, 0.f, 0.5f);
+            const bool second = b.chance (0.3f);
+            if (second)
+            {
+                b.on (P::OscBOn, true);
+                b.set (P::OscBType, (float) OscType::FM);
+                b.among (P::OscBFmRatio, { 1.f, 2.f, 3.f, 0.5f });
+                b.uni (P::OscBFm, 0.5f, 4.f);
+                b.uni (P::OscBLevel, 0.3f, 0.6f);
+                b.pick (P::OscBCoarse, { 12, -12, 7, 0 }, { 0.35f, 0.3f, 0.15f, 0.2f });
+                b.uni (P::OscBFine, -8.f, 8.f);
+            }
+        }
+        else
+        {
+            const float shapes[] = { kSaw, kSquare, kSine };
+            analogA (b, shapes[b.weighted ({ 0.4f, 0.25f, 0.35f })], 0.f);
+            b.uni (P::OscALevel, 0.f, 0.25f);
+            b.on (P::OscBOn, true);
+            b.set (P::OscBType, (float) OscType::FM);
+            b.among (P::OscBFmRatio, { 1.f, 2.f, 0.5f, 3.f });
+            b.uni (P::OscBFm, 0.f, 2.f);
+            b.uni (P::OscBLevel, 0.7f, 0.9f);
+            b.pick (P::OscBCoarse, { 0, 12, -12, 7, 19 }, { 0.45f, 0.2f, 0.15f, 0.1f, 0.1f });
+            b.uni (P::OscBXMod, 0.15f, 0.6f);
+        }
+        const D index = pair ? D::FmA : D::XMod;
+
+        // what moves the index: a synced LFO, an envelope, or a slow sweep
+        const int move = b.weighted ({ 0.4f, 0.3f, 0.3f });
+        if (move == 0)
+        {
+            lfoSyncW (b, 0, b.chance (0.6f) ? LfoShape::Triangle : LfoShape::SawDown, { D1_16, D1_8, D1_8D, D1_4, D1_8T },
+                      { 0.3f, 0.25f, 0.15f, 0.15f, 0.15f }, true);
+            b.route (S::Lfo1, index, pair ? 0.15f : 0.1f, pair ? 0.4f : 0.3f);
+        }
+        else if (move == 1)
+        {
+            modEnv (b, 0.f, 2.f, 60.f, 500.f, 0.f, 0.3f, 30.f, 150.f);
+            b.route (S::ModEnv, index, 0.2f, 0.5f);
+        }
+        else
+        {
+            lfoSyncW (b, 0, LfoShape::Triangle, { D2_1, D4_1, D1_1 }, { 0.4f, 0.3f, 0.3f }, false);
+            b.route (S::Lfo1, index, 0.15f, 0.4f);
+        }
+        const bool velocity = b.chance (0.2f);
+        if (velocity) b.route (S::Velocity, index, 0.1f, 0.25f);
+
+        // a little noise, a ring layer or a sub now and then; a pitch blip on the front in some
+        if (b.chance (0.15f)) { b.pick (P::NoiseType, { 0, 2 }); b.uni (P::NoiseLevel, 0.02f, 0.08f); }
+        if (b.chance (0.12f)) b.uni (P::RingLevel, 0.15f, 0.4f);
+        if (b.chance (0.1f)) b.uni (P::SubLevel, 0.1f, 0.3f);
+        if (b.chance (0.25f))
+        {
+            b.set (P::PenvAttack, 0.f);
+            b.set (P::PenvDest, 0.f);
+            b.uni (P::PenvAmt, 3.f, 12.f);
+            b.uni (P::PenvDecay, 8.f, 40.f);
+            b.uni (P::PenvCurve, 0.4f, 0.8f);
+        }
+
+        // band-pass or high-pass mostly, swept by a slow LFO in most
+        const int fil = b.weighted ({ 0.4f, 0.3f, 0.2f, 0.05f, 0.05f });
+        switch (fil)
+        {
+            case 0:  filter1 (b, ft (FilterType::BP12), 400.f, 2500.f, 0.15f, 0.5f, 0.f, 0.1f); break;
+            case 1:  filter1 (b, ft (FilterType::HP12), 80.f, 450.f, 0.1f, 0.4f, 0.f, 0.05f); break;
+            case 2:  filter1 (b, b.chance (0.5f) ? ft (FilterType::LP12) : ft (FilterType::Ladder24), 1200.f, 6000.f, 0.1f, 0.4f, 0.2f, 0.5f); break;
+            case 3:
+                filter1 (b, ft (FilterType::CombPos), 150.f, 800.f, 0.4f, 0.8f, 0.f, 0.f);
+                b.uni (P::F1Key, 0.8f, 1.f);
+                break;
+            default: b.set (P::F1Type, (float) ft (FilterType::Off)); break;
+        }
+        filterEnv (b, 0.f, 0.f, 80.f, 400.f, 0.f, 0.2f, 30.f, 150.f);
+        const bool sweep = b.chance (fil == 0 ? 0.65f : 0.4f);
+        if (sweep && fil < 3)
+        {
+            lfoSyncW (b, 1, LfoShape::Triangle, { D1_1, D1_16, D2_1, D1_2, D1_8D }, { 0.3f, 0.2f, 0.2f, 0.15f, 0.15f }, false);
+            b.route (S::Lfo2, D::F1Cutoff, 0.12f, 0.35f);
+        }
+        ampEnv (b, 0.5f, 5.f, 150.f, 1500.f, 0.4f, 1.f, 10.f, 80.f);
+        b.route (S::Macro1, index, 0.2f, 0.4f);
+
+        fxDist (b, 0.65f, { (int) DistType::Tube, (int) DistType::Soft, (int) DistType::Hard, (int) DistType::Fold, (int) DistType::Rectify },
+                4.f, 16.f, 0.4f, 1.f);
+        if (b.chance (0.12f))
+        {
+            b.on (P::CrushOn, true);
+            b.uni (P::CrushBits, 5.f, 10.f);
+            b.uni (P::CrushRate, 1.f, 8.f);
+            b.uni (P::CrushMix, 0.2f, 0.6f);
+        }
+        if (b.chance (0.5f)) fxCompMulti (b);
+        // the references mostly leave the echo for a macro to open: on in some, quiet
+        fxDelay (b, 0.4f, { D1_8D, D1_8D, D1_8D, D1_8, D1_16 }, 0.1f, 0.45f, 0.1f, 0.3f);
+        fxReverb (b, 0.5f, 0.8f, 3.f, 0.05f, 0.25f, 0.2f, 0.5f);
+        fxChorus (b, 0.3f);
+        fxWidth (b, 0.2f, 0.3f, 0.7f);
+        b.macros ({ index, D::F1Cutoff, D::F1Reso, D::Lfo1Rate, D::DistDrive, D::DelayMix, D::ReverbMix });
+    }
+
+    // Breakdown and melodic-psy chord beds, from the corpus's 115 pads: two
+    // oscillators (a supersaw, stacked saws or a scanned wavetable, osc B on
+    // the note or an octave away), a noise layer in four of ten and a sub in
+    // three, a ladder low-pass that a slow LFO breathes on, a swell of
+    // 0.15-1.8 s and a long release, chorus, width and a big reverb. Atmos
+    // keeps the textures; a pad is the harmony.
+    void pad (B& b)
+    {
+        polyVoice (b, 6, 8);
+        const int kind = b.weighted ({ 0.25f, 0.4f, 0.35f });
+        if (kind == 0) supersawA (b, 0.25f, 0.6f);
+        else if (kind == 1)
+        {
+            analogA (b, b.chance (0.75f) ? kSaw : kSquare, 0.75f);
+            // an octave or a fifth inside the unison stack (unisonRecipe keeps a stacked count)
+            const bool stacked = b.chance (0.35f);
+            if (stacked)
+            {
+                b.pick (P::OscAUniStack, { (int) UniStack::Oct, (int) UniStack::OctFifth, (int) UniStack::TwoOct, (int) UniStack::CenterDown1 },
+                        { 0.35f, 0.25f, 0.15f, 0.25f });
+                b.uni (P::OscAUnison, 5.f, 9.f);
+            }
+        }
+        else wavetableA (b, { 0, 1, 2, 6 }, 0.1f, 0.8f);
+
+        const bool second = b.chance (0.85f);
+        if (second)
+        {
+            b.on (P::OscBOn, true);
+            b.pick (P::OscBType, { (int) OscType::Analog, (int) OscType::Wavetable }, { 0.7f, 0.3f });
+            b.set (P::OscBShape, b.chance (0.7f) ? kSaw : kSquare);
+            b.pick (P::OscBWt, { 0, 1, 2, 6 });
+            b.uni (P::OscBWtPos, 0.f, 1.f);
+            b.uni (P::OscBLevel, 0.35f, 0.65f);
+            b.pick (P::OscBCoarse, { 0, 12, -12, 7, 19, 24 }, { 0.35f, 0.25f, 0.2f, 0.07f, 0.05f, 0.08f });
+            b.uni (P::OscBFine, 5.f, 15.f);
+        }
+        const bool air = b.chance (0.4f);
+        if (air) { b.pick (P::NoiseType, { 1, 0, 3 }, { 0.5f, 0.3f, 0.2f }); b.uni (P::NoiseLevel, 0.02f, 0.1f); }
+        const bool sub = b.chance (0.3f);
+        if (sub) b.uni (P::SubLevel, 0.1f, 0.3f);
+
+        const int fil = b.weighted ({ 0.55f, 0.35f, 0.05f, 0.05f });
+        const bool swell = b.chance (0.15f);   // the filter opens with the note
+        const float envLo = swell ? 0.15f : 0.f, envHi = swell ? 0.35f : 0.08f;
+        switch (fil)
+        {
+            case 0:  filter1 (b, ft (FilterType::Ladder24), 500.f, 3500.f, 0.05f, 0.4f, envLo, envHi); break;
+            case 1:  filter1 (b, ft (FilterType::LP12), 600.f, 4000.f, 0.05f, 0.35f, envLo, envHi); break;
+            case 2:  filter1 (b, ft (FilterType::BP12), 600.f, 2000.f, 0.1f, 0.4f, envLo, envHi); break;
+            default:
+                filter1 (b, ft (FilterType::Formant), 700.f, 2000.f, 0.2f, 0.5f, envLo, envHi);
+                b.uni (P::F1Vowel, 0.f, 1.f);
+                break;
+        }
+        filterEnv (b, 200.f, 1800.f, 800.f, 3000.f, 0.3f, 0.8f, 800.f, 3000.f);
+        const bool keyed = b.chance (0.12f);
+        if (keyed) b.uni (P::F1Key, 0.1f, 0.3f);
+
+        // the breath: a slow LFO on the cutoff, synced over bars or free
+        const bool breathe = b.chance (0.7f);
+        const bool synced = b.chance (0.55f);
+        if (breathe)
+        {
+            if (synced) lfoSyncW (b, 1, b.chance (0.6f) ? LfoShape::Sine : LfoShape::Triangle, { D2_1, D4_1, D1_1 }, { 0.4f, 0.35f, 0.25f }, false);
+            else b.lfo (1, LfoShape::Sine, 0.05f, 0.4f, false);
+            b.route (S::Lfo2, D::F1Cutoff, 0.08f, 0.3f);
+        }
+        // a wavetable scans slowly, a saw or square morphs a little
+        const bool scan = b.chance (kind == 2 ? 0.8f : 0.4f);
+        if (scan && kind != 0)
+        {
+            lfoSyncW (b, 2, LfoShape::Triangle, { D4_1, D2_1 }, { 0.6f, 0.4f }, false);
+            if (kind == 2) b.route (S::Lfo3, D::WtPosA, 0.1f, 0.3f);
+            else b.route (S::Lfo3, D::ShapeA, 0.04f, 0.12f);
+        }
+        // a slow drift in pitch, or a tremolo on the beat
+        const int life = b.weighted ({ 0.55f, 0.3f, 0.15f });
+        if (life == 1)
+        {
+            b.lfo (0, LfoShape::SmoothRandom, 0.1f, 0.6f, false);
+            b.route (S::Lfo1, D::PitchAll, 0.002f, 0.006f);
+        }
+        else if (life == 2)
+        {
+            lfoSyncW (b, 0, LfoShape::Sine, { D1_8, D1_4, D1_8D }, { 0.4f, 0.35f, 0.25f }, false);
+            b.route (S::Lfo1, D::Amp, 0.15f, 0.35f);
+        }
+
+        ampEnv (b, 150.f, 1800.f, 1000.f, 3000.f, 0.7f, 1.f, 600.f, 3500.f);
+        const bool curve = b.chance (0.4f);
+        if (curve) b.uni (P::AenvCurve, 0.3f, 0.7f);
+        b.route (S::Macro1, D::F1Cutoff, 0.2f, 0.4f);
+
+        fxReverb (b, 0.95f, 2.5f, 8.f, 0.25f, 0.5f, 0.45f, 0.85f);
+        fxDelay (b, 0.7f, { D1_4, D1_4, D1_8D, D1_4D, D1_2 }, 0.25f, 0.6f, 0.15f, 0.35f);
+        fxChorus (b, 0.45f);
+        fxWidth (b, 0.45f, 0.3f, 0.7f);
+        fxPhaser (b, 0.15f);
+        fxDist (b, 0.35f, { (int) DistType::Tube, (int) DistType::Soft }, 2.f, 8.f, 0.2f, 0.5f);
+        const int squash = b.weighted ({ 0.2f, 0.3f, 0.5f });   // multiband, glue, none
+        if (squash == 0) fxCompMulti (b);
+        else if (squash == 1) fxCompGlue (b);
+        b.macros ({ D::F1Cutoff, D::F1Reso, D::DetuneA, D::WtPosA, D::Lfo2Rate, D::ReverbMix, D::ChorusMix, D::DelayMix, D::NoiseLevel });
+    }
+
+    // Psytrance percussion around the kick, from the corpus's drum presets:
+    // closed and open hats (noise high-passed at 2-9 kHz, 30-450 ms, a
+    // ring-modded metal layer in some), snares with a short body or a laser
+    // dive, tonal percs and toms (a sine or soft FM pair falling a few
+    // semitones), and alien percs (inharmonic FM or ring mod through a
+    // band-pass or comb). One hit per note, so no arp.
+    void perc (B& b)
+    {
+        polyVoice (b, 4, 8);
+        b.uni (P::VelSens, 0.5f, 0.8f);
+        const int kind = b.weighted ({ 0.3f, 0.16f, 0.2f, 0.18f, 0.16f });
+        switch (kind)
+        {
+            case 0:   // closed hat (a shaker when its attack is soft)
+            case 1:   // open hat
+            {
+                b.pick (P::NoiseType, { 0, 3, 2, 1 }, { 0.45f, 0.25f, 0.2f, 0.1f });
+                b.uni (P::NoiseLevel, 0.45f, 0.65f);
+                const bool metal = b.chance (0.35f);   // two detuned squares ring-modulated under the noise
+                if (metal)
+                {
+                    analogA (b, kSquare, 0.f);
+                    analogB (b, kSquare, 0.f, 0.f);
+                    b.pick (P::OscBCoarse, { 11, 13, 17, 23 });
+                    b.uni (P::OscBFine, -40.f, 40.f);
+                    b.uni (P::RingLevel, 0.15f, 0.35f);
+                    b.pick (P::Octave, { 1, 2 });
+                }
+                else b.on (P::OscAOn, false);
+                // high-passed mostly, a band-pass in some, left open now and then
+                const int fil = b.weighted ({ 0.7f, 0.2f, 0.1f });
+                if (fil == 0) filter1 (b, ft (FilterType::HP12), 3000.f, 9000.f, 0.f, 0.35f, 0.f, 0.f);
+                else if (fil == 1) filter1 (b, ft (FilterType::BP12), 5000.f, 10000.f, 0.1f, 0.4f, 0.f, 0.f);
+                else b.set (P::F1Type, (float) ft (FilterType::Off));
+                const bool ring = b.chance (0.25f);   // a band of ring on an open hat
+                if (kind == 1 && ring)
+                {
+                    b.set (P::F2Type, (float) ft (FilterType::BP12));
+                    b.uni (P::F2Cutoff, 6000.f, 10000.f);
+                    b.uni (P::F2Reso, 0.2f, 0.5f);
+                }
+                const bool shaker = b.chance (0.2f);
+                if (kind == 0) ampEnv (b, shaker ? 8.f : 0.f, shaker ? 30.f : 1.5f, 30.f, 140.f, 0.f, 0.f, 15.f, 70.f);
+                else ampEnv (b, 0.f, 2.f, 120.f, 450.f, 0.f, 0.f, 40.f, 150.f);
+                break;
+            }
+            case 2:   // snare: a short body under bright noise, or a laser snare's dive
+            {
+                const bool laser = b.chance (0.45f);
+                const bool sawBody = b.chance (0.5f);
+                const bool knock = b.chance (0.4f);   // a plain snare's body drops a little in some
+                analogA (b, laser && sawBody ? kSaw : kTri, 0.55f);
+                b.set (P::PenvAttack, 0.f);
+                b.set (P::PenvDest, 0.f);
+                if (laser)
+                {
+                    b.uni (P::PenvAmt, 24.f, 48.f);
+                    b.uni (P::PenvDecay, 60.f, 300.f);
+                    b.uni (P::PenvCurve, 0.3f, 0.7f);
+                }
+                else if (knock)
+                {
+                    b.uni (P::PenvAmt, 5.f, 14.f);
+                    b.uni (P::PenvDecay, 15.f, 50.f);
+                    b.uni (P::PenvCurve, 0.4f, 0.8f);
+                }
+                b.pick (P::NoiseType, { 0, 1, 3 }, { 0.6f, 0.25f, 0.15f });
+                b.uni (P::NoiseLevel, laser ? 0.1f : 0.35f, laser ? 0.3f : 0.6f);
+                filter1 (b, ft (FilterType::HP12), 250.f, 900.f, 0.f, 0.3f, 0.f, 0.f);
+                ampEnv (b, 0.f, 1.f, 110.f, 350.f, 0.f, 0.f, 30.f, 120.f);
+                b.pick (P::Octave, { 0, 1 }, { 0.6f, 0.4f });
+                break;
+            }
+            case 3:   // tonal perc or tom: a sine, triangle or soft FM pair dropping a few semitones
+            {
+                const int body = b.weighted ({ 0.45f, 0.25f, 0.3f });
+                if (body == 2) fmA (b, { 1.f, 2.f, 1.5f, 3.f }, 0.3f, 2.5f, 0.f, 0.2f);
+                else analogA (b, body == 0 ? kSine : kTri, 0.8f);
+                b.set (P::PenvAttack, 0.f);
+                b.set (P::PenvDest, 0.f);
+                b.uni (P::PenvAmt, 5.f, 24.f);
+                b.uni (P::PenvDecay, 25.f, 180.f);
+                b.uni (P::PenvCurve, 0.3f, 0.8f);
+                const bool click = b.chance (0.5f);
+                if (click) { b.pick (P::NoiseType, { 0, 1 }); b.uni (P::NoiseLevel, 0.03f, 0.12f); }
+                filter1 (b, ft (FilterType::LP12), 1500.f, 7000.f, 0.f, 0.3f, 0.2f, 0.5f);
+                filterEnv (b, 0.f, 0.f, 40.f, 200.f, 0.f, 0.f, 20.f, 80.f);
+                ampEnv (b, 0.f, 1.f, 100.f, 400.f, 0.f, 0.f, 30.f, 150.f);
+                b.pick (P::Octave, { -1, 0, 1 }, { 0.3f, 0.5f, 0.2f });
+                break;
+            }
+            default:  // alien perc: inharmonic FM or ring mod through a band-pass or comb
+            {
+                const bool fmBody = b.chance (0.55f);
+                if (fmBody)
+                {
+                    fmA (b, { 1.41f, 1.73f, 2.76f, 3.5f, 5.19f }, 1.5f, 6.f, 0.f, 0.5f);
+                    modEnv (b, 0.f, 0.f, 20.f, 150.f, 0.f, 0.f, 20.f, 60.f);
+                    b.route (S::ModEnv, D::FmA, 0.2f, 0.45f);
+                }
+                else
+                {
+                    analogA (b, kSquare, 0.3f);
+                    analogB (b, b.chance (0.5f) ? kSquare : kSine, 0.f, 0.f);
+                    b.pick (P::OscBCoarse, { 6, 11, 13, 18, 25 });
+                    b.uni (P::OscBFine, -30.f, 30.f);
+                    b.uni (P::RingLevel, 0.5f, 0.8f);
+                }
+                b.set (P::PenvAttack, 0.f);
+                b.set (P::PenvDest, 0.f);
+                b.uni (P::PenvAmt, 4.f, 24.f);
+                b.uni (P::PenvDecay, 20.f, 200.f);
+                b.uni (P::PenvCurve, 0.3f, 0.8f);
+                const bool comb = b.chance (0.4f);
+                if (comb)
+                {
+                    filter1 (b, ft (FilterType::CombPos), 200.f, 1500.f, 0.4f, 0.8f, 0.f, 0.2f);
+                    b.uni (P::F1Key, 0.5f, 1.f);
+                }
+                else filter1 (b, ft (FilterType::BP12), 600.f, 4000.f, 0.3f, 0.7f, 0.2f, 0.5f);
+                filterEnv (b, 0.f, 0.f, 60.f, 300.f, 0.f, 0.f, 20.f, 100.f);
+                ampEnv (b, 0.f, 1.f, 150.f, 600.f, 0.f, 0.f, 40.f, 200.f);
+                b.pick (P::Octave, { -1, 0, 1 }, { 0.3f, 0.45f, 0.25f });
+                break;
+            }
+        }
+
+        // hats open up on soft hits and thin out on hard ones; tonal hits brighten
+        // hats open up on soft hits and thin out on hard ones, tonal hits
+        // brighten (in some); no two hits quite alike
+        const bool hat = kind < 2;
+        const bool touch = b.chance (0.3f);
+        if (touch) b.route (S::Velocity, D::F1Cutoff, hat ? -0.15f : 0.1f, hat ? -0.05f : 0.25f);
+        b.route (S::Random, D::F1Cutoff, 0.03f, 0.1f);
+        b.route (S::Macro1, hat ? D::F1Cutoff : D::PitchEnvAmt, 0.2f, 0.4f);
+
+        fxDist (b, 0.45f, { (int) DistType::Soft, (int) DistType::Tube, (int) DistType::Hard }, 3.f, 12.f, 0.2f, 0.6f);
+        if (b.chance (0.12f))
+        {
+            b.on (P::CrushOn, true);
+            b.uni (P::CrushBits, 6.f, 12.f);
+            b.uni (P::CrushRate, 1.f, 6.f);
+            b.uni (P::CrushMix, 0.2f, 0.5f);
+        }
+        fxReverb (b, 0.5f, 0.3f, 1.5f, 0.06f, 0.25f, 0.2f, 0.5f);
+        fxDelay (b, 0.2f, { D1_8D, D1_16, D1_16D, D1_4 }, 0.1f, 0.35f, 0.05f, 0.2f);
+        fxWidth (b, 0.35f, 0.3f, 0.8f);
+        if (b.chance (0.35f)) fxCompGlue (b);
+        b.macros ({ D::F1Cutoff, D::NoiseLevel, D::PitchEnvAmt, D::F1Reso, D::DistDrive, D::ReverbMix, D::DelayMix });
+    }
 } // namespace
 
 // Leads and pads spread their oscillators like a Serum patch would: a
@@ -1630,10 +2414,10 @@ void unisonRecipe (Category c, RecipeBuilder& b)
     Spread sp {};
     switch (c)
     {
-        case Category::PsyLead:    sp = { 0.6f, 0.4f, 3, 7, 0.1f, 0.28f, 0.6f, 0.85f, 0.6f, 1.f, false }; break;
-        case Category::Pluck:      sp = { 0.4f, 0.3f, 2, 4, 0.05f, 0.15f, 0.4f, 0.7f, 0.4f, 0.8f, false }; break;
-        case Category::Stab:       sp = { 0.5f, 0.35f, 3, 5, 0.08f, 0.22f, 0.5f, 0.8f, 0.6f, 1.f, false }; break;
-        case Category::Grid:       sp = { 0.25f, 0.15f, 2, 3, 0.04f, 0.12f, 0.3f, 0.6f, 0.3f, 0.8f, false }; break;
+        case Category::PsyLead:    sp = { 0.45f, 0.35f, 2, 7, 0.03f, 0.2f, 0.55f, 0.85f, 0.6f, 1.f, false }; break;
+        case Category::Pluck:      sp = { 0.55f, 0.4f, 2, 6, 0.04f, 0.15f, 0.4f, 0.75f, 0.4f, 0.9f, false }; break;
+        case Category::Stab:       sp = { 0.55f, 0.45f, 2, 9, 0.06f, 0.2f, 0.5f, 0.85f, 0.6f, 1.f, false }; break;
+        case Category::Grid:       sp = { 0.4f, 0.25f, 2, 5, 0.04f, 0.12f, 0.3f, 0.6f, 0.3f, 0.8f, false }; break;
         case Category::Screech:    sp = { 0.3f, 0.2f, 2, 3, 0.04f, 0.12f, 0.3f, 0.6f, 0.3f, 0.7f, false }; break;
         case Category::Metallic:   sp = { 0.2f, 0.15f, 2, 3, 0.03f, 0.1f, 0.3f, 0.6f, 0.5f, 0.9f, true }; break;
         case Category::Atmos:      sp = { 0.7f, 0.5f, 4, 7, 0.12f, 0.35f, 0.7f, 0.9f, 0.8f, 1.f, true }; break;
@@ -1641,6 +2425,9 @@ void unisonRecipe (Category c, RecipeBuilder& b)
         case Category::Riser:
         case Category::Uplifter:
         case Category::Downlifter: sp = { 0.5f, 0.35f, 4, 7, 0.15f, 0.4f, 0.7f, 0.9f, 0.9f, 1.f, false }; break;
+        case Category::PsyArp:     sp = { 0.3f, 0.2f, 2, 4, 0.02f, 0.12f, 0.4f, 0.75f, 0.4f, 0.9f, false }; break;
+        case Category::Fm:         sp = { 0.12f, 0.1f, 2, 3, 0.02f, 0.08f, 0.3f, 0.6f, 0.3f, 0.7f, false }; break;
+        case Category::Pad:        sp = { 0.75f, 0.55f, 4, 12, 0.06f, 0.25f, 0.6f, 0.9f, 0.8f, 1.f, true }; break;
         default:
             if (familyOf (c) == Family::Bass)
             {
@@ -1712,6 +2499,10 @@ Recipe recipeFor (Category c) noexcept
         case Category::GhostStab:   return ghostStabRecipe;
         case Category::GhostBass:   return ghostBassRecipe;
         case Category::Phoscyon:    return phoscyonRecipe;
+        case Category::PsyArp:      return psyArp;
+        case Category::Fm:          return fm;
+        case Category::Pad:         return pad;
+        case Category::Perc:        return perc;
         case Category::KickFullOn:
         case Category::KickGoa:
         case Category::KickDarkForest:

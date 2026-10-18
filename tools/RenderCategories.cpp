@@ -124,6 +124,22 @@ namespace
                     if (groove[i % 16] == 'x') p.push_back ({ i * 0.25, 0.12, bars[i / 16], (i % 4 == 2) ? 1.f : 0.75f });
                 break;
             }
+            case Category::PsyArp:   // a 16th sequence over an E2 pedal, E phrygian around E3
+            case Category::Fm:
+            {
+                static const int arpLine[16] = { 40, 52, 53, 40, 55, 52, 40, 57, 40, 55, 53, 40, 52, 48, 40, 50 };
+                static const int fmLine[16] = { 40, 52, 40, 52, 40, 55, 40, 52, 40, 52, 40, 53, 40, 52, 40, 50 };
+                const int* line = c == Category::PsyArp ? arpLine : fmLine;
+                for (int i = 0; i < 64; ++i) p.push_back ({ i * 0.25, 0.2, line[i % 16], (i % 4 == 2) ? 0.9f : 0.75f });
+                break;
+            }
+            case Category::Pad:   // two held chords, E minor then C major, two bars each
+                for (int k : { 52, 55, 59 }) p.push_back ({ 0.0, 7.5, k, 0.8f });
+                for (int k : { 48, 52, 55 }) p.push_back ({ 8.0, 7.5, k, 0.8f });
+                break;
+            case Category::Perc:   // a hit on every 16th, the offbeats loudest
+                for (int i = 0; i < 64; ++i) p.push_back ({ i * 0.25, 0.1, 60, (i % 4 == 2) ? 1.f : (i % 2 ? 0.6f : 0.75f) });
+                break;
             case Category::KickFullOn: case Category::KickGoa: case Category::KickDarkForest:
             case Category::KickHiTech: case Category::KickProgressive:
                 // four on the floor; the key changes every bar (F, F, G, D#) to hear the tracking
@@ -150,6 +166,8 @@ namespace
             case Category::Drone: case Category::Zap: case Category::Laser: keys = { 48 }; break;
             case Category::Grid: keys = { 64 }; break;   // the note lane carries the line
             case Category::GhostStab: keys = { 56 }; break;   // one key: the patch stacks the fifths, the lane walks the chords
+            case Category::PsyArp: case Category::Fm: keys = { 52 }; break;   // the note lane carries the line and its pedal
+            case Category::Pad: keys = { 52, 55, 59 }; break;
             default: keys = { 60, 63, 67 }; break;
         }
         std::vector<Note> p;

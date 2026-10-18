@@ -11,18 +11,28 @@ Builds as **VST3**, **Audio Unit** and **Standalone** (macOS).
 
 ## Categories
 
-39 kinds of sound, each with its own recipe, in seven groups in the sidebar.
+43 kinds of sound, each with its own recipe, in seven groups in the sidebar.
 Each group is a header; click one to open it and its sounds fold out under
 it, while closed groups show a dot per sound. The accents run as one rainbow
 down the whole list: red at the first sound of the first group, through
-every group, to magenta at the last kick.
+every group, to magenta at the last sound of the Drums group.
 
-- **Main**: Ghost Stab · Grid · Jilax · Pluck · Psy Lead · Stab
+- **Main**: FM · Ghost Stab · Grid · Jilax · Pluck · Psy Arp · Psy Lead · Stab
 - **Acid**: Acid · Phoscyon
 - **FX**: Alien Voice · Bubble · Glitch · Gurgle · Laser · Metallic · Screech · Squelch · Wobble · Zap
 - **Energy**: Downlifter · Impact · Noise FX · Reverse · Riser · Uplifter
-- **Background**: Atmos · Drone · Gate
-- **Bass** and **Kick**: below
+- **Background**: Atmos · Drone · Gate · Pad
+- **Bass** and **Drums** (the kicks and Perc): below
+
+Psy Arp, FM, Pad and Perc, and the recipes of Psy Lead, Pluck, Stab, Zap,
+Grid and Glitch, come from about 2,800 psytrance Serum presets (Ghosthack,
+Outerverse, Lunatica, PME, InterSys, Tunecraft, WeirDDose and more), decoded
+and read as a population: how many presets of a kind use each module, and the
+spread of each setting. Each recipe draws its modules with those odds and its
+settings from those spreads, mapped onto PsyBox's engine. The refitted
+categories came out with fewer supersaws and more FM, a second oscillator on
+the note or an octave away in most patches, filters that a synced LFO sweeps,
+and more drive and multiband compression.
 
 ### Acid
 
@@ -95,12 +105,46 @@ packs: FM blips, plucks, small chord stabs and ring-modulated ticks, each over
 in a sixteenth or two, high-passed above the bass. Every hit comes out a little
 different (a new random value per note, or a sample & hold on the 16ths, on
 the brightness or the FM index), and some get a click from a quick pitch drop.
-Dry, with a ping-pong echo on the grid. With **Arp** ticked a grid plays
+Squashed by a multiband compressor and mostly dry: a short echo on the grid in
+a third, a small room, a grain of noise or a chorus in some. With **Arp** ticked a grid plays
 straight 16ths with short gates: one-beat cells that leave most beats to the
 kick and play the "e", "and" and "a" around the bass, a Euclidean figure
 turned off the beat, or the dotted-eighth run, sometimes a three-beat loop
 against the bar. The line keeps to the key with octave and fifth jumps, and
-the last half-bar answers the first.
+the last half-bar answers the first; a fifth of them hammer the key between
+the notes of a sequence line instead.
+
+### Psy Arp
+
+Goa and psy sequences: one 16th line, the way the presets' arp clips play
+it. Nearly every sixteenth plays, an octave pedal takes about a third of the
+notes (on any sixteenth of the beat), and between them a melody walks the
+scale by steps and leans on the key, the b2 and the third, leaping to the
+fifth, b6, seventh or octave. A note in twelve is held into the next step. The
+sound is a saw, square, wavetable, FM pair or synced oscillator, with a second
+oscillator in most, through a ladder or band-pass that a slow synced LFO
+sweeps over one to four bars (the Goa sweep) or an envelope snaps per note.
+Most get a dotted-eighth echo, grit and compression. With **Arp** ticked the
+note lane carries the line, so one held key plays it.
+
+### FM
+
+Hi-tech and full-on FM: a two-operator voice, or a saw, square or sine
+phase-modulating an FM carrier on osc B, its index moved by a synced LFO (the
+talking growl), an envelope (the bite) or a slow sweep over the bars. Mostly
+through a band-pass or high-pass that a slow LFO sweeps, an octave down, mono
+in a third, driven and squashed by a multiband compressor. With **Arp** the
+lines roll like a psy riff over the octave pedal.
+
+### Pad
+
+Breakdown and melodic chord beds: a supersaw, stacked saws (an octave or a
+fifth in the unison stack) or a slowly scanned wavetable, osc B on the note
+or an octave away, a noise layer in four of ten and a sub in three. A ladder
+low-pass breathes with a slow LFO; the sound swells in over 0.15-1.8 s and
+rings out for up to 3.5 s through chorus, width and a big reverb. Atmos keeps
+the textures; a pad is the harmony. With **Arp** it plays chord tones tied
+into each other over a progression.
 
 ### Jilax
 
@@ -224,11 +268,18 @@ A glue compressor with make-up gain puts the basses level with the kicks; the
 reverse basses only get the make-up, so their swell keeps its shape. Their
 Length panel sits where the other basses have the Knock.
 
-### Kicks
+### Drums
 
-Five kick styles, under the **Kick** tab:
+Five kick styles and the percs, under the **Drums** tab:
 
-Dark Forest Kick · Full-On Kick · Goa Kick · Hi-Tech Kick · Progressive Kick
+Dark Forest Kick · Full-On Kick · Goa Kick · Hi-Tech Kick · Perc · Progressive Kick
+
+**Perc** is a synth sound for the hits around the kick: closed and open hats
+(noise high-passed at 3-9 kHz, a ring-modulated metal layer in some),
+snares with a short body or a laser dive, tonal percs and toms (a sine or
+soft FM pair falling a few semitones) and alien percs (inharmonic FM or ring
+modulation through a band-pass or comb). Each hit dies away while the key is
+held; there is no arp, so you play the groove. Hats open up on soft hits.
 
 A kick category switches the synth to a dedicated kick engine, and the OSC
 view becomes the KICK view: the kick's Pitch, Amp, Click, Drive and wave
@@ -276,13 +327,15 @@ body holds flat to about 160 ms and is down 30 dB by about 220 ms.
 - Tick **Arp** next to Generate and every new Main, FX or Background sound
   comes with an arp in the style of its category: tied 303 slides for acid
   (rolling octave leaps for psy acid),
-  random blips for bubbles, offbeat 16ths for grids, each with a freshly generated step pattern and a
+  random blips for bubbles, offbeat 16ths for grids, 16th runs over an octave
+  pedal for Psy Arp and FM (and now and then for leads, plucks and grids),
+  each with a freshly generated step pattern and a
   line on its note lane, so holding one key already plays a riff. Riffs are
   built from each category's figures in bar forms (AAAB, ABAB, ABAC...),
   turned off the beat, pushed into the next bar and answered, so each press
   of Generate writes a different one. The
   sound itself is the same with or without it; only the arp settings differ.
-  Energy sounds, basses and kicks have no arp. Set a **Key** and scale under
+  Energy sounds, basses, kicks and percs have no arp. Set a **Key** and scale under
   the Arp switch (Phrygian, Minor, Harmonic Min, Phrygian Dom, Dorian, Major)
   and new lines are written in it, and the arp plays every note in that scale
   whichever key you hold (hold the key itself to hear the riff from its
