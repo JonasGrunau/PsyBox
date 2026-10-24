@@ -1163,7 +1163,7 @@ TEST_CASE ("Distortion and the other block-rate controls ramp across the block",
 
 TEST_CASE ("Reverb, chorus and Phoscyon's reverb and chorus glide to new settings", "[fx]")
 {
-    // the line lengths and pre-delays used to jump at the block boundary
+    // the line lengths, pre-delays and the reverb's mix used to jump at the block boundary
     const float fs = 48000.f;
     const auto jumpRatio = [&] (auto&& makeFx, auto&& call) {
         auto fx = makeFx();
@@ -1189,6 +1189,16 @@ TEST_CASE ("Reverb, chorus and Phoscyon's reverb and chorus glide to new setting
         const double ratio = jumpRatio ([&] { Reverb r; r.prepare (fs); return r; },
                                         [] (Reverb& r, float* l, float* rr, int n, bool second) {
                                             r.process (l, rr, n, second ? 0.9f : 0.2f, 3.f, 0.3f, second ? 80.f : 5.f, 0.5f);
+                                        });
+        INFO ("largest step after the change / before: " << ratio);
+        CHECK (ratio < 1.5);
+    }
+    SECTION ("Reverb mix")
+    {
+        // what a sweep or an envelope moves, and drops to the knob when its voice ends
+        const double ratio = jumpRatio ([&] { Reverb r; r.prepare (fs); return r; },
+                                        [] (Reverb& r, float* l, float* rr, int n, bool second) {
+                                            r.process (l, rr, n, 0.5f, 1.5f, 0.3f, 10.f, second ? 0.05f : 0.5f);
                                         });
         INFO ("largest step after the change / before: " << ratio);
         CHECK (ratio < 1.5);

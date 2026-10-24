@@ -796,8 +796,12 @@ private:
 // one-pole damping, slow delay modulation on two lines against metallic
 // ringing, pre-delay. The line lengths, gains, pre-delay, size and damping
 // glide (80 ms, damping 20 ms) to their new values, so a control moved
-// between blocks neither steps nor clicks. The damping pole is set for 48 kHz
-// and moved with the rate (pole^(48000 / fs)) to keep its corner in Hz.
+// between blocks neither steps nor clicks. The mix glides too (5 ms): it is
+// what a sweep or an envelope modulates, and a voice's sources drop to 0 when
+// it ends, so the mix fell back to its knob in one sample, in the middle of
+// the tail (a click on a Jilax shot that swells its reverb over the note).
+// The damping pole is set for 48 kHz and moved with the rate
+// (pole^(48000 / fs)) to keep its corner in Hz.
 // ---------------------------------------------------------------------------
 class Reverb
 {
@@ -812,6 +816,7 @@ public:
             diff[(size_t) i].line.prepare ((int) (kDiffLen[i] * scale * 1.5f) + 8);
         pre.prepare ((int) (0.26f * sr));
         sw.prepare (sr);
+        mixLen = std::max (1, (int) std::lround (0.005f * sr));
         reset();
     }
 
@@ -823,6 +828,7 @@ public:
         damp.fill (0.f);
         modPhase = 0.0;
         sw.reset();
+        mixNow.reset();
         primed = false;
     }
     bool isActive (bool on) noexcept { return sw.isActive (on); }
@@ -851,6 +857,7 @@ public:
         }
         const float glide = 1.f - std::exp (-1.f / (0.08f * fs)), dampGlide = 1.f - std::exp (-1.f / (0.02f * fs));
         const double modInc = 0.37 / (double) fs;
+        mixNow.set (mix, mixLen);
 
         for (int s = 0; s < n; ++s)
         {
@@ -900,9 +907,9 @@ public:
 
             const float wl = (o[0] + o[2] + o[4] + o[6]) * 0.6f;
             const float wr = (o[1] + o[3] + o[5] + o[7]) * 0.6f;
-            const float fade = sw.tick (on);
-            l[s] = FxSwitch::blend (l[s], l[s] * (1.f - 0.4f * mix) + wl * mix, fade);
-            r[s] = FxSwitch::blend (r[s], r[s] * (1.f - 0.4f * mix) + wr * mix, fade);
+            const float fade = sw.tick (on), m = mixNow.next();
+            l[s] = FxSwitch::blend (l[s], l[s] * (1.f - 0.4f * m) + wl * m, fade);
+            r[s] = FxSwitch::blend (r[s], r[s] * (1.f - 0.4f * m) + wr * m, fade);
             if (sw.done (on))
             {
                 sw.stop();
@@ -926,6 +933,8 @@ private:
     std::array<float, 8> len {}, gain {};
     float dampCoef = 0.5f, preSamples = 1.f, sizeNow = 0.5f;
     bool primed = false;
+    Glide mixNow;
+    int mixLen = 240;   // samples: 5 ms
     FxSwitch sw;
 };
 
