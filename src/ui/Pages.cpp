@@ -32,13 +32,23 @@ void Page::paintOverChildren (juce::Graphics& g)
 // OscPage
 // ---------------------------------------------------------------------------
 OscPage::OscPage (PsyBoxProcessor& p)
-    : sub (p), noise (p), oscA (p, false), oscB (p, true), f1 (p, 0), f2 (p, 1), macros (p), mod (p), voicing (p), length (p), knock (p)
+    : sub (p), noise (p), noiseView (p), oscA (p, false), oscB (p, true), f1 (p, 0), f2 (p, 1), macros (p), mod (p), voicing (p), length (p), knock (p)
 {
     for (juce::Component* c : std::initializer_list<juce::Component*> { &sub, &noise, &oscA, &oscB, &f1, &f2, &macros, &mod, &voicing })
         addAndMakeVisible (c);
+    addChildComponent (noiseView);
     addChildComponent (length);
     addChildComponent (knock);
+    noise.onGear = [this] { showNoiseSample (true); };
+    noiseView.onClose = [this] { showNoiseSample (false); };
     setExtra (Extra::None);
+}
+
+void OscPage::showNoiseSample (bool show)
+{
+    noiseView.setVisible (show);
+    sub.setVisible (! show);
+    noise.setVisible (! show);
 }
 
 void OscPage::setExtra (Extra e)
@@ -57,6 +67,7 @@ void OscPage::resized()
     const int w = getWidth(), h = getHeight();
     sub.setBounds (0, 0, kSubW, kRowH);
     noise.setBounds (0, kRowH, kSubW, kRowH);
+    noiseView.setBounds (0, 0, kSubW, kTop);
     oscA.setBounds (kSubW, 0, kOscW, kTop);
     oscB.setBounds (kSubW + kOscW, 0, kOscW, kTop);
     const int fx = kSubW + 2 * kOscW;

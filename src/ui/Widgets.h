@@ -161,6 +161,14 @@ public:
     void setGearOn (bool on) { if (on != gearOn) { gearOn = on; repaint(); } }
     // Shown instead of the value (the supersaw's fixed seven voices).
     void setOverride (const juce::String& text) { if (text != overrideText) { overrideText = text; repaint(); } }
+    // A box for a continuous parameter that isn't counted in whole units (a
+    // pan): the size of a drag or wheel step, and how a value reads.
+    void setUnit (float stepSize, std::function<juce::String (float)> formatter)
+    {
+        unit = stepSize;
+        format = std::move (formatter);
+        repaint();
+    }
     int idealWidth() const;   // inline style
     psy::P getParam() const noexcept { return param; }
 
@@ -187,6 +195,8 @@ private:
     psy::P param;
     psy::ModDst target;
     juce::String caption, overrideText;
+    float unit = 1.f;
+    std::function<juce::String (float)> format;
     juce::ParameterAttachment attachment;
     float value = 0.f, dragStart = 0.f, wheelAccum = 0.f;
     bool cell = false, gear = false, gearOn = false, dragging = false, dropHover = false, dragShown = false;
@@ -266,6 +276,27 @@ private:
     juce::String text;
     bool on = false, stacked = false;
     std::unique_ptr<juce::ParameterAttachment> attachment;
+};
+
+// ---------------------------------------------------------------------------
+// The gear (a ring of eight teeth round a hole) that opens settings: drawn in
+// the unison box and as a button in a section's header.
+// ---------------------------------------------------------------------------
+void drawGear (juce::Graphics&, juce::Point<float> centre, juce::Colour, juce::Colour hole);
+
+class GearButton : public juce::Component, public juce::SettableTooltipClient
+{
+public:
+    explicit GearButton (const juce::String& tooltip = {});
+    void setOn (bool shouldBeOn) { if (on != shouldBeOn) { on = shouldBeOn; repaint(); } }
+    std::function<void()> onClick;
+    void paint (juce::Graphics&) override;
+    void mouseDown (const juce::MouseEvent&) override;
+    void mouseEnter (const juce::MouseEvent&) override { repaint(); }
+    void mouseExit (const juce::MouseEvent&) override { repaint(); }
+
+private:
+    bool on = false;
 };
 
 // ---------------------------------------------------------------------------

@@ -74,16 +74,87 @@ private:
     ParamCombo shape;
 };
 
-class NoisePanel : public Section
+// ---------------------------------------------------------------------------
+// What the noise plays: the five generated types, the bank's samples by
+// family, the loaded file and Load File... (each pick one undo step).
+// ---------------------------------------------------------------------------
+class NoiseSourceBox : public juce::Component, private juce::Timer
+{
+public:
+    explicit NoiseSourceBox (PsyBoxProcessor&);
+    void resized() override { box.setBounds (getLocalBounds()); }
+    void setTooltip (const juce::String& t) { box.setTooltip (t); }
+    // The clip the noise plays (the bank's or the file), or null.
+    static const psy::dsp::NoiseClip* clipFor (const PsyBoxProcessor&, std::shared_ptr<const psy::dsp::NoiseClip>& file);
+
+private:
+    PsyBoxProcessor& proc;
+    juce::ComboBox box;
+    std::unique_ptr<juce::FileChooser> chooser;
+    juce::String shownFile;
+    bool shownMissing = false;
+    void rebuild();
+    int currentId() const;
+    void timerCallback() override;   // follows the parameters and the loaded file
+};
+
+// The noise sample's waveform (its middle), Start as a line and the share
+// Random spreads the start over shaded after it.
+class NoiseWave : public juce::Component, private juce::Timer
+{
+public:
+    explicit NoiseWave (PsyBoxProcessor&);
+    void paint (juce::Graphics&) override;
+    void resized() override { cached = nullptr; }
+
+private:
+    PsyBoxProcessor& proc;
+    std::shared_ptr<const psy::dsp::NoiseClip> file;
+    const psy::dsp::NoiseClip* cached = nullptr;
+    juce::Path shape;
+    uint64_t lastPrint = 0;
+    void timerCallback() override;
+};
+
+class NoisePanel : public Section, private juce::Timer
 {
 public:
     explicit NoisePanel (PsyBoxProcessor&);
     void resized() override;
+    void paint (juce::Graphics&) override;
+    std::function<void()> onGear;   // the sample's settings (shown while the noise plays one)
 
 private:
+    PsyBoxProcessor& proc;
     KnobSet ks;
     ToggleDot direct;   // noise skips the filters
-    ParamCombo type;
+    NoiseSourceBox source;
+    GearButton gear;
+    void timerCallback() override;
+};
+
+// ---------------------------------------------------------------------------
+// The noise sample's settings, in place of the sub and noise sections (the
+// noise's gear opens it, its own gear closes it): the waveform, the source,
+// Fine and Pan as fields, Level, Pitch, Start and Random, One Shot and Key
+// (Direct stays on the noise section).
+// ---------------------------------------------------------------------------
+class NoiseSampleView : public Section, private juce::Timer
+{
+public:
+    explicit NoiseSampleView (PsyBoxProcessor&);
+    void resized() override;
+    std::function<void()> onClose;
+
+private:
+    PsyBoxProcessor& proc;
+    NoiseWave wave;
+    NoiseSourceBox source;
+    NumberBox fine, pan;
+    KnobSet ks;
+    ToggleDot once, key;
+    GearButton gear;
+    void timerCallback() override;   // closes when the noise stops playing a sample
 };
 
 // Response on the left, a 3 x 2 grid on the right.

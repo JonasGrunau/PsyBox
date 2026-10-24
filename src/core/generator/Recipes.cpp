@@ -7,6 +7,7 @@
 
 #include "Generator.h"
 #include "RecipeCommon.h"
+#include "dsp/NoiseBank.h"
 
 namespace psy
 {
@@ -1489,8 +1490,35 @@ namespace
     // always on, and as often a comb, band-pass or formant as a low-pass,
     // with resonance (40 % in the middle). Six kinds, the corpus's families:
     // air, choir, glass, a dark bed, alien life and an evolving pad.
+    // A noise sample instead of the generated noise, in `p` of them: one of
+    // `samples` (weighted), from anywhere in it for each note. A tonal one
+    // tracks the key; a texture plays at its own speed, a few semitones off
+    // now and then. Serum's atmospheres take their noise from samples like
+    // these.
+    void noiseSample (B& b, float p, std::initializer_list<int> samples, std::initializer_list<float> weights)
+    {
+        using Bank = dsp::NoiseBank;
+        const bool take = b.chance (p);
+        const int which = b.pick (P::NoiseSample, samples, weights);   // all drawn either way: the stream holds
+        b.uni (P::NoiseStart, 0.f, 1.f);
+        b.uni (P::NoiseRand, 0.5f, 1.f);
+        const float shift = b.rnd (0.f, 1.f);
+        if (! take) return;
+        b.set (P::NoiseType, (float) kNoiseSampleType);
+        b.set (P::NoiseKey, Bank::tonal (which) ? 1.f : 0.f);
+        // the bank's tonal samples sit on C two octaves under Key's reference (MIDI 72, Serum's): +24 plays them at
+        // their own speed on MIDI 48, where the atmospheres are played
+        if (Bank::tonal (which)) b.set (P::NoisePitch, 24.f);
+        else
+        {
+            b.set (P::NoisePitch, shift < 0.6f ? 0.f : std::round (-7.f + 12.f * (shift - 0.6f) / 0.4f));
+            b.uni (P::NoiseLevel, 0.45f, 0.9f);   // a texture leads, as Serum's noise samples do
+        }
+    }
+
     void atmos (B& b)
     {
+        using N = dsp::NoiseBank;
         const int kind = b.weighted ({ 0.22f, 0.14f, 0.15f, 0.18f, 0.15f, 0.16f });
         if (b.chance (0.15f)) monoVoice (b, false, 60.f, 400.f);   // a held texture that glides
         else polyVoice (b, 6, 10);
@@ -1513,6 +1541,7 @@ namespace
                 // never the Hiss: it sits above 10 kHz, where the band-pass and the roll-off are not
                 b.pick (P::NoiseType, { 1, 0, 4 }, { 0.55f, 0.33f, 0.12f });
                 b.uni (P::NoiseLevel, 0.6f, 1.f);
+                noiseSample (b, 0.7f, { N::DarkWind, N::Howl, N::Breath, N::Shush, N::AirCan, N::Rain }, { 0.35f, 0.25f, 0.2f, 0.05f, 0.05f, 0.1f });
                 if (b.chance (0.7f))
                     filter1 (b, b.chance (0.6f) ? ft (FilterType::BP12) : ft (FilterType::BP24), 350.f, 2200.f, 0.15f, 0.5f, 0.f, 0.f);
                 else
@@ -1539,6 +1568,7 @@ namespace
                 b.uni (P::OscBFine, 6.f, 18.f);
                 b.pick (P::NoiseType, { 4, 1 }, { 0.65f, 0.35f });
                 b.uni (P::NoiseLevel, 0.35f, 0.7f);
+                noiseSample (b, 0.6f, { N::Mantra, N::Breath, N::Shush }, { 0.35f, 0.4f, 0.25f });
                 filter1 (b, ft (FilterType::Formant), 700.f, 1600.f, 0.3f, 0.65f, 0.f, 0.f);
                 b.uni (P::F1Vowel, 0.f, 1.f);
                 // the mantra: the vowel turns over bars, the voices waver
@@ -1565,6 +1595,7 @@ namespace
                 }
                 b.pick (P::NoiseType, { 2, 1 });
                 b.uni (P::NoiseLevel, 0.15f, 0.45f);
+                noiseSample (b, 0.65f, { N::Glass, N::WindChimes, N::Inharmonic, N::MetalDrone }, { 0.35f, 0.3f, 0.2f, 0.15f });
                 if (b.chance (0.4f)) b.on (P::NoiseDirect, true);   // sparkle beside the filter
                 if (b.chance (0.5f)) filter1 (b, ft (FilterType::HP12), 250.f, 900.f, 0.1f, 0.4f, 0.f, 0.f);
                 else filter1 (b, ft (FilterType::CombPos), 800.f, 4000.f, 0.4f, 0.75f, 0.f, 0.f);
@@ -1588,6 +1619,8 @@ namespace
                 b.uni (P::OscBFine, 5.f, 20.f);
                 b.pick (P::NoiseType, { 1, 0 }, { 0.6f, 0.4f });
                 b.uni (P::NoiseLevel, 0.25f, 0.6f);
+                noiseSample (b, 0.6f, { N::PolarDrone, N::MetalDrone, N::DarkWind, N::Howl, N::Electric, N::MainsHum },
+                             { 0.25f, 0.2f, 0.2f, 0.15f, 0.1f, 0.1f });
                 if (b.chance (0.55f))
                 {
                     // the corpus's combs: tuned low, ringing, a low-pass after them
@@ -1622,6 +1655,7 @@ namespace
                 }
                 b.pick (P::NoiseType, { 2, 0 }, { 0.6f, 0.4f });
                 b.uni (P::NoiseLevel, 0.1f, 0.35f);
+                noiseSample (b, 0.65f, { N::Birds, N::Water, N::Electric, N::BitNoise, N::Inharmonic }, { 0.3f, 0.25f, 0.2f, 0.15f, 0.1f });
                 const bool vowel = b.chance (0.4f);
                 if (vowel)
                 {
@@ -1668,6 +1702,8 @@ namespace
                 }
                 b.pick (P::NoiseType, { 1, 4, 0 }, { 0.5f, 0.3f, 0.2f });
                 b.uni (P::NoiseLevel, 0.3f, 0.65f);
+                noiseSample (b, 0.55f, { N::PolarDrone, N::Mantra, N::DarkWind, N::AnalogPink, N::JunoChorus, N::Rain },
+                             { 0.2f, 0.15f, 0.2f, 0.15f, 0.15f, 0.15f });
                 if (b.chance (0.2f)) b.on (P::NoiseDirect, true);
                 const int fil = b.weighted ({ 0.5f, 0.25f, 0.25f });
                 if (fil == 0) filter1 (b, ft (FilterType::LP12), 1000.f, 6000.f, 0.1f, 0.4f, 0.f, 0.f);
@@ -1688,7 +1724,9 @@ namespace
         // noise leads, plain or pink, and the oscillators sit under it
         if (kind != 0 && kind != 4 && b.chance (0.3f))
         {
+            const bool sampled = b.state().geti (P::NoiseType) == kNoiseSampleType;
             b.pick (P::NoiseType, { 1, 0 }, { 0.6f, 0.4f });
+            if (sampled) b.set (P::NoiseType, (float) kNoiseSampleType);   // a sample leads as it is
             b.uni (P::NoiseLevel, 0.75f, 1.f);
             b.uni (P::OscALevel, 0.15f, 0.35f);
             b.uni (P::OscBLevel, 0.1f, 0.3f);

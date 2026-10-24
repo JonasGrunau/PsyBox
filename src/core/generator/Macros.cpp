@@ -64,6 +64,7 @@ namespace
             case D::LevelB:       return s.on (P::OscBOn);
             case D::SubLevel:     return s.get (P::SubLevel) > 0.f;
             case D::NoiseLevel:   return s.get (P::NoiseLevel) > 0.f;
+            case D::NoisePitch:   return s.get (P::NoiseLevel) > 0.f && s.geti (P::NoiseType) == kNoiseSampleType;
             case D::RingLevel:    return s.get (P::RingLevel) > 0.f;
             case D::Lfo1Rate:     return lfoRouted (s, 0) && ! s.on (P::Lfo1Sync);
             case D::Lfo2Rate:     return lfoRouted (s, 1) && ! s.on (P::Lfo2Sync);
@@ -148,6 +149,7 @@ namespace
             case D::LevelB:       return { "Osc B", Kind::Mix };
             case D::SubLevel:     return { "Sub", Kind::Mix };
             case D::NoiseLevel:   return { "Noise", Kind::Mix };
+            case D::NoisePitch:   return { "Noise Pitch", Kind::Pitch };
             case D::RingLevel:    return { "Ring", Kind::Mix };
             case D::F1Cutoff:     return { "Cutoff", Kind::Filter };
             case D::F2Cutoff:     return { "Cutoff 2", Kind::Filter };

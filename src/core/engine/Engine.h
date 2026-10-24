@@ -12,6 +12,7 @@
 #include "dsp/Oversampling.h"
 
 #include <array>
+#include <atomic>
 #include <vector>
 
 namespace psy
@@ -76,6 +77,11 @@ public:
     // Offline (a host render, a bounce) plays at the Render quality instead
     // of the live one.
     void setOffline (bool isOffline) noexcept { offline = isOffline; }
+    // The noise sample loaded from a file (NoiseSample "File"), or null. Any
+    // thread; the caller keeps the clip alive until blocksDone() has moved
+    // on past the call (the audio thread may still be reading the old one).
+    void setNoiseFile (const dsp::NoiseClip* clip) noexcept { noiseFile.store (clip, std::memory_order_release); }
+    uint64_t blocksDone() const noexcept { return blocks.load (std::memory_order_acquire); }
     // The decimator's, plus the most the effects can add in this engine mode
     // (maxEffectLatency): the output is padded up to it, so switching an
     // effect, or a new patch, never moves the latency the host sees. Only a
@@ -111,6 +117,8 @@ private:
     std::array<Voice, kMaxVoices> voices;
     uint64_t ageCounter = 0, noteSeed = 1;
     VoiceContext ctx;
+    std::atomic<const dsp::NoiseClip*> noiseFile { nullptr };
+    std::atomic<uint64_t> blocks { 0 };
 
     // Kick mode: two one-shot kicks, so a retrigger can fade the old hit out.
     std::array<KickVoice, 2> kicks;

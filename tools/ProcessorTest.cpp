@@ -284,6 +284,76 @@ void stateRoundTrips()
     check (b.proc.getPresetName() == a.proc.getPresetName() && b.proc.getMacroName (2) == "Air", "and the name and macro names");
 }
 
+// A noise sample from a file: it loads (the noise switches to it), a
+// session brings it back with the patch, the slot of a category left keeps
+// its own, a missing file is silent but keeps its name, and the WAV bounce
+// plays it (louder than with the file gone).
+void noiseFileLoadsAndComesBack()
+{
+    const auto dir = juce::File::createTempFile ("psynoise");
+    dir.createDirectory();
+    const auto wav = dir.getChildFile ("tone.wav");
+    {
+        juce::WavAudioFormat fmt;
+        std::unique_ptr<juce::OutputStream> out (wav.createOutputStream());
+        auto w = fmt.createWriterFor (out, juce::AudioFormatWriterOptions {}.withSampleRate (44100.0).withNumChannels (2).withBitsPerSample (24));
+        juce::AudioBuffer<float> buf (2, 44100);
+        for (int i = 0; i < 44100; ++i)
+        {
+            buf.setSample (0, i, 0.3f * std::sin (2.f * juce::MathConstants<float>::pi * 440.f * (float) i / 44100.f));
+            buf.setSample (1, i, 0.3f * std::sin (2.f * juce::MathConstants<float>::pi * 660.f * (float) i / 44100.f));
+        }
+        if (w != nullptr) w->writeFromAudioSampleBuffer (buf, 0, buf.getNumSamples());
+    }
+
+    Bench a;
+    a.proc.setCategory (Category::Atmos);
+    a.proc.generateWithSeed (0x51);
+    const bool loaded = a.proc.loadNoiseFile (wav);
+    check (loaded && a.proc.getNoiseClip() != nullptr && a.proc.getNoiseClip()->stereo, "a stereo WAV loads as the File noise sample");
+    check ((int) a.proc.plain (P::NoiseType) == kNoiseSampleType && (int) a.proc.plain (P::NoiseSample) == kNoiseFile,
+           "and the noise plays it");
+    check (! a.proc.loadNoiseFile (dir.getChildFile ("nothing.wav")) && a.proc.getNoiseFile() == wav, "a file that won't read changes nothing");
+
+    juce::MemoryBlock state;
+    a.proc.getStateInformation (state);
+    Bench b;
+    b.proc.setStateInformation (state.getData(), (int) state.getSize());
+    check (b.proc.getNoiseFile() == wav && b.proc.getNoiseClip() != nullptr, "a session loads its noise file again");
+
+    // another category keeps its own; coming back brings the file back
+    b.proc.setCategory (Category::Drone);
+    b.proc.setNoiseSource (0, 0);
+    b.proc.setCategory (Category::Atmos);
+    check (b.proc.getNoiseFile() == wav && b.proc.getNoiseClip() != nullptr && (int) b.proc.plain (P::NoiseSample) == kNoiseFile,
+           "a category's slot keeps its noise file");
+
+    const auto peak = [] (const juce::File& f) {
+        juce::AudioFormatManager m;
+        m.registerBasicFormats();
+        std::unique_ptr<juce::AudioFormatReader> r (m.createReaderFor (f));
+        if (r == nullptr) return 0.f;
+        juce::AudioBuffer<float> buf ((int) r->numChannels, (int) r->lengthInSamples);
+        r->read (&buf, 0, (int) r->lengthInSamples, 0, true, true);
+        return buf.getMagnitude (0, buf.getNumSamples());
+    };
+    b.set (P::OscAOn, 0.f);
+    b.set (P::OscBOn, 0.f);
+    b.set (P::SubLevel, 0.f);
+    b.set (P::NoiseLevel, 1.f);
+    const auto withFile = dir.getChildFile ("with.wav");
+    const bool rendered = PsyBoxProcessor::renderBounce (b.proc.bounceRequest(), withFile, [] { return false; });
+    check (rendered && peak (withFile) > 0.01f, "the bounce plays the noise file");
+
+    wav.deleteFile();
+    juce::MemoryBlock again;
+    b.proc.getStateInformation (again);
+    Bench c;
+    c.proc.setStateInformation (again.getData(), (int) again.getSize());
+    check (c.proc.getNoiseFile() == wav && c.proc.getNoiseClip() == nullptr, "a missing noise file is silent and keeps its name");
+    dir.deleteRecursively();
+}
+
 // auval sets values and reads them back: a continuous parameter returns
 // exactly what the host set, and the engine still plays its plain value.
 void hostValuesComeBackExactly()
@@ -551,6 +621,7 @@ int runProcessorTests()
     redoKeepsTweaks();
     slotMacroNamesSurviveASession();
     stateRoundTrips();
+    noiseFileLoadsAndComesBack();
     hostValuesComeBackExactly();
     bounceRendersOffTheMessageThread();
     twoWindowsKeepTheirAccents();

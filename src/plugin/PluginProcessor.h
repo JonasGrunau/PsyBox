@@ -88,6 +88,21 @@ public:
     void undo();
     void redo();
 
+    // ---- Noise sample from a file (message thread) --------------------------------
+    // Reads a WAV, AIFF or FLAC (up to kMaxNoiseSeconds), levels it like the
+    // bank's samples (rms -14 dBFS, peaks under -0.5 dBFS) and hands it to the
+    // engine as the File sample; `select` also points the noise at it (type
+    // Sample, sample File). False when it can't be read (nothing changes).
+    // Sessions, category slots and presets keep the path; a missing file is
+    // silent and keeps its name.
+    static constexpr double kMaxNoiseSeconds = 30.0;
+    bool loadNoiseFile (const juce::File& file, bool select = true);
+    // The noise's source in one undoable step: a generated type (0..4), or
+    // with `type` kNoiseSampleType the bank's sample or kNoiseFile.
+    void setNoiseSource (int type, int sample);
+    juce::File getNoiseFile() const;
+    std::shared_ptr<const psy::dsp::NoiseClip> getNoiseClip() const;   // null: none loaded (or missing)
+
     // ---- Presets --------------------------------------------------------------
     static juce::File presetFolder();
     juce::String getPresetName() const { return presetName; }
@@ -159,6 +174,7 @@ public:
         int note = 48;
         juce::String name;   // file name without extension: the preset and the note
         uint64_t key = 0;    // equal keys render the same WAV
+        std::shared_ptr<const psy::dsp::NoiseClip> noiseFile;   // the File sample, if the patch plays it
     };
     static constexpr float kBouncePeakDb = -0.1f;
     Bounce bounceRequest() const;
@@ -234,6 +250,14 @@ private:
 
     psy::Engine engine;
     psy::ParamState audioParams, incoming;   // audio thread: the values playing, the ones just read
+    // The File noise sample: the path (the patch's), the clip the engine plays,
+    // and clips it may still be reading, kept until its block count moves on.
+    juce::AudioFormatManager audioFormats;
+    juce::File noiseFile;
+    std::shared_ptr<const psy::dsp::NoiseClip> noiseClip;
+    std::vector<std::pair<uint64_t, std::shared_ptr<const psy::dsp::NoiseClip>>> retiredNoise;
+    void setNoiseClip (std::shared_ptr<const psy::dsp::NoiseClip> clip);
+    void restoreNoiseFile (const juce::String& path);   // a patch's path: load it, or keep it as missing
     std::vector<psy::MidiEvent> midiEvents;
     std::array<psy::MidiEvent, 2 * 128 + 1> restartEvents {};   // the pedal, the keys, the pedal's keys let go
     int reportedLatency = -1;
@@ -309,7 +333,7 @@ private:
     static juce::String parseMacroName (const juce::var& stored, int i);
 
     // The patch each category had when you last left it; restored when you come back.
-    struct Slot { bool valid = false; psy::ParamState state; uint32_t seed = 0; juce::String name; MacroNames macros; };
+    struct Slot { bool valid = false; psy::ParamState state; uint32_t seed = 0; juce::String name; MacroNames macros; juce::String noiseFile; };
     std::array<Slot, psy::kNumCategories> slots;
     void saveSlot();
     void switchCategory (psy::Category c);   // saves the old slot, restores or generates the new one

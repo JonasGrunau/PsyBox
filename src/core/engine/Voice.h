@@ -3,6 +3,7 @@
 #include "Params.h"
 #include "dsp/Filters.h"
 #include "dsp/Modulators.h"
+#include "dsp/NoiseBank.h"
 #include "dsp/Oscillators.h"
 #include "dsp/Unison.h"
 
@@ -52,6 +53,10 @@ struct VoiceContext
     struct Slot { int src, dst; float amt; };
     std::array<Slot, kNumModSlots> slots {};
     int numSlots = 0;
+    // The noise samples: the bank (set by Engine::prepare, built there) and
+    // a file of your own (null when none is loaded).
+    const dsp::NoiseBank* noiseBank = nullptr;
+    const dsp::NoiseClip* noiseFile = nullptr;
 };
 
 class Voice
@@ -103,6 +108,13 @@ public:
     const FilterNow& filterNow (int slot) const noexcept { return filtNow[(size_t) slot]; }
 
 private:
+    // The clip the noise plays (the bank's or the file), or null when the
+    // noise is one of the generated types.
+    static const dsp::NoiseClip* noiseClip (const VoiceContext& ctx) noexcept;
+    // A bank sample (rms -14 dBFS) as loud as white noise at the same level
+    // (white's rms 0.4 runs at the oversampled rate and loses half its power
+    // to the decimator: 0.28 at the base rate).
+    static constexpr float kSampleGain = 1.41421356f;
     // One oscillator per unison voice (the supersaw is its own unison).
     template <typename Osc> using Stack = std::array<Osc, kMaxUnison>;
     Stack<dsp::AnalogOsc> anA, anB;
@@ -111,6 +123,8 @@ private:
     dsp::AnalogOsc sub;
     dsp::Supersaw ssA, ssB;
     dsp::Noise noise;
+    dsp::NoiseSampler sampler;
+    const dsp::NoiseClip* samplerClip = nullptr;   // what the sampler last started on
     // The right channel's filters run only while a unison oscillator is spread
     // in stereo; otherwise the voice is mono up to the pan.
     dsp::FilterSlot f1, f2, f1R, f2R;

@@ -274,14 +274,193 @@ void SubPanel::resized()
     shape.setBounds (gr.captioned (0, 1, 2));
 }
 
+// ---------------------------------------------------------------------------
+// The noise sample: its source menu, waveform and settings
+// ---------------------------------------------------------------------------
+namespace
+{
+    constexpr int kTypeId = 1, kSampleId = 101, kFileId = 200, kLoadId = 300;
+    constexpr int kGenerated = 5;   // White .. Tuned
+}
+
+NoiseSourceBox::NoiseSourceBox (PsyBoxProcessor& p) : proc (p)
+{
+    box.onChange = [this] {
+        const int id = box.getSelectedId();
+        if (id == kLoadId)
+        {
+            box.setSelectedId (currentId(), juce::dontSendNotification);
+            chooser = std::make_unique<juce::FileChooser> ("Load a noise sample", proc.getNoiseFile(), "*.wav;*.aif;*.aiff;*.flac");
+            chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
+                                  [safe = juce::Component::SafePointer<NoiseSourceBox> (this)] (const juce::FileChooser& fc) {
+                                      if (safe == nullptr || fc.getResult() == juce::File()) return;
+                                      safe->proc.loadNoiseFile (fc.getResult());
+                                      safe->rebuild();
+                                  });
+            return;
+        }
+        if (id >= kTypeId && id < kTypeId + kGenerated) proc.setNoiseSource (id - kTypeId, 0);
+        else if (id >= kSampleId && id < kSampleId + psy::dsp::NoiseBank::kCount) proc.setNoiseSource (psy::kNoiseSampleType, id - kSampleId);
+        else if (id == kFileId) proc.setNoiseSource (psy::kNoiseSampleType, psy::kNoiseFile);
+    };
+    addAndMakeVisible (box);
+    rebuild();
+    startTimerHz (10);
+}
+
+const psy::dsp::NoiseClip* NoiseSourceBox::clipFor (const PsyBoxProcessor& p, std::shared_ptr<const psy::dsp::NoiseClip>& file)
+{
+    if ((int) p.plain (P::NoiseType) != psy::kNoiseSampleType) return nullptr;
+    const int which = (int) p.plain (P::NoiseSample);
+    if (which == psy::kNoiseFile)
+    {
+        file = p.getNoiseClip();
+        return file.get();
+    }
+    return &psy::dsp::NoiseBank::shared().clip (which);
+}
+
+int NoiseSourceBox::currentId() const
+{
+    const int type = (int) proc.plain (P::NoiseType);
+    if (type != psy::kNoiseSampleType) return kTypeId + type;
+    const int which = (int) proc.plain (P::NoiseSample);
+    return which == psy::kNoiseFile ? kFileId : kSampleId + which;
+}
+
+void NoiseSourceBox::rebuild()
+{
+    using Bank = psy::dsp::NoiseBank;
+    box.clear (juce::dontSendNotification);
+    box.addSectionHeading ("Noise");
+    for (int t = 0; t < kGenerated; ++t) box.addItem (psy::choices::noiseType[(size_t) t], kTypeId + t);
+    for (int f = 0; f < Bank::kFamilies; ++f)
+    {
+        box.addSectionHeading (Bank::kFamilyName[f]);
+        for (int i = Bank::kFamilyStart[f]; i < Bank::kFamilyStart[f + 1]; ++i) box.addItem (Bank::name (i), kSampleId + i);
+    }
+    box.addSectionHeading ("File");
+    const auto file = proc.getNoiseFile();
+    shownFile = file.getFullPathName();
+    shownMissing = file != juce::File() && proc.getNoiseClip() == nullptr;
+    if (file != juce::File()) box.addItem (file.getFileNameWithoutExtension() + (shownMissing ? " (missing)" : ""), kFileId);
+    else box.addItem ("No file", kFileId);
+    box.addItem ("Load File...", kLoadId);
+    box.setSelectedId (currentId(), juce::dontSendNotification);
+}
+
+void NoiseSourceBox::timerCallback()
+{
+    const auto file = proc.getNoiseFile();
+    if (file.getFullPathName() != shownFile || (file != juce::File() && (proc.getNoiseClip() == nullptr) != shownMissing))
+        rebuild();
+    const int id = currentId();
+    if (box.getSelectedId() != id) box.setSelectedId (id, juce::dontSendNotification);
+}
+
+NoiseWave::NoiseWave (PsyBoxProcessor& p) : proc (p)
+{
+    setInterceptsMouseClicks (false, false);
+    startTimerHz (15);
+}
+
+void NoiseWave::timerCallback()
+{
+    std::shared_ptr<const psy::dsp::NoiseClip> f;
+    const auto* clip = NoiseSourceBox::clipFor (proc, f);
+    uint64_t h = theme::kFnvSeed;
+    h = theme::fnvMix (h, (uint64_t) reinterpret_cast<uintptr_t> (clip));
+    h = theme::fnvMixFloat (h, proc.plain (P::NoiseStart));
+    h = theme::fnvMixFloat (h, proc.plain (P::NoiseRand));
+    h = theme::fnvMixFloat (h, proc.plain (P::NoiseOneShot));
+    if (h != lastPrint)
+    {
+        lastPrint = h;
+        repaint();
+    }
+}
+
+void NoiseWave::paint (juce::Graphics& g)
+{
+    const auto r = getLocalBounds().toFloat();
+    g.setColour (col::well);
+    g.fillRoundedRectangle (r, 2.f);
+    std::shared_ptr<const psy::dsp::NoiseClip> f;
+    const auto* clip = NoiseSourceBox::clipFor (proc, f);
+    if (clip != cached)
+    {
+        cached = clip;
+        file = f;
+        shape.clear();
+        if (clip != nullptr && ! clip->levels.empty() && getWidth() > 4)
+        {
+            // the level closest to a few frames a pixel, its middle's peaks per column
+            const int w = getWidth();
+            int lv = 0;
+            while (lv + 1 < (int) clip->levels.size() && clip->levels[(size_t) lv + 1].frames >= 8 * w) ++lv;
+            const auto& level = clip->levels[(size_t) lv];
+            float peak = 1e-6f;
+            std::vector<float> top ((size_t) w);
+            for (int x = 0; x < w; ++x)
+            {
+                const int a = level.frames * x / w, b = std::max (a + 1, level.frames * (x + 1) / w);
+                float m = 0.f;
+                for (int i = a; i < b; ++i) m = std::max (m, std::abs (0.5f * (level.left()[i] + level.right()[i])));
+                top[(size_t) x] = m;
+                peak = std::max (peak, m);
+            }
+            const float mid = r.getCentreY(), half = r.getHeight() * 0.5f - 3.f;
+            shape.startNewSubPath (r.getX(), mid);
+            for (int x = 0; x < w; ++x) shape.lineTo (r.getX() + (float) x, mid - half * top[(size_t) x] / peak);
+            for (int x = w - 1; x >= 0; --x) shape.lineTo (r.getX() + (float) x, mid + half * top[(size_t) x] / peak);
+            shape.closeSubPath();
+        }
+    }
+    if (clip == nullptr)
+    {
+        g.setColour (col::textFaint);
+        g.setFont (label (10.f));
+        g.drawText ((int) proc.plain (P::NoiseType) == psy::kNoiseSampleType ? "NO FILE" : "GENERATED", r, juce::Justification::centred, false);
+        return;
+    }
+    const auto ac = accent (*this);
+    // Random spreads the start over its square after Start (wrapping), as the voice does
+    const float start = proc.plain (P::NoiseStart), spread = proc.plain (P::NoiseRand) * proc.plain (P::NoiseRand);
+    const auto shade = [&] (float a, float b) { g.fillRect (juce::Rectangle<float> (r.getX() + a * r.getWidth(), r.getY(), (b - a) * r.getWidth(), r.getHeight())); };
+    g.setColour (ac.withAlpha (0.12f));
+    if (spread > 0.f)
+    {
+        shade (start, std::min (1.f, start + spread));
+        if (start + spread > 1.f) shade (0.f, start + spread - 1.f);
+    }
+    g.setColour (ac.withAlpha (0.55f));
+    g.fillPath (shape);
+    g.setColour (ac);
+    g.fillRect (r.getX() + start * (r.getWidth() - 1.f), r.getY(), 1.f, r.getHeight());
+}
+
 NoisePanel::NoisePanel (PsyBoxProcessor& p)
-    : Section ("Noise"), direct (p, P::NoiseDirect, "Direct"), type (p, P::NoiseType, "Type")
+    : Section ("Noise"), proc (p), direct (p, P::NoiseDirect, "Direct"), source (p), gear ("The sample's pitch, start and one-shot")
 {
     ks.add (*this, p, P::NoiseLevel, "Level");
     direct.setStacked (true);
     direct.setTooltip ("Noise skips the filters and is added after them: bright grit over a dark sound");
+    source.setTooltip ("White, pink, digital, hiss or tuned noise, one of the bank's samples, or a file of your own");
+    gear.onClick = [this] { if (onGear) onGear(); };
     addAndMakeVisible (direct);
-    addAndMakeVisible (type);
+    addAndMakeVisible (source);
+    addChildComponent (gear);
+    startTimerHz (10);
+}
+
+void NoisePanel::timerCallback()
+{
+    gear.setVisible ((int) proc.plain (P::NoiseType) == psy::kNoiseSampleType);
+}
+
+void NoisePanel::paint (juce::Graphics& g)
+{
+    Section::paint (g);
 }
 
 void NoisePanel::resized()
@@ -289,7 +468,64 @@ void NoisePanel::resized()
     const auto gr = grid();
     ks.knobs[0]->setBounds (gr.cell (0, 0));
     direct.setBounds (gr.cell (1, 0));
-    type.setBounds (gr.captioned (0, 1, 2));
+    source.setBounds (gr.control (0, 1, 2));
+    captions.clear();
+    addCaption ("Source", gr.cell (0, 1, 2));
+    gear.setBounds (header().removeFromRight (theme::kHeaderH));
+}
+
+NoiseSampleView::NoiseSampleView (PsyBoxProcessor& p)
+    : Section ("Noise"), proc (p), wave (p), source (p), fine (p, P::NoiseFine, "Fin"), pan (p, P::NoisePan, "Pan"),
+      once (p, P::NoiseOneShot, "One Shot"), key (p, P::NoiseKey, "Key"), gear ("Back to the sub and noise")
+{
+    for (auto [prm, name] : { std::pair { P::NoiseLevel, "Level" }, std::pair { P::NoisePitch, "Pitch" },
+                              std::pair { P::NoiseStart, "Start" }, std::pair { P::NoiseRand, "Random" } })
+        ks.add (*this, p, prm, name);
+    once.setStacked (true);
+    key.setStacked (true);
+    once.setTooltip ("Play the sample once from Start and stop at its end; off, it loops");
+    key.setTooltip ("The note sets the pitch: MIDI 72 plays the sample at its own speed, as in Serum 2. Off: every note plays it at its own speed");
+    fine.setTooltip ("Fine tuning of the sample, in cents");
+    pan.setTooltip ("Pan: a balance on a stereo sample (hard left keeps only its left side)");
+    pan.setUnit (0.02f, [] (float v) {
+        const int pct = (int) std::lround (std::abs (v) * 100.f);
+        return pct == 0 ? juce::String ("C") : (v < 0.f ? "L" : "R") + juce::String (pct);
+    });
+    source.setTooltip ("White, pink, digital, hiss or tuned noise, one of the bank's samples, or a file of your own");
+    gear.setOn (true);
+    gear.onClick = [this] { if (onClose) onClose(); };
+    for (juce::Component* c : std::initializer_list<juce::Component*> { &wave, &source, &fine, &pan, &once, &key, &gear })
+        addAndMakeVisible (c);
+    startTimerHz (10);
+}
+
+void NoiseSampleView::timerCallback()
+{
+    if (isVisible() && (int) proc.plain (P::NoiseType) != psy::kNoiseSampleType && onClose)
+        onClose();
+}
+
+void NoiseSampleView::resized()
+{
+    gear.setBounds (header().removeFromRight (theme::kHeaderH));
+    // the source and its fields on top, three rows of cells at the bottom, the waveform in between
+    auto b = body();
+    const int gridH = 3 * theme::kCellH + 2 * theme::kRowGap;
+    const auto gr = gridAt (b.getX(), b.getBottom() - gridH);
+    auto top = b.withTrimmedBottom (gridH + theme::kRowGap);
+    source.setBounds (top.removeFromTop (theme::kCtrlH));
+    top.removeFromTop (sp::sm);
+    auto fields = top.removeFromTop (theme::kCtrlH);
+    fine.setBounds (fields.removeFromLeft ((fields.getWidth() - sp::xs) / 2));
+    pan.setBounds (fields.withTrimmedLeft (sp::xs));
+    top.removeFromTop (sp::sm);
+    wave.setBounds (top);
+    ks.knobs[0]->setBounds (gr.cell (0, 0));   // Level
+    ks.knobs[1]->setBounds (gr.cell (1, 0));   // Pitch
+    ks.knobs[2]->setBounds (gr.cell (0, 1));   // Start
+    ks.knobs[3]->setBounds (gr.cell (1, 1));   // Random
+    once.setBounds (gr.cell (0, 2));
+    key.setBounds (gr.cell (1, 2));
 }
 
 // ---------------------------------------------------------------------------

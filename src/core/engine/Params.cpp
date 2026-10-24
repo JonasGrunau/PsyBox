@@ -1,5 +1,7 @@
 #include "Params.h"
 
+#include "../dsp/NoiseBank.h"
+
 #include <algorithm>
 #include <cctype>
 #include <cmath>
@@ -18,7 +20,14 @@ namespace choices
                                                "Digital Grit", "Sync Sweep", "Bell Spectra", "Acid Morph" };
     const std::vector<std::string> subOct { "-1 Oct", "-2 Oct" };
     const std::vector<std::string> subShape { "Sine", "Triangle", "Square" };
-    const std::vector<std::string> noiseType { "White", "Pink", "Digital", "Hiss", "Tuned" };
+    const std::vector<std::string> noiseType { "White", "Pink", "Digital", "Hiss", "Tuned", "Sample" };
+    // the bank's samples, then a file of your own (kNoiseFile)
+    const std::vector<std::string> noiseSample = [] {
+        std::vector<std::string> names;
+        for (int i = 0; i < dsp::NoiseBank::kCount; ++i) names.emplace_back (dsp::NoiseBank::name (i));
+        names.emplace_back ("File");
+        return names;
+    }();
     const std::vector<std::string> penvDest { "A + B", "Osc A", "Osc B" };
     const std::vector<std::string> filterType { "Off", "LP 6", "LP 12", "LP 18", "LP 24", "HP 6", "HP 12", "HP 18", "HP 24",
                                                 "BP 12", "BP 24", "Notch", "Ladder LP 12", "Ladder LP 24", "Ladder HP",
@@ -42,7 +51,8 @@ namespace choices
                                             "Phoscyon Cutoff", "Phoscyon Reso", "Phoscyon Envmod", "Phoscyon Decay",
                                             "Phoscyon Accent", "Phoscyon Tuning", "Phoscyon Drive", "Phoscyon Color",
                                             "Phoscyon Chorus Mix", "Phoscyon Delay Fb", "Phoscyon Delay Mix", "Phoscyon Reverb Mix",
-                                            "EQ Low Freq", "EQ Low Gain", "EQ High Freq", "EQ High Gain", "Dim Mix" };
+                                            "EQ Low Freq", "EQ Low Gain", "EQ High Freq", "EQ High Gain", "Dim Mix",
+                                            "Noise Pitch" };
     const std::vector<std::string> distType { "Soft", "Hard", "Fold", "Tube", "Rectify" };
     const std::vector<std::string> chorusMode { "Chorus", "Flanger" };
     const std::vector<std::string> compMode { "Normal", "Multi" };
@@ -274,8 +284,11 @@ namespace
         { ModDst::EqHighFreq,   P::EqHighFreq,  1.f },
         { ModDst::EqHighGain,   P::EqHighGain,  1.f },
         { ModDst::DimMix,       P::DimMix,      1.f },
+        { ModDst::NoisePitch,   P::NoisePitch,  0.5f },   // 1.0 = 48 semitones, half the knob
     };
 } // namespace
+
+static_assert (kNoiseFile == dsp::NoiseBank::kCount, "the File entry follows the bank's samples");
 
 P modTargetParam (ModDst d) noexcept
 {

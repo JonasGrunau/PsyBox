@@ -531,6 +531,7 @@ juce::Rectangle<float> NumberBox::arrowsArea() const
 juce::String NumberBox::text() const
 {
     if (overrideText.isNotEmpty()) return overrideText;
+    if (format) return format (value);
     const auto& d = psy::def (param);
     const int v = (int) std::lround (value);
     if (d.min < 0.f) return v > 0 ? "+" + juce::String (v) : juce::String (v);
@@ -554,19 +555,7 @@ void NumberBox::paint (juce::Graphics& g)
         const auto ga = inner.removeFromLeft ((float) kCtrlH);
         const bool overGear = isMouseOver() && ga.contains (getMouseXYRelative().toFloat());
         // a gear: a ring with eight teeth around a hole
-        const auto c = ga.getCentre();
-        juce::Path p;
-        for (int i = 0; i < 8; ++i)
-        {
-            p.addRectangle (-1.2f, -5.6f, 2.4f, 2.6f);   // a tooth on top, then turn the lot by one tooth
-            p.applyTransform (juce::AffineTransform::rotation (juce::MathConstants<float>::twoPi / 8.f));
-        }
-        p.addEllipse (-3.9f, -3.9f, 7.8f, 7.8f);
-        p.applyTransform (juce::AffineTransform::translation (c));
-        g.setColour (gearOn ? accent (*this) : (overGear && on ? col::text : (on ? col::textDim : col::textFaint)));
-        g.fillPath (p);
-        g.setColour (col::well);
-        g.fillEllipse (juce::Rectangle<float> (3.4f, 3.4f).withCentre (c));
+        drawGear (g, ga.getCentre(), gearOn ? accent (*this) : (overGear && on ? col::text : (on ? col::textDim : col::textFaint)), col::well);
         g.setColour (col::lineStrong);
         g.fillRect (inner.getX(), inner.getY() + 4.f, 1.f, inner.getHeight() - 8.f);
     }
@@ -614,15 +603,15 @@ void NumberBox::paint (juce::Graphics& g)
 void NumberBox::setValue (float plain, bool gesture)
 {
     const auto& d = psy::def (param);
-    // The box shows whole numbers, so continuous parameters (cents) move in whole steps too.
-    const float v = d.isDiscrete() ? d.snap (plain) : std::round (plain);
+    // The box shows whole numbers, so continuous parameters (cents) move in whole steps too (or in its unit).
+    const float v = d.isDiscrete() ? d.snap (plain) : juce::jlimit (d.min, d.max, std::round (plain / unit) * unit);
     if (gesture) attachment.setValueAsPartOfGesture (v);
     else if (! juce::approximatelyEqual (v, value)) attachment.setValueAsCompleteGesture (v);
 }
 
 void NumberBox::step (int dir)
 {
-    if (isEnabled()) setValue (value + (float) dir, false);
+    if (isEnabled()) setValue (value + (float) dir * unit, false);
 }
 
 void NumberBox::mouseDown (const juce::MouseEvent& e)
@@ -642,9 +631,9 @@ void NumberBox::mouseDrag (const juce::MouseEvent& e)
 {
     if (! dragging) return;
     const auto& d = psy::def (param);
-    const float pixelsPerStep = (d.max - d.min) > 60.f ? 3.f : 8.f;
+    const float pixelsPerStep = (d.max - d.min) / unit > 60.f ? 3.f : 8.f;   // long ranges move faster
     const float steps = std::trunc ((float) -e.getDistanceFromDragStartY() / (e.mods.isShiftDown() ? pixelsPerStep * 4.f : pixelsPerStep));
-    setValue (dragStart + steps, true);
+    setValue (dragStart + steps * unit, true);
 }
 
 void NumberBox::mouseUp (const juce::MouseEvent&)
@@ -939,6 +928,42 @@ void ToggleDot::mouseDown (const juce::MouseEvent&)
 // ---------------------------------------------------------------------------
 // ParamCombo
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// The gear
+// ---------------------------------------------------------------------------
+void drawGear (juce::Graphics& g, juce::Point<float> c, juce::Colour colour, juce::Colour hole)
+{
+    juce::Path p;
+    for (int i = 0; i < 8; ++i)
+    {
+        p.addRectangle (-1.2f, -5.6f, 2.4f, 2.6f);   // a tooth on top, then turn the lot by one tooth
+        p.applyTransform (juce::AffineTransform::rotation (juce::MathConstants<float>::twoPi / 8.f));
+    }
+    p.addEllipse (-3.9f, -3.9f, 7.8f, 7.8f);
+    p.applyTransform (juce::AffineTransform::translation (c));
+    g.setColour (colour);
+    g.fillPath (p);
+    g.setColour (hole);
+    g.fillEllipse (juce::Rectangle<float> (3.4f, 3.4f).withCentre (c));
+}
+
+GearButton::GearButton (const juce::String& tip)
+{
+    setMouseCursor (juce::MouseCursor::PointingHandCursor);
+    setTooltip (tip);
+}
+
+void GearButton::paint (juce::Graphics& g)
+{
+    const bool hot = isMouseOver();
+    drawGear (g, getLocalBounds().toFloat().getCentre(), on ? accent (*this) : (hot ? col::text : col::textDim), col::panel);
+}
+
+void GearButton::mouseDown (const juce::MouseEvent&)
+{
+    if (onClick) onClick();
+}
+
 ParamCombo::ParamCombo (PsyBoxProcessor& p, P prm, const juce::String& cap) : caption (cap)
 {
     const auto& d = psy::def (prm);

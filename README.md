@@ -162,7 +162,10 @@ a voiced source and a breath), **glass** (inharmonic FM or a bell table,
 rung and frequency-shifted), a **dark bed** (a low comb or ladder that a slow
 LFO tunes, with grit), **alien life** (fast random chirps and gurgles) and an
 **evolving pad** (a scanned stack with a noise layer). Every kind has a noise
-layer, and in a third of them the noise leads. The filter is always on, and
+layer, in more than half of them one of the bank's samples (wind, howl and
+breath for air, mantra and breath for choir, glass and chimes for glass,
+drones and wind for the bed, birds, water and crackle for alien life), and in
+a third of them the noise leads. The filter is always on, and
 at least three sources keep everything moving: slow LFOs, Env 2 over the
 held note, pan, pitch or level drift, and a little per-note randomness. The
 sound swells in over 0.4-4.5 s and gets wide and wet: reverb always, delay,
@@ -432,7 +435,8 @@ the octave). A MIDI controller works too: *Options → Audio/MIDI Settings*.
 
 Laid out like Serum. The tabs in the top bar switch views:
 
-- **OSC**: sub and noise, the two oscillators (laid out like Serum 2's: the
+- **OSC**: sub and noise (the noise's gear opens a noise sample's settings),
+  the two oscillators (laid out like Serum 2's: the
   SEM and FIN pitch fields, the waveform, then the knobs with the UNISON
   field), the two filters; underneath the macros, the modulators and the
   voicing, with the Length (Energy) or the Knock (Bass) under it. The
@@ -627,6 +631,43 @@ noise through a comb on the note's period, so its energy sits on the note's
 harmonics, about 25 dB above the gaps between them. It brings air that stays
 tonal, the way a Serum noise oscillator tracking the pitch does, where white
 noise on top of a saw stack turns its top into hiss.
+
+### Noise samples
+
+The noise can also play a sample, the way Serum 2's noise oscillator does: one
+of PsyBox's own 20, or a WAV, AIFF or FLAC of yours (**Load File...** in the
+noise's **Source** menu, up to 30 s). The bank is synthesised when the plugin
+starts (about 0.3 s, once): seamless loops at 48 kHz in four families like
+Serum's factory folders. **Analog**: Analog Pink, Analog White, Juno Chorus,
+Bit Noise. **Organic**: Breath, Shush, Air Can, Mains Hum, Wind Chimes.
+**Inharmonic**: Inharmonic, Metal Drone, Glass. **Atmosphere**: Dark Wind, Howl,
+Polar Drone, Water, Electric, Mantra, Birds, Rain. The tonal ones are built on
+C.
+
+With the noise on a sample, the gear in its header opens the sample's
+settings in place of the sub and noise: the waveform with **Start** and the
+spread of **Random**, **Fine** and **Pan**, **Level**, **Pitch**, **One Shot**
+and **Key**. They work like Serum 2's (measured against it):
+
+- **Key** off: every note plays the sample at its own speed; **Pitch** moves it
+  48 semitones either way. On: the note sets the pitch, MIDI 72 playing the
+  sample at its own speed.
+- **Start** and **Random**: each note starts at Start plus a random share of
+  the sample after it, the share Random squared (50 % spreads over a quarter).
+  In Mono and Legato a held sound reads on.
+- **One Shot** plays the sample once and stops; otherwise it loops, a WAV's
+  sampler loop if it has one (the head once, then the loop).
+- **Pan** is a balance on a stereo sample. A stereo sample plays stereo.
+
+Pitched up, a sample never aliases. It is stored as octave levels, each
+low-passed to 0.42 of its rate by a 161-tap Kaiser filter and taken at half
+the rate. A read picks the level whose content still folds above 20 kHz at its
+speed, and the next one blends in over the last quarter octave. It reads
+through a 40-tap Kaiser-windowed sinc, tabled at 256 phases. Under 20 kHz,
+folds and images stay 90 dB down at Standard and High quality and 80 dB at
+Eco. Serum 2's read is 16 taps. A file is levelled like the bank (rms
+-14 dBFS, so switching samples keeps the level). Sessions, category slots and
+presets keep its path; a missing file is silent and keeps its name.
 
 ## Building
 

@@ -15,9 +15,10 @@ namespace psy
 
 using LockSet = std::bitset<kNumParams>;
 
-// The longest choice list a recipe can remember (Filter type: 20, the
-// Phoscyon distortion models: 19). TestGenerator checks every choice fits.
-constexpr int kMaxChoiceOptions = 20;
+// The longest choice list a recipe can remember (the noise samples: 21,
+// Filter type: 20, the Phoscyon distortion models: 19). TestGenerator
+// checks every choice fits.
+constexpr int kMaxChoiceOptions = 24;
 
 // What a recipe allowed for each parameter, so Mutate stays inside the
 // category's character instead of wandering off into noise.

@@ -1981,6 +1981,7 @@ namespace
         "lfo3_x5", "lfo3_y5", "lfo3_b5", "lfo3_x6", "lfo3_y6", "lfo3_b6", "lfo3_x7", "lfo3_y7", "lfo3_b7", "lfo3_x8", "lfo3_y8", "lfo3_b8",
         "lfo3_x9", "lfo3_y9", "lfo3_b9", "lfo3_x10", "lfo3_y10", "lfo3_b10", "lfo3_x11", "lfo3_y11", "lfo3_b11", "lfo3_x12", "lfo3_y12", "lfo3_b12",
         "lfo3_x13", "lfo3_y13", "lfo3_b13", "lfo3_x14", "lfo3_y14", "lfo3_b14", "lfo3_x15", "lfo3_y15", "lfo3_b15", "lfo3_x16", "lfo3_y16", "lfo3_b16",
+        "noise_sample", "noise_pitch", "noise_fine", "noise_key", "noise_oneshot", "noise_start", "noise_rand", "noise_pan",
     };
 } // namespace
 

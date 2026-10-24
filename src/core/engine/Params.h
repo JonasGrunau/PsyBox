@@ -61,7 +61,7 @@ struct ParamDef
 namespace choices
 {
     extern const std::vector<std::string> voiceMode, glideMode, quality, oscType, wavetable,
-        subOct, subShape, noiseType, penvDest, filterType, filterRouting, lfoShape, syncDiv,
+        subOct, subShape, noiseType, noiseSample, penvDest, filterType, filterRouting, lfoShape, syncDiv,
         modSrc, modDst, distType, chorusMode, compMode, arpMode, engineMode, kickClick, kickDrive,
         energyMode, energyBars, uniMode, uniStack, arpKey, arpScale,
         phosWave, phosDistModel, phosDistOrder, phosDelayFilter, phosDelayScale,
@@ -129,6 +129,8 @@ enum class ModDst : int
     PhosDistDrive, PhosDistColor, PhosChorusMix, PhosDelayFb, PhosDelayMix, PhosReverbMix,
     // Our EQ and dimension expander (effects, appended later).
     EqLowFreq, EqLowGain, EqHighFreq, EqHighGain, DimMix,
+    // The noise sample's pitch (appended later still).
+    NoisePitch,
     Count
 };
 
@@ -197,7 +199,7 @@ enum class ModDst : int
     X(SubOct,      "sub_oct",      "Sub Oct",     "Mixer", Choice, 0, 1, 0, 1.f, None, &choices::subOct, false) \
     X(SubShape,    "sub_shape",    "Sub Wave",    "Mixer", Choice, 0, 2, 0, 1.f, None, &choices::subShape, false) \
     X(NoiseLevel,  "noise_level",  "Noise",       "Mixer", Power, 0.f, 1.f, 0.f, 2.f, Percent, nullptr, true) \
-    X(NoiseType,   "noise_type",   "Noise Type",  "Mixer", Choice, 0, 4, 0, 1.f, None, &choices::noiseType, false) \
+    X(NoiseType,   "noise_type",   "Noise Type",  "Mixer", Choice, 0, 5, 0, 1.f, None, &choices::noiseType, false) \
     X(NoiseDirect, "noise_direct", "Noise Direct","Mixer", Toggle, 0, 1, 0, 1.f, None, nullptr, false) \
     X(RingLevel,   "ring_level",   "Ring",        "Mixer", Linear, 0.f, 1.f, 0.f, 1.f, Percent, nullptr, true) \
     \
@@ -415,7 +417,30 @@ enum class ModDst : int
     X(Lfo3Env,     "lfo3_env",     "Env",         "LFO 3", Toggle, 0, 1, 0, 1.f, None, nullptr, false) \
     X(AenvBursts,  "aenv_bursts",  "Bursts",      "Amp Env", Linear, 1, 8, 1, 1.f, Int, nullptr, false) \
     X(AenvGap,     "aenv_gap",     "Gap",         "Amp Env", Power, 2.f, 40.f, 10.f, 2.f, Ms, nullptr, false) \
-    PSY_LFO_CURVE (X, 1) PSY_LFO_CURVE (X, 2) PSY_LFO_CURVE (X, 3)
+    PSY_LFO_CURVE (X, 1) PSY_LFO_CURVE (X, 2) PSY_LFO_CURVE (X, 3) \
+    PSY_NOISE_SAMPLE (X)
+
+// Noise type 5 plays a sample; NoiseSample kNoiseFile is the loaded file.
+constexpr int kNoiseSampleType = 5;
+constexpr int kNoiseFile = 20;
+constexpr int kNoiseKeyNote = 72;   // with Key, the note that plays a sample at its own speed (Serum 2's)
+
+// The noise sample (noise type Sample), as Serum 2's noise oscillator plays
+// one: one of the bank's or a file of your own; its pitch (with Key the note
+// sets it, MIDI 72 playing the sample at its own speed; without, every note
+// plays it at its own speed); where a note starts in it (Start, plus a random
+// share of the sample after it: Random squared, so 50 % spreads over a
+// quarter); whether it stops at its end; and its pan (a balance on a stereo
+// sample).
+#define PSY_NOISE_SAMPLE(X) \
+    X(NoiseSample, "noise_sample", "Sample",      "Noise", Choice, 0, 20, 0, 1.f, None, &choices::noiseSample, false) \
+    X(NoisePitch,  "noise_pitch",  "Pitch",       "Noise", Linear, -48.f, 48.f, 0.f, 1.f, Semi, nullptr, true) \
+    X(NoiseFine,   "noise_fine",   "Fine",        "Noise", Linear, -100.f, 100.f, 0.f, 1.f, Cents, nullptr, false) \
+    X(NoiseKey,    "noise_key",    "Key",         "Noise", Toggle, 0, 1, 0, 1.f, None, nullptr, false) \
+    X(NoiseOneShot,"noise_oneshot","One Shot",    "Noise", Toggle, 0, 1, 0, 1.f, None, nullptr, false) \
+    X(NoiseStart,  "noise_start",  "Start",       "Noise", Linear, 0.f, 1.f, 0.f, 1.f, Percent, nullptr, false) \
+    X(NoiseRand,   "noise_rand",   "Random",      "Noise", Linear, 0.f, 1.f, 1.f, 1.f, Percent, nullptr, false) \
+    X(NoisePan,    "noise_pan",    "Pan",         "Noise", Linear, -1.f, 1.f, 0.f, 1.f, Percent, nullptr, false)
 
 // An LFO's drawn curve: how many points it uses, then 16 points of x
 // (0..1 of the cycle; the first sits at 0 whatever its own x), y (-1..1) and
@@ -532,7 +557,7 @@ enum class ModDst : int
 // One modulation slot: source, target, bipolar amount.
 #define PSY_MOD_SLOT(X, n) \
     X(Mod##n##Src, "mod" #n "_src", "Source", "Mod " #n, Choice, 0, 18, 0, 1.f, None, &choices::modSrc, false) \
-    X(Mod##n##Dst, "mod" #n "_dst", "Target", "Mod " #n, Choice, 0, 63, 0, 1.f, None, &choices::modDst, false) \
+    X(Mod##n##Dst, "mod" #n "_dst", "Target", "Mod " #n, Choice, 0, 64, 0, 1.f, None, &choices::modDst, false) \
     X(Mod##n##Amt, "mod" #n "_amt", "Amount", "Mod " #n, BiPower, -1.f, 1.f, 0.f, 1.5f, Percent, nullptr, false)
 
 // One step of the arp pattern: plays, accented, slides into the next step,
@@ -582,7 +607,7 @@ float modDepthNorm (ModDst d) noexcept;
 constexpr bool isFxTarget (ModDst d) noexcept
 {
     return ((int) d >= (int) ModDst::DistDrive && (int) d <= (int) ModDst::WidthAmount)
-        || ((int) d >= (int) ModDst::PhosDistDrive && d != ModDst::Count);
+        || ((int) d >= (int) ModDst::PhosDistDrive && (int) d <= (int) ModDst::DimMix);
 }
 // The Phoscyon voice's own targets (its knobs, read by PhosVoice).
 constexpr bool isPhosVoiceTarget (ModDst d) noexcept { return (int) d >= (int) ModDst::PhosCutoff && (int) d <= (int) ModDst::PhosTune; }

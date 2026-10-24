@@ -38,6 +38,7 @@ add_library(psybox_core STATIC
     src/core/engine/PhosVoice.cpp
     src/core/engine/PhosFx.cpp
     src/core/dsp/Wavetable.cpp
+    src/core/dsp/NoiseBank.cpp
     src/core/generator/Generator.cpp
     src/core/generator/Recipes.cpp
     src/core/generator/Macros.cpp
@@ -175,6 +176,7 @@ if(PSYBOX_BUILD_TESTS)
 
     add_executable(psybox_tests
         tests/TestOscillators.cpp
+        tests/TestNoiseBank.cpp
         tests/TestFilters.cpp
         tests/TestShapersAndFx.cpp
         tests/TestDynamics.cpp

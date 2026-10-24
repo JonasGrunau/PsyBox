@@ -19,6 +19,8 @@
 // PSYSNAP_PARAMS="comp_on=1,comp_mode=0" sets plain parameter values after Generate.
 // PSYSNAP_UNISON=1 opens Osc A's unison settings (the gear), =2 holds Osc A's
 // voice lines up as if the mouse were on its UNISON field.
+// PSYSNAP_NOISEVIEW=1 opens the noise sample's settings (set a sample with
+// PSYSNAP_PARAMS="noise_type=5,noise_sample=14,noise_level=0.5").
 // PSYSNAP_SWAPTEST=<out.f32> plays a held key through the first category's
 // arp in real time on a second thread while Generate runs twice from this one
 // (the way a user hits it mid-line), writes the mono output as float32 and
@@ -298,6 +300,9 @@ int main (int argc, char** argv)
                 chain->mouseDrag (at (row1.translated (0.f, 10.f), row1, true));
                 chain->mouseDrag (at (to, row1, true));
             }
+        if (std::getenv ("PSYSNAP_NOISEVIEW") != nullptr)
+            if (auto* page = findChild<OscPage> (*editor, [] (OscPage&) { return true; }))
+                page->showNoiseSample (true);
         if (auto* u = std::getenv ("PSYSNAP_UNISON"))
             if (auto* box = findChild<NumberBox> (*editor, [] (NumberBox& b) { return b.getParam() == psy::P::OscAUnison; }))
             {

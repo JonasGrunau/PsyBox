@@ -89,6 +89,7 @@ PsyBoxProcessor::PsyBoxProcessor()
       apvts (*this, nullptr, "PsyBox", createLayout())
 {
     resetMacroNames();
+    audioFormats.registerBasicFormats();
     const auto& defs = paramDefs();
     for (size_t i = 0; i < defs.size(); ++i)
     {
@@ -476,7 +477,7 @@ void PsyBoxProcessor::setCategory (Category c)
 void PsyBoxProcessor::saveSlot()
 {
     const juce::ScopedLock sl (stateLock);
-    slots[(size_t) category] = { true, currentState(), seed, presetName, macroNames };
+    slots[(size_t) category] = { true, currentState(), seed, presetName, macroNames, noiseFile.getFullPathName() };
 }
 
 void PsyBoxProcessor::switchCategory (Category c)
@@ -493,6 +494,7 @@ void PsyBoxProcessor::switchCategory (Category c)
         presetName = slot.name;
         macroNames = slot.macros;
     }
+    restoreNoiseFile (slots[(size_t) c].noiseFile);
     applyState (slots[(size_t) c].state);
     restoreRanges();
 }
@@ -512,6 +514,7 @@ void PsyBoxProcessor::writeSlots (juce::ValueTree& t) const
         // not "macro1": that is Macro 1's parameter id, written below
         for (int i = 0; i < kNumMacros; ++i)
             st.setProperty ("macroName" + juce::String (i + 1), slot.macros[(size_t) i], nullptr);
+        if (slot.noiseFile.isNotEmpty()) st.setProperty ("noiseFile", slot.noiseFile, nullptr);
         for (size_t i = 0; i < (size_t) kNumParams; ++i)
             st.setProperty (juce::Identifier (defs[i].id), slot.state.v[i], nullptr);
         all.appendChild (st, nullptr);
@@ -528,11 +531,12 @@ void PsyBoxProcessor::readSlots (const juce::ValueTree& t)
     {
         const int c = (int) st.getProperty ("category", -1);
         if (c < 0 || c >= kNumCategories) continue;
-        Slot slot { true, ParamState(), (uint32_t) (int) st.getProperty ("seed", 0), st.getProperty ("name").toString(), {} };
+        Slot slot { true, ParamState(), (uint32_t) (int) st.getProperty ("seed", 0), st.getProperty ("name").toString(), {}, {} };
         // Sessions before 0.5.3 kept slot names under "macro1".., which the
         // macro knobs' values overwrote: those names were lost, so automatic.
         for (int i = 0; i < kNumMacros; ++i)
             slot.macros[(size_t) i] = parseMacroName (st.getProperty ("macroName" + juce::String (i + 1), {}), i);
+        slot.noiseFile = st.getProperty ("noiseFile").toString();
         for (size_t i = 0; i < (size_t) kNumParams; ++i)
             if (const auto* v = st.getPropertyPointer (juce::Identifier (defs[i].id)))
                 slot.state.v[i] = defs[i].snap ((float) *v);
@@ -926,7 +930,13 @@ double PsyBoxProcessor::tailSeconds (const ParamState& st, double tempo)
 PsyBoxProcessor::Bounce PsyBoxProcessor::bounceRequest() const
 {
     const int note = getPlayNote() >= 0 ? getPlayNote() : lastPlayedNote.load();
-    return makeBounce (currentState(), category, lastBpm.load(), note, presetName.trimCharactersAtEnd ("*"));
+    auto b = makeBounce (currentState(), category, lastBpm.load(), note, presetName.trimCharactersAtEnd ("*"));
+    if (b.state.geti (P::NoiseType) == kNoiseSampleType && b.state.geti (P::NoiseSample) == kNoiseFile)
+    {
+        b.noiseFile = getNoiseClip();   // plays the file, and a different file is a different WAV
+        b.key ^= (uint64_t) getNoiseFile().getFullPathName().hashCode64() * 0x9E3779B97F4A7C15ULL;
+    }
+    return b;
 }
 
 PsyBoxProcessor::Bounce PsyBoxProcessor::makeBounce (const ParamState& state, Category c, double bpm, int note, const juce::String& name)
@@ -982,6 +992,7 @@ bool PsyBoxProcessor::renderBounce (const Bounce& b, const juce::File& file, con
     e.setOffline (true);    // a bounce plays at the Render quality
     e.setParams (b.state);  // before prepare, so the first note and the latency see this patch
     e.prepare (fs, block);
+    e.setNoiseFile (b.noiseFile.get());
     const int latency = e.latencySamples();
 
     std::vector<float> L, R;
@@ -1209,6 +1220,125 @@ void PsyBoxProcessor::setPlayKey (int pitchClass, int octave)
 }
 
 // ---------------------------------------------------------------------------
+// The noise sample from a file
+// ---------------------------------------------------------------------------
+
+namespace
+{
+    // The bank's level: rms -14 dBFS over both sides, peaks under -0.5 dBFS.
+    void levelLikeBank (std::vector<float>& l, std::vector<float>& r)
+    {
+        double e = 0.0, peak = 0.0;
+        for (const auto* ch : { &l, &r })
+            for (float v : *ch)
+            {
+                e += (double) v * v;
+                peak = std::max (peak, (double) std::abs (v));
+            }
+        const double rms = std::sqrt (e / (double) std::max<size_t> (1, l.size() + r.size()));
+        if (rms <= 0.0 || peak <= 0.0) return;
+        const auto g = (float) std::min (0.2 / rms, 0.944 / peak);
+        for (auto* ch : { &l, &r })
+            for (auto& v : *ch) v *= g;
+    }
+} // namespace
+
+bool PsyBoxProcessor::loadNoiseFile (const juce::File& file, bool select)
+{
+    std::unique_ptr<juce::AudioFormatReader> reader (audioFormats.createReaderFor (file));
+    if (reader == nullptr || reader->lengthInSamples <= 0 || reader->sampleRate <= 0.0)
+        return false;
+    const auto frames = (int) std::min<juce::int64> (reader->lengthInSamples, (juce::int64) (kMaxNoiseSeconds * reader->sampleRate));
+    const int channels = reader->numChannels > 1 ? 2 : 1;
+    juce::AudioBuffer<float> buf (channels, frames);
+    if (! reader->read (&buf, 0, frames, 0, true, channels > 1))
+        return false;
+    // a WAV's sampler loop, as Serum 2 plays it: the head once, then the loop
+    // (its end is the loop's last frame; nothing after it is heard)
+    int length = frames, loopStart = 0;
+    const auto& meta = reader->metadataValues;
+    if (meta.getValue ("NumSampleLoops", "0").getIntValue() > 0)
+    {
+        const int a = meta.getValue ("Loop0Start", "0").getIntValue(), e = meta.getValue ("Loop0End", "0").getIntValue();
+        if (a >= 0 && e > a && e < frames)
+        {
+            length = e + 1;
+            loopStart = a;
+        }
+    }
+    std::vector<float> l (buf.getReadPointer (0), buf.getReadPointer (0) + length), r;
+    if (channels > 1) r.assign (buf.getReadPointer (1), buf.getReadPointer (1) + length);
+    levelLikeBank (l, r);
+    setNoiseClip (std::make_shared<const dsp::NoiseClip> (
+        dsp::NoiseClip::make (std::move (l), std::move (r), (float) reader->sampleRate, true, false, loopStart)));
+    {
+        const juce::ScopedLock sl (stateLock);
+        noiseFile = file;
+    }
+    if (select)
+    {
+        auto s = currentState();
+        s.set (P::NoiseType, (float) kNoiseSampleType);
+        s.set (P::NoiseSample, (float) kNoiseFile);
+        if (s.get (P::NoiseLevel) <= 0.f) s.set (P::NoiseLevel, 0.5f);   // so you hear what you loaded
+        applyState (s);
+        markEdited();
+        pushHistory();
+    }
+    sendChangeMessage();
+    return true;
+}
+
+void PsyBoxProcessor::setNoiseSource (int type, int sample)
+{
+    auto s = currentState();
+    s.set (P::NoiseType, (float) type);
+    if (type == kNoiseSampleType) s.set (P::NoiseSample, (float) sample);
+    applyState (s);
+    markEdited();
+    pushHistory();
+    sendChangeMessage();
+}
+
+juce::File PsyBoxProcessor::getNoiseFile() const
+{
+    const juce::ScopedLock sl (stateLock);
+    return noiseFile;
+}
+
+std::shared_ptr<const dsp::NoiseClip> PsyBoxProcessor::getNoiseClip() const
+{
+    const juce::ScopedLock sl (stateLock);
+    return noiseClip;
+}
+
+// The engine reads the clip while a block runs, so the old one is kept until
+// two more blocks have finished after the switch (one may have taken the old
+// pointer just before it, and finished; the next can't have).
+void PsyBoxProcessor::setNoiseClip (std::shared_ptr<const dsp::NoiseClip> clip)
+{
+    const juce::ScopedLock sl (stateLock);
+    const uint64_t now = engine.blocksDone();
+    retiredNoise.erase (std::remove_if (retiredNoise.begin(), retiredNoise.end(), [now] (const auto& r) { return now >= r.first + 2; }),
+                        retiredNoise.end());
+    if (noiseClip != nullptr) retiredNoise.emplace_back (now, noiseClip);
+    noiseClip = std::move (clip);
+    engine.setNoiseFile (noiseClip.get());
+}
+
+void PsyBoxProcessor::restoreNoiseFile (const juce::String& path)
+{
+    const juce::File file = path.isNotEmpty() && juce::File::isAbsolutePath (path) ? juce::File (path) : juce::File();
+    if (file == getNoiseFile() && (file == juce::File() || getNoiseClip() != nullptr))
+        return;
+    if (file != juce::File() && loadNoiseFile (file, false))
+        return;
+    setNoiseClip (nullptr);   // none, or missing: silent, the name kept for the editor
+    const juce::ScopedLock sl (stateLock);
+    noiseFile = file;
+}
+
+// ---------------------------------------------------------------------------
 // State & presets
 // ---------------------------------------------------------------------------
 
@@ -1226,6 +1356,8 @@ void PsyBoxProcessor::getStateInformation (juce::MemoryBlock& destData)
     state.setProperty ("playOctave", playOctave, nullptr);
     state.setProperty ("batchCount", batchCount, nullptr);
     state.setProperty ("presetName", presetName, nullptr);
+    if (noiseFile != juce::File()) state.setProperty ("noiseFile", noiseFile.getFullPathName(), nullptr);
+    else state.removeProperty ("noiseFile", nullptr);
     writeMacroNames (state);
     writeSlots (state);
     juce::StringArray lockIds;
@@ -1254,6 +1386,7 @@ void PsyBoxProcessor::setStateInformation (const void* data, int sizeInBytes)
         }
     // A host preset or A/B compare can load while notes play: one clean swap.
     const PatchChange change (*this);
+    restoreNoiseFile (tree.getProperty ("noiseFile").toString());   // ready before the patch plays it
     apvts.replaceState (tree);
     {
         const juce::ScopedLock sl (stateLock);
@@ -1277,6 +1410,7 @@ void PsyBoxProcessor::setStateInformation (const void* data, int sizeInBytes)
     }
     normaliseFamily();
     apvts.state.removeChild (apvts.state.getChildWithName ("Slots"), nullptr);
+    apvts.state.removeProperty ("noiseFile", nullptr);   // the processor keeps it
     restoreRanges();
     history.clear();
     historyIndex = -1;
@@ -1319,6 +1453,8 @@ bool PsyBoxProcessor::savePreset (const juce::String& name)
     state.setProperty ("stateVersion", kStateVersion, nullptr);
     state.setProperty ("category", (int) category, nullptr);
     state.setProperty ("seed", (int) seed, nullptr);
+    if (noiseFile != juce::File() && (int) plain (P::NoiseSample) == kNoiseFile)
+        state.setProperty ("noiseFile", noiseFile.getFullPathName(), nullptr);
     writeMacroNames (state);
     auto xml = state.createXml();
     if (xml == nullptr) return false;
@@ -1360,6 +1496,7 @@ bool PsyBoxProcessor::loadPreset (const juce::File& file)
         presetName = file.getFileNameWithoutExtension();
         presetFile = file;
     }
+    if (tree.hasProperty ("noiseFile")) restoreNoiseFile (tree.getProperty ("noiseFile").toString());
     applyState (s);
     restoreRanges();
     pushHistory();

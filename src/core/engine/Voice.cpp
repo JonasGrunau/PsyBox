@@ -97,6 +97,16 @@ void Voice::start (int n, float vel, bool acc, bool stolen, float glideFrom, con
         }
     }
     noise.reset (seed * 7919u + 17u);
+    // the noise sample starts at Start, spread over Random of it (its own
+    // generator: nothing else draws differently); a voice still sounding
+    // reads on, as a jump in the sample would click
+    if (quiet)
+        if (const auto* clip = noiseClip (ctx))
+        {
+            Rng where (seed ^ 0x6E6F697365ULL);
+            sampler.start (*clip, dsp::NoiseSampler::startFor (p.get (P::NoiseStart), p.get (P::NoiseRand), where.uniform()));
+            samplerClip = clip;
+        }
     for (int i = 0; i < kNumLfos; ++i)
         lfos[(size_t) i].seed (seed + (uint64_t) i * 101u);
 }
@@ -114,6 +124,17 @@ void Voice::resetOscs (int which, bool retrig, Rng& phases) noexcept
         wt[(size_t) k].reset (ph);
         fm[(size_t) k].reset (ph);
     }
+}
+
+const dsp::NoiseClip* Voice::noiseClip (const VoiceContext& ctx) noexcept
+{
+    const auto& p = *ctx.p;
+    if (p.geti (P::NoiseType) != kNoiseSampleType || ctx.noiseBank == nullptr)
+        return nullptr;
+    const int which = p.geti (P::NoiseSample);
+    if (which == kNoiseFile)
+        return ctx.noiseFile != nullptr && ctx.noiseFile->frames > 0 ? ctx.noiseFile : nullptr;
+    return &ctx.noiseBank->clip (which);
 }
 
 bool Voice::Unison::update (int count, float det, float rangeSemis, int md, int stk, float bl, float wd, bool st) noexcept
@@ -232,7 +253,16 @@ void Voice::render (float* outL, float* outR, int chunkOffsetBase, int nBase, co
     // the filters twice; the right channel starts from the left's state.
     const int nA = tA == (int) OscType::Supersaw ? 1 : p.geti (P::OscAUnison);
     const int nB = tB == (int) OscType::Supersaw ? 1 : p.geti (P::OscBUnison);
-    const bool wide = (onA && nA > 1 && p.get (P::OscAUniWidth) > 0.f) || (onB && nB > 1 && p.get (P::OscBUniWidth) > 0.f);
+    // A noise sample plays from its clip (a sample changed under a held note
+    // starts it again); a stereo one needs the right channel's filters.
+    const dsp::NoiseClip* clip = noiseClip (ctx);
+    if (clip != nullptr && clip != samplerClip)
+    {
+        sampler.start (*clip, p.get (P::NoiseStart));
+        samplerClip = clip;
+    }
+    const bool wide = (onA && nA > 1 && p.get (P::OscAUniWidth) > 0.f) || (onB && nB > 1 && p.get (P::OscBUniWidth) > 0.f)
+                   || (clip != nullptr && clip->stereo) || (p.get (P::NoiseLevel) > 0.f && p.get (P::NoisePan) != 0.f);
     if (wide && ! stereo) { f1R = f1; f2R = f2; }
     if (stereoSnap)
     {
@@ -251,6 +281,15 @@ void Voice::render (float* outL, float* outR, int chunkOffsetBase, int nBase, co
     const int penvDest = p.geti (P::PenvDest);
     const int noiseType = p.geti (P::NoiseType);
     const bool noiseDirect = p.on (P::NoiseDirect);   // added after the filters instead of before
+    const bool noiseKey = p.on (P::NoiseKey), noiseOnce = p.on (P::NoiseOneShot);
+    const float noiseTune = p.get (P::NoisePitch) + p.get (P::NoiseFine) * 0.01f;
+    const float noiseFold = 1.f - 20000.f / osRate;   // where a sample's read may fold to (see NoiseSampler)
+    // Serum 2's noise pan: centre 1 on both sides, a balance on a stereo sample
+    const float noisePanP = 0.5f * (p.get (P::NoisePan) + 1.f), kPanBow = 0.41589157f;
+    const float noisePanNorm = 1.f / (0.5f + 0.25f * kPanBow);
+    const bool noiseCentred = p.get (P::NoisePan) == 0.f;   // exactly 1: patches from before the pan play bit for bit
+    const float noiseGainL = noiseCentred ? 1.f : ((1.f - noisePanP) + kPanBow * noisePanP * (1.f - noisePanP)) * noisePanNorm;
+    const float noiseGainR = noiseCentred ? 1.f : (noisePanP + kPanBow * noisePanP * (1.f - noisePanP)) * noisePanNorm;
     const int subShape = p.geti (P::SubShape);
     const float subOct = p.geti (P::SubOct) == 0 ? -12.f : -24.f;
     const float velGain = 1.f - p.get (P::VelSens) * (1.f - velocity);
@@ -354,6 +393,9 @@ void Voice::render (float* outL, float* outR, int chunkOffsetBase, int nBase, co
         const double incA = noteToHz (std::min (pitchA, 150.f)) / osRate;
         const double incB = noteToHz (std::min (pitchB, 150.f)) / osRate;
         const double incSub = noteToHz (std::min (pitchA + subOct, 150.f)) / osRate;
+        // with Key the note against kNoiseKeyNote, without it the sample's own speed
+        const float noiseSemis = std::clamp ((noiseKey ? common - (float) kNoiseKeyNote : 0.f) + noiseTune + M (ModDst::NoisePitch) * 48.f, -96.f, 96.f);
+        const double noiseSpeed = clip != nullptr ? (double) clip->rate / osRate * std::exp2 ((double) noiseSemis / 12.0) : 0.0;
 
         const float shapeA = p.get (P::OscAShape) + M (ModDst::ShapeA) * 3.f;
         const float shapeB = p.get (P::OscBShape) + M (ModDst::ShapeB) * 3.f;
@@ -496,12 +538,22 @@ void Voice::render (float* outL, float* outR, int chunkOffsetBase, int nBase, co
                 x += s;
                 xR += s;
             }
-            float direct = 0.f;
-            if (lvlNoise > 0.f)
+            float direct = 0.f, directR = 0.f;
+            if (clip != nullptr)
+            {
+                // it reads on at level 0 too, so a level brought back up finds it where it would be
+                float nl, nr;
+                sampler.process (*clip, noiseSpeed, noiseFold, noiseOnce, nl, nr);
+                nl *= lvlNoise * kSampleGain * noiseGainL;
+                nr *= lvlNoise * kSampleGain * noiseGainR;
+                if (noiseDirect) { direct = nl; directR = nr; }
+                else { x += nl; xR += nr; }
+            }
+            else if (lvlNoise > 0.f && noiseType != kNoiseSampleType)   // a sample with none loaded is silent
             {
                 const float nz = noise.process (noiseType, incA * 4.0, incA) * lvlNoise;
-                if (noiseDirect) direct = nz;
-                else { x += nz; xR += nz; }
+                if (noiseDirect) { direct = nz * noiseGainL; directR = nz * noiseGainR; }
+                else { x += nz * noiseGainL; xR += nz * noiseGainR; }
             }
             x *= mixGain;
             xR *= mixGain;
@@ -518,7 +570,7 @@ void Voice::render (float* outL, float* outR, int chunkOffsetBase, int nBase, co
                 yR = stereo ? f2R.process (f1R.process (xR)) : y;
             }
             y += 0.5f * direct;   // same staging as the filtered path
-            yR += stereo ? 0.5f * direct : 0.f;
+            yR += stereo ? 0.5f * directR : 0.f;
 
             y = flushDenormal (y);
             yR = flushDenormal (yR);

@@ -30,10 +30,12 @@ public:
     // arp has its own page).
     enum class Extra { Length, Knock, None };
     void setExtra (Extra);
+    void showNoiseSample (bool show);
 
 private:
     SubPanel sub;
     NoisePanel noise;
+    NoiseSampleView noiseView;   // the noise sample's settings, over the sub and noise
     OscPanel oscA, oscB;
     FilterPanel f1, f2;
     MacroPanel macros;

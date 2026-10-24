@@ -33,6 +33,7 @@ Engine::Engine()
 
 void Engine::prepare (double sampleRate, int maxBlockSize)
 {
+    ctx.noiseBank = &dsp::NoiseBank::shared();   // built here (a few hundred ms, once), never on the audio path
     fs = sampleRate;
     maxBlock = std::max (maxBlockSize, kChunk);
 
@@ -934,6 +935,8 @@ int Engine::maxEffectLatency() const noexcept
 void Engine::process (float* left, float* right, int numSamples, const MidiEvent* events, int numEvents, const Transport& transport) noexcept
 {
     const double bpm = transport.bpm > 0.0 ? transport.bpm : 120.0;
+    ctx.noiseFile = noiseFile.load (std::memory_order_acquire);
+    struct Counted { std::atomic<uint64_t>& n; ~Counted() { n.fetch_add (1, std::memory_order_release); } } counted { blocks };   // blocksDone() moves on as this block ends
 
     // After a reset (a patch swap) the first notes must play the new patch,
     // so the smoothed state jumps before any event is handled.
