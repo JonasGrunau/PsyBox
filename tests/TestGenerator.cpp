@@ -1353,19 +1353,49 @@ TEST_CASE ("Grid's macro 1 always drives something audible", "[generator][grid][
     }
 }
 
-TEST_CASE ("Atmos scans a wavetable position only when Osc A is a wavetable", "[generator]")
+// The traits of the Serum corpus's 57 atmos presets the recipe follows: a
+// filter always, a noise layer in most, a reverb always, and three or more
+// moving sources (LFOs, Env 2, the per-note random) on every patch; the
+// filters vary (combs, band-passes, formants, low- and high-passes). A
+// route only goes where it does something: the table position on a
+// wavetable, the FM index on an FM oscillator, the shape on an analog one,
+// the A>B FM with osc B on.
+TEST_CASE ("Atmos follows the corpus's atmospheres: filtered, noisy, wet and always moving", "[generator]")
 {
     Generator g;
-    for (uint32_t seed = 0; seed < 100; ++seed)
+    int noisy = 0, noiseLed = 0;
+    std::set<int> filters;
+    for (uint32_t seed = 0; seed < 200; ++seed)
     {
-        const auto p = g.generate (Category::Atmos, seed, ParamState(), LockSet());
-        bool lfoToWt = false;
+        INFO ("seed " << seed);
+        const auto p = g.generate (Category::Atmos, seed, ParamState(), LockSet(), false);
+        CHECK (p.geti (P::F1Type) != (int) FilterType::Off);
+        CHECK (p.on (P::ReverbOn));
+        filters.insert (p.geti (P::F1Type));
+        if (p.get (P::NoiseLevel) > 0.f) ++noisy;
+        if (p.get (P::NoiseLevel) >= 0.45f && (! p.on (P::OscAOn) || p.get (P::OscALevel) <= 0.4f)) ++noiseLed;
+
+        int moving = 0;
         for (int i = 0; i < kNumModSlots; ++i)
-            if (p.geti (modSrcParam (i)) == (int) ModSrc::Lfo2 && p.geti (modDstParam (i)) == (int) ModDst::WtPosA)
-                lfoToWt = true;
-        if (p.geti (P::OscAType) == (int) OscType::Supersaw) CHECK (! lfoToWt);
-        else CHECK (lfoToWt);
+        {
+            const auto src = (ModSrc) p.geti (modSrcParam (i));
+            const auto dst = (ModDst) p.geti (modDstParam (i));
+            if (dst == ModDst::None) continue;
+            if (src == ModSrc::Lfo1 || src == ModSrc::Lfo2 || src == ModSrc::Lfo3 || src == ModSrc::ModEnv || src == ModSrc::Random)
+                ++moving;
+            if (dst == ModDst::WtPosA) CHECK (p.geti (P::OscAType) == (int) OscType::Wavetable);
+            if (dst == ModDst::FmA) CHECK (p.geti (P::OscAType) == (int) OscType::FM);
+            if (dst == ModDst::ShapeA) CHECK (p.geti (P::OscAType) == (int) OscType::Analog);
+            if (dst == ModDst::XMod) CHECK (p.on (P::OscBOn));
+        }
+        CHECK (moving >= 3);
     }
+    CHECK (noisy >= 190);      // the corpus: four in five; here every kind has a layer
+    CHECK (noiseLed >= 50);    // a third of the corpus is texture first
+    CHECK (noiseLed <= 110);
+    for (auto t : { FilterType::BP12, FilterType::BP24, FilterType::CombPos, FilterType::CombNeg, FilterType::Formant, FilterType::Ladder24 })
+        CHECK (filters.count ((int) t) == 1);
+    CHECK (filters.size() >= 9);
 }
 
 TEST_CASE ("Mutate keeps to the options a recipe allowed and reaches integer parameters", "[generator]")

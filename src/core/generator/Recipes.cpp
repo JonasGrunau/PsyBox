@@ -258,7 +258,7 @@ namespace
     // (a dip in `dip` of them), or a low-pass at 4-17 kHz that rounds it off;
     // `highKinds` weighs bell, shelf and low-pass.
     void fxEq (B& b, float on, float lowShelf, float cutLo, float cutHi, float high, std::initializer_list<float> highKinds,
-               float dip = 0.25f)
+               float dip = 0.25f, float lpLo = 4000.f, float lpHi = 17000.f)
     {
         if (! b.chance (on)) return;
         b.on (P::EqOn, true);
@@ -297,7 +297,7 @@ namespace
         else
         {
             b.pick (P::EqHighType, { (int) EqBand::Cut12, (int) EqBand::Cut24 }, { 0.8f, 0.2f });
-            b.uni (P::EqHighFreq, 4000.f, 17000.f);
+            b.uni (P::EqHighFreq, lpLo, lpHi);
             b.uni (P::EqHighQ, 0.6f, 1.f);
         }
     }
@@ -1477,38 +1477,288 @@ namespace
         b.macros ({ D::F1Reso, D::Lfo1Rate, D::F1Vowel, D::PhaserMix, D::ShiftHz, D::CrushMix, D::ReverbMix, D::DelayMix });
     }
 
+    // Atmospheres, from the 57 atmos presets of the Serum corpus (Tunecraft
+    // Lifeforms, Dimensions, Outerverse, Ghosthack, PME, TekWan), decoded and
+    // rendered through Serum on a held C3. They are textures more than
+    // chords: a fifth of their power on the note's harmonics, bright (centroid
+    // ~800 Hz, little under 250 Hz), noisy up top (a noise layer in four of
+    // five, often as loud as the oscillators), nearly as wide as deep (side
+    // ~0.4 dB under the mid), 1-3.5 s to come in, and always moving: about
+    // four LFOs each, mostly slow (a cycle every 4-8 s), on the filter, the
+    // wavetable, the noise, the level, the pan and the pitch. The filter is
+    // always on, and as often a comb, band-pass or formant as a low-pass,
+    // with resonance (40 % in the middle). Six kinds, the corpus's families:
+    // air, choir, glass, a dark bed, alien life and an evolving pad.
     void atmos (B& b)
     {
-        polyVoice (b, 8, 12);
-        const bool supersaw = b.chance (0.5f);
-        if (supersaw) supersawA (b, 0.3f, 0.7f);
-        else wavetableA (b, { 2, 0, 6 }, 0.1f, 0.8f);
-        if (b.chance (0.7f))
+        const int kind = b.weighted ({ 0.22f, 0.14f, 0.15f, 0.18f, 0.15f, 0.16f });
+        if (b.chance (0.15f)) monoVoice (b, false, 60.f, 400.f);   // a held texture that glides
+        else polyVoice (b, 6, 10);
+        const auto isFm = [&b] { return b.state().geti (P::OscAType) == (int) OscType::FM; };
+        const auto isWt = [&b] { return b.state().geti (P::OscAType) == (int) OscType::Wavetable; };
+        float cutLo = 100.f, cutHi = 300.f;   // the EQ's low cut
+        bool rollOff = false;   // the EQ's top a low-pass, mostly
+        switch (kind)
         {
-            b.on (P::OscBOn, true);
-            b.pick (P::OscBType, { (int) OscType::Analog, (int) OscType::Wavetable });
-            b.set (P::OscBShape, kSaw);
-            b.pick (P::OscBWt, { 0, 2, 6 });
-            b.uni (P::OscBWtPos, 0.f, 1.f);
-            b.uni (P::OscBLevel, 0.3f, 0.6f);
-            b.among (P::OscBCoarse, { 12.f, 7.f, 0.f });
-            b.uni (P::OscBFine, 8.f, 20.f);
+            case 0:   // air: wind and breath, noise through a band-pass or comb that wanders
+            {
+                if (b.chance (0.6f))
+                {
+                    // a tone under the wind, an octave or two down (where the corpus keeps its oscillators)
+                    wavetableA (b, { 0, 2, 5 }, 0.f, 0.6f);
+                    b.uni (P::OscALevel, 0.1f, 0.3f);
+                    b.pick (P::OscACoarse, { -12, -24, 0 }, { 0.5f, 0.3f, 0.2f });
+                }
+                else b.on (P::OscAOn, false);
+                // never the Hiss: it sits above 10 kHz, where the band-pass and the roll-off are not
+                b.pick (P::NoiseType, { 1, 0, 4 }, { 0.55f, 0.33f, 0.12f });
+                b.uni (P::NoiseLevel, 0.6f, 1.f);
+                if (b.chance (0.7f))
+                    filter1 (b, b.chance (0.6f) ? ft (FilterType::BP12) : ft (FilterType::BP24), 350.f, 2200.f, 0.15f, 0.5f, 0.f, 0.f);
+                else
+                {
+                    // a comb's teeth run to the top: a low-pass after it keeps the wind soft
+                    filter1 (b, b.chance (0.5f) ? ft (FilterType::CombPos) : ft (FilterType::CombNeg), 150.f, 1200.f, 0.4f, 0.8f, 0.f, 0.f);
+                    b.set (P::F2Type, (float) ft (FilterType::LP12));
+                    b.uni (P::F2Cutoff, 3000.f, 8000.f);
+                }
+                // gusts: the cutoff and the noise level wander on their own
+                b.lfo (1, LfoShape::SmoothRandom, 0.04f, 0.2f, false);
+                b.route (S::Lfo2, D::F1Cutoff, 0.12f, 0.3f);
+                b.lfo (2, LfoShape::SmoothRandom, 0.06f, 0.35f, false);
+                b.route (S::Lfo3, D::NoiseLevel, 0.15f, 0.35f);
+                rollOff = true;
+                break;
+            }
+            case 1:   // choir: a vowel that turns over a voiced source and a breath
+            {
+                if (b.chance (0.55f)) wavetableA (b, { 2 }, 0.1f, 0.9f);
+                else analogA (b, kSaw, 0.8f);
+                analogB (b, kSaw, 0.3f, 0.6f);
+                b.pick (P::OscBCoarse, { 0, 12, -12, 7 }, { 0.4f, 0.25f, 0.2f, 0.15f });
+                b.uni (P::OscBFine, 6.f, 18.f);
+                b.pick (P::NoiseType, { 4, 1 }, { 0.65f, 0.35f });
+                b.uni (P::NoiseLevel, 0.35f, 0.7f);
+                filter1 (b, ft (FilterType::Formant), 700.f, 1600.f, 0.3f, 0.65f, 0.f, 0.f);
+                b.uni (P::F1Vowel, 0.f, 1.f);
+                // the mantra: the vowel turns over bars, the voices waver
+                if (b.chance (0.6f)) lfoSyncW (b, 1, LfoShape::Triangle, { D4_1, D2_1, D1_1 }, { 0.4f, 0.4f, 0.2f }, false);
+                else b.lfo (1, LfoShape::SmoothRandom, 0.05f, 0.25f, false);
+                b.route (S::Lfo2, D::F1Vowel, 0.3f, 0.6f);
+                b.route (S::Lfo2, D::F1Cutoff, 0.1f, 0.25f);   // the formants shift with it
+                b.lfo (2, LfoShape::Sine, 4.f, 6.f, true);
+                b.route (S::Lfo3, D::PitchAll, 0.002f, 0.005f);   // 5-12 cents of vibrato
+                fxChorus (b, 0.85f, false);
+                break;
+            }
+            case 2:   // glass: inharmonic FM or a bell table up high, rung and shifted
+            {
+                b.pick (P::Octave, { 0, 1 });
+                if (b.chance (0.65f)) fmA (b, { 1.41f, 2.76f, 3.5f, 4.2f, 5.4f, 7.13f }, 1.5f, 6.f, 0.f, 0.3f);
+                else wavetableA (b, { 6, 3 }, 0.1f, 0.9f);
+                if (b.chance (0.6f))
+                {
+                    analogB (b, kSine, 0.3f, 0.6f);
+                    b.pick (P::OscBCoarse, { 12, 19, 24, 7, -12 }, { 0.3f, 0.2f, 0.15f, 0.15f, 0.2f });
+                    b.uni (P::OscBFine, 3.f, 25.f);
+                    if (b.chance (0.5f)) b.uni (P::RingLevel, 0.2f, 0.5f);
+                }
+                b.pick (P::NoiseType, { 2, 1 });
+                b.uni (P::NoiseLevel, 0.15f, 0.45f);
+                if (b.chance (0.4f)) b.on (P::NoiseDirect, true);   // sparkle beside the filter
+                if (b.chance (0.5f)) filter1 (b, ft (FilterType::HP12), 250.f, 900.f, 0.1f, 0.4f, 0.f, 0.f);
+                else filter1 (b, ft (FilterType::CombPos), 800.f, 4000.f, 0.4f, 0.75f, 0.f, 0.f);
+                // the shimmer: the FM index or the table glints, the cutoff drifts
+                b.lfo (1, LfoShape::SmoothRandom, 0.08f, 0.4f, false);
+                if (isFm()) b.route (S::Lfo2, D::FmA, 0.06f, 0.15f);
+                else b.route (S::Lfo2, D::WtPosA, 0.15f, 0.35f);
+                b.lfo (2, LfoShape::Triangle, 0.05f, 0.2f, false);
+                b.route (S::Lfo3, D::F1Cutoff, 0.1f, 0.25f);
+                fxShift (b, 0.65f, 0.5f, 12.f, 0.3f, 0.75f);
+                cutLo = 150.f; cutHi = 400.f;
+                break;
+            }
+            case 3:   // a dark bed: a low comb or ladder that a slow LFO tunes, grit on top
+            {
+                b.pick (P::Octave, { 0, -1 }, { 0.75f, 0.25f });
+                if (b.chance (0.5f)) wavetableA (b, { 0, 1, 4, 5 }, 0.f, 1.f);
+                else analogA (b, b.chance (0.7f) ? kSaw : kSquare, 0.8f);
+                analogB (b, kSaw, 0.35f, 0.65f);
+                b.pick (P::OscBCoarse, { 0, -12, 7, 12 }, { 0.35f, 0.3f, 0.2f, 0.15f });
+                b.uni (P::OscBFine, 5.f, 20.f);
+                b.pick (P::NoiseType, { 1, 0 }, { 0.6f, 0.4f });
+                b.uni (P::NoiseLevel, 0.25f, 0.6f);
+                if (b.chance (0.55f))
+                {
+                    // the corpus's combs: tuned low, ringing, a low-pass after them
+                    filter1 (b, b.chance (0.6f) ? ft (FilterType::CombPos) : ft (FilterType::CombNeg), 80.f, 600.f, 0.5f, 0.85f, 0.f, 0.f);
+                    b.set (P::F2Type, (float) ft (FilterType::LP12));
+                    b.uni (P::F2Cutoff, 1500.f, 6000.f);
+                }
+                else filter1 (b, ft (FilterType::Ladder24), 400.f, 2000.f, 0.3f, 0.6f, 0.f, 0.f);
+                if (b.chance (0.5f)) lfoSyncW (b, 1, LfoShape::Triangle, { D4_1, D2_1 }, { 0.6f, 0.4f }, false);
+                else b.lfo (1, LfoShape::SmoothRandom, 0.04f, 0.2f, false);
+                b.route (S::Lfo2, D::F1Cutoff, 0.1f, 0.3f);
+                b.lfo (2, LfoShape::SmoothRandom, 0.05f, 0.2f, false);
+                if (isWt()) b.route (S::Lfo3, D::WtPosA, 0.15f, 0.4f);
+                else b.route (S::Lfo3, D::ShapeA, 0.05f, 0.15f);
+                fxDist (b, 0.45f, { (int) DistType::Tube, (int) DistType::Soft }, 0.2f, 0.5f, 0.3f, 0.7f);
+                fxPhaser (b, 0.35f);
+                cutLo = 80.f; cutHi = 220.f;
+                break;
+            }
+            case 4:   // alien life: random chirps and gurgles, fast and small
+            {
+                b.pick (P::Octave, { 0, 1 }, { 0.6f, 0.4f });
+                // harmonics for the band-pass or the vowel to catch (a sine through them is silent low down)
+                if (b.chance (0.5f)) fmA (b, { 0.5f, 1.f, 1.5f, 2.f, 3.f }, 1.f, 5.f, 0.1f, 0.5f);
+                else analogA (b, b.chance (0.5f) ? kSaw : kSquare, 0.8f);
+                const bool xmod = b.chance (0.5f);
+                if (xmod)
+                {
+                    analogB (b, kSaw, 0.3f, 0.6f);
+                    b.pick (P::OscBCoarse, { 12, 7, -12 });
+                    b.uni (P::OscBXMod, 0.2f, 0.6f);
+                }
+                b.pick (P::NoiseType, { 2, 0 }, { 0.6f, 0.4f });
+                b.uni (P::NoiseLevel, 0.1f, 0.35f);
+                const bool vowel = b.chance (0.4f);
+                if (vowel)
+                {
+                    filter1 (b, ft (FilterType::Formant), 600.f, 1800.f, 0.3f, 0.6f, 0.f, 0.f);
+                    b.uni (P::F1Vowel, 0.f, 1.f);
+                }
+                else filter1 (b, ft (FilterType::BP12), 600.f, 2500.f, 0.3f, 0.65f, 0.f, 0.f);
+                // the creature: a fast random LFO jumps the pitch, the filter or the FM
+                b.lfo (2, b.chance (0.5f) ? LfoShape::SampleHold : LfoShape::SmoothRandom, 2.f, 9.f, false);
+                const int what = b.weighted ({ 0.4f, 0.35f, 0.25f });
+                if (what == 0) b.route (S::Lfo3, D::PitchA, 0.03f, 0.15f);   // 0.7-3.6 semitones
+                else if (what == 1) b.route (S::Lfo3, vowel ? D::F1Vowel : D::F1Cutoff, 0.15f, 0.35f);
+                else if (isFm()) b.route (S::Lfo3, D::FmA, 0.1f, 0.3f);
+                else b.route (S::Lfo3, xmod ? D::XMod : D::F1Cutoff, 0.15f, 0.35f);
+                // and it moves about, slower
+                b.lfo (1, LfoShape::SmoothRandom, 0.1f, 0.5f, false);
+                b.route (S::Lfo2, D::F1Cutoff, 0.1f, 0.3f);
+                if (b.chance (0.35f))
+                {
+                    b.on (P::CrushOn, true);
+                    b.uni (P::CrushBits, 6.f, 12.f);
+                    b.uni (P::CrushRate, 2.f, 10.f);
+                    b.uni (P::CrushMix, 0.2f, 0.5f);
+                }
+                fxShift (b, 0.3f, 2.f, 40.f, 0.2f, 0.6f);
+                cutLo = 150.f; cutHi = 400.f;
+                break;
+            }
+            default:   // an evolving pad: a scanned stack, a noise layer, a slow sweep
+            {
+                const bool supersaw = b.chance (0.3f);
+                if (supersaw) supersawA (b, 0.25f, 0.6f);
+                else wavetableA (b, { 0, 1, 2, 5, 6 }, 0.f, 0.8f);
+                if (b.chance (0.75f))
+                {
+                    b.on (P::OscBOn, true);
+                    b.pick (P::OscBType, { (int) OscType::Analog, (int) OscType::Wavetable });
+                    b.set (P::OscBShape, kSaw);
+                    b.pick (P::OscBWt, { 0, 2, 6 });
+                    b.uni (P::OscBWtPos, 0.f, 1.f);
+                    b.uni (P::OscBLevel, 0.3f, 0.6f);
+                    b.pick (P::OscBCoarse, { 12, 7, 19, 0, 24 }, { 0.35f, 0.2f, 0.15f, 0.15f, 0.15f });
+                    b.uni (P::OscBFine, 8.f, 20.f);
+                }
+                b.pick (P::NoiseType, { 1, 4, 0 }, { 0.5f, 0.3f, 0.2f });
+                b.uni (P::NoiseLevel, 0.3f, 0.65f);
+                if (b.chance (0.2f)) b.on (P::NoiseDirect, true);
+                const int fil = b.weighted ({ 0.5f, 0.25f, 0.25f });
+                if (fil == 0) filter1 (b, ft (FilterType::LP12), 1000.f, 6000.f, 0.1f, 0.4f, 0.f, 0.f);
+                else if (fil == 1) filter1 (b, ft (FilterType::BP12), 800.f, 3000.f, 0.2f, 0.5f, 0.f, 0.f);
+                else filter1 (b, ft (FilterType::HP12), 300.f, 900.f, 0.1f, 0.4f, 0.f, 0.f);
+                if (b.chance (0.5f)) lfoSyncW (b, 1, LfoShape::Sine, { D2_1, D4_1, D1_1 }, { 0.4f, 0.35f, 0.25f }, false);
+                else b.lfo (1, LfoShape::Sine, 0.05f, 0.25f, false);
+                b.route (S::Lfo2, D::F1Cutoff, 0.15f, 0.35f);
+                lfoSyncW (b, 2, LfoShape::Triangle, { D4_1, D2_1 }, { 0.6f, 0.4f }, false);
+                if (supersaw) b.route (S::Lfo3, D::DetuneA, 0.1f, 0.3f);
+                else b.route (S::Lfo3, D::WtPosA, 0.15f, 0.35f);
+                break;
+            }
         }
-        filter1 (b, b.chance (0.5f) ? ft (FilterType::LP12) : ft (FilterType::Ladder24), 600.f, 3000.f, 0.1f, 0.4f, 0.1f, 0.3f);
-        filterEnv (b, 500.f, 3000.f, 2000.f, 2000.f, 0.5f, 0.5f, 1500.f, 3000.f);
-        ampEnv (b, 400.f, 2500.f, 1000.f, 1000.f, 0.7f, 1.f, 1500.f, 5000.f);
-        b.lfo (1, LfoShape::Sine, 0.05f, 0.3f, false);
-        b.route (S::Lfo2, D::F1Cutoff, 0.1f, 0.2f);
-        // only a wavetable has a position to scan; the amount is drawn either way
-        if (supersaw) b.rnd (0.1f, 0.25f);
-        else b.route (S::Lfo2, D::WtPosA, 0.1f, 0.25f);
-        b.route (S::Macro1, D::F1Cutoff, 0.2f, 0.4f);
 
-        fxReverb (b, 1.f, 5.f, 15.f, 0.35f, 0.6f);
-        fxChorus (b, 0.6f, false);
-        fxDelay (b, 0.6f, { D1_4D, D1_2 }, 0.3f, 0.55f, 0.15f, 0.3f);
-        fxPhaser (b, 0.2f);
-        b.macros ({ D::F1Reso, D::WtPosA, D::DetuneA, D::Lfo2Rate, D::ReverbMix, D::ChorusMix, D::DelayMix });
+        // a slow swell in, a long release; the filter opens with the note in a quarter
+        // a third of the corpus is texture first (its noise samples carry it): the
+        // noise leads, plain or pink, and the oscillators sit under it
+        if (kind != 0 && kind != 4 && b.chance (0.3f))
+        {
+            b.pick (P::NoiseType, { 1, 0 }, { 0.6f, 0.4f });
+            b.uni (P::NoiseLevel, 0.75f, 1.f);
+            b.uni (P::OscALevel, 0.15f, 0.35f);
+            b.uni (P::OscBLevel, 0.1f, 0.3f);
+            b.on (P::NoiseDirect, false);
+            rollOff = true;
+        }
+        if (kind == 2) rollOff = true;   // digital sparkle and a bell: the top goes past Serum's
+
+        // the RC charge or close to it: a swell curve keeps an arp's short notes near silent
+        ampEnv (b, 400.f, 4500.f, 1000.f, 3000.f, 0.55f, 1.f, 1200.f, 5000.f);
+        b.uni (P::AenvCurve, 0.f, 0.15f);
+        if (b.chance (0.25f))
+        {
+            b.uni (P::F1Env, 0.1f, 0.3f);
+            filterEnv (b, 800.f, 4000.f, 1000.f, 3000.f, 0.5f, 1.f, 1500.f, 4000.f);
+        }
+        // it evolves over the held note: Env 2 takes the filter or the table somewhere over
+        // seconds (not the air's band, which its gusts already move)
+        if (kind != 0 && b.chance (0.5f))
+        {
+            modEnv (b, 2000.f, 8000.f, 2000.f, 6000.f, 0.f, 0.6f, 1500.f, 4000.f);
+            const float sign = b.chance (0.6f) ? 1.f : -1.f;
+            const bool table = b.chance (0.5f);
+            if (isWt() && table) b.route (S::ModEnv, D::WtPosA, sign * 0.2f, sign * 0.5f);
+            else b.route (S::ModEnv, D::F1Cutoff, sign * 0.1f, sign * 0.25f);
+        }
+        // drift: the pan wanders, the pitch floats or the level swells
+        b.lfo (0, LfoShape::SmoothRandom, 0.03f, 0.2f, false);
+        const int drift = b.weighted ({ 0.4f, 0.3f, 0.3f });
+        if (drift == 0) b.route (S::Lfo1, D::Pan, 0.3f, 0.7f);
+        else if (drift == 1) b.route (S::Lfo1, D::PitchAll, 0.002f, 0.006f);
+        else b.route (S::Lfo1, D::Amp, 0.2f, 0.45f);
+        // every note a little different (the arp plays several)
+        if (b.chance (0.4f)) b.route (S::Random, D::F1Cutoff, 0.05f, 0.15f);
+
+        // grit the corpus loves: a downsampler (Serum's most used distortion here)
+        if (kind != 4 && b.chance (0.25f))
+        {
+            b.on (P::CrushOn, true);
+            b.uni (P::CrushBits, 8.f, 14.f);
+            b.uni (P::CrushRate, 2.f, 8.f);
+            b.uni (P::CrushMix, 0.15f, 0.4f);
+        }
+        // a slow shift beats every partial against its neighbour
+        if (kind == 1 || kind == 3 || kind == 5) fxShift (b, 0.35f, 0.3f, 3.f, 0.f, 0.3f);
+        // compressed in 43 of the 49 Serum 1 atmospheres, OTT-style in 15: the upward half
+        // brings a quiet texture forward (and noise sits ~25 dB under an oscillator here)
+        if (b.chance (kind == 0 ? 0.5f : 0.3f)) fxCompMulti (b);
+        else if (b.chance (kind == 0 ? 0.7f : 0.35f)) fxCompGlue (b);   // more of it flattens the swells
+        fxReverb (b, 1.f, 3.f, 14.f, 0.3f, 0.55f, 0.5f, 0.95f);
+        fxDelay (b, 0.85f, { D1_4D, D1_2, D1_8D, D1_4 }, 0.35f, 0.65f, 0.15f, 0.4f);
+        if (kind != 1) fxChorus (b, 0.6f);
+        if (kind != 3) fxPhaser (b, 0.2f);
+        fxDim (b, 0.75f, 0.4f, 0.8f);
+        fxWidth (b, kind == 0 ? 0.8f : 0.4f, 0.4f, 0.9f);   // noise is mono in the voice: air needs it most
+        // Serum's noise samples stop well under 20 kHz, ours runs to the top: the
+        // noisy kinds roll their top off with the EQ's low-pass
+        if (rollOff || kind == 1 || kind == 5) fxEq (b, 0.9f, 0.15f, cutLo, cutHi, 0.85f, { 0.1f, 0.1f, 0.8f }, 0.25f, 5000.f, 11000.f);
+        else fxEq (b, 0.9f, 0.15f, cutLo, cutHi, 0.35f, { 0.4f, 0.3f, 0.3f });
+
+        // last, so the macros find the effects on
+        switch (kind)
+        {
+            case 0:  b.macros ({ D::F1Reso, D::NoiseLevel, D::Lfo2Rate, D::ReverbMix, D::DelayMix }); break;
+            case 1:  b.macros ({ D::F1Vowel, D::NoiseLevel, D::ChorusMix, D::ReverbMix, D::DelayMix }); break;
+            case 2:  b.macros ({ D::ShiftHz, isFm() ? D::FmA : D::WtPosA, D::RingLevel, D::DelayFb, D::ReverbMix }); break;
+            case 3:  b.macros ({ D::F1Reso, D::DistDrive, D::WtPosA, D::PhaserMix, D::ReverbMix }); break;
+            case 4:  b.macros ({ D::Lfo3Rate, D::CrushMix, D::F1Reso, D::ShiftHz, D::DelayMix }); break;
+            default: b.macros ({ D::WtPosA, D::DetuneA, D::NoiseLevel, D::ReverbMix, D::ChorusMix, D::DelayMix }); break;
+        }
     }
 
     void drone (B& b)
@@ -2651,7 +2901,7 @@ void unisonRecipe (Category c, RecipeBuilder& b)
         case Category::Grid:       sp = { 0.4f, 0.25f, 2, 5, 0.04f, 0.12f, 0.3f, 0.6f, 0.3f, 0.8f, false }; break;
         case Category::Screech:    sp = { 0.3f, 0.2f, 2, 3, 0.04f, 0.12f, 0.3f, 0.6f, 0.3f, 0.7f, false }; break;
         case Category::Metallic:   sp = { 0.2f, 0.15f, 2, 3, 0.03f, 0.1f, 0.3f, 0.6f, 0.5f, 0.9f, true }; break;
-        case Category::Atmos:      sp = { 0.7f, 0.5f, 4, 7, 0.12f, 0.35f, 0.7f, 0.9f, 0.8f, 1.f, true }; break;
+        case Category::Atmos:      sp = { 0.7f, 0.5f, 5, 12, 0.12f, 0.45f, 0.7f, 0.95f, 0.8f, 1.f, true }; break;
         case Category::Drone:      sp = { 0.6f, 0.4f, 3, 6, 0.08f, 0.25f, 0.6f, 0.9f, 0.7f, 1.f, true }; break;
         case Category::Riser:
         case Category::Uplifter:

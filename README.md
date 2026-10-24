@@ -152,6 +152,23 @@ rings out for up to 3.5 s through chorus, width and a big reverb. Atmos keeps
 the textures; a pad is the harmony. With **Arp** it plays chord tones tied
 into each other over a progression.
 
+### Atmos
+
+Atmospheres, fitted to 57 atmos presets from psytrance Serum packs (decoded
+and rendered through Serum on a held note). They are textures more than
+chords, so each patch is one of six kinds: **air** (wind and breath, noise
+through a band-pass or comb that wanders), **choir** (a vowel that turns over
+a voiced source and a breath), **glass** (inharmonic FM or a bell table,
+rung and frequency-shifted), a **dark bed** (a low comb or ladder that a slow
+LFO tunes, with grit), **alien life** (fast random chirps and gurgles) and an
+**evolving pad** (a scanned stack with a noise layer). Every kind has a noise
+layer, and in a third of them the noise leads. The filter is always on, and
+at least three sources keep everything moving: slow LFOs, Env 2 over the
+held note, pan, pitch or level drift, and a little per-note randomness. The
+sound swells in over 0.4-4.5 s and gets wide and wet: reverb always, delay,
+chorus, dimension, OTT or glue compression, sometimes a downsampler. With
+**Arp** it plays broken chords that ring into each other.
+
 ### Jilax
 
 Psytrance synth shots: one hit of a beat (sometimes two) at the tempo, the way
