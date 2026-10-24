@@ -18,7 +18,7 @@ permissions:
 jobs:
   # The core tests gate every build: a tag with failing tests never ships.
   test:
-    runs-on: macos-latest
+    runs-on: blacksmith-6vcpu-macos-latest
     steps:
       - uses: actions/checkout@v7
 
@@ -29,7 +29,7 @@ jobs:
           ./build-core/psybox_tests
 
   version:
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     outputs:
       version: ${{ steps.v.outputs.version }}
       numeric: ${{ steps.v.outputs.numeric }}
@@ -46,7 +46,7 @@ jobs:
 
   macos:
     needs: [version, test]
-    runs-on: macos-latest
+    runs-on: blacksmith-6vcpu-macos-latest
     env:
       VERSION: ${{ needs.version.outputs.version }}
       OUT: build/PsyBox_artefacts/Release
@@ -149,7 +149,7 @@ jobs:
 
   windows:
     needs: [version, test]
-    runs-on: windows-latest
+    runs-on: blacksmith-4vcpu-windows-2025
     env:
       VERSION: ${{ needs.version.outputs.version }}
     steps:
@@ -187,7 +187,7 @@ jobs:
   release:
     if: github.ref_type == 'tag'
     needs: [version, macos, windows]
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     permissions:
       contents: write
     steps:
