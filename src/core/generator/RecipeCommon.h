@@ -21,6 +21,29 @@ enum Div { D4_1, D2_1, D1_1, D1_2, D1_2D, D1_2T, D1_4, D1_4D, D1_4T, D1_8, D1_8D
 
 inline int ft (FilterType t) { return (int) t; }
 
+// The straight syncDiv that lasts `beats` (a power of two from 1/16 to 16).
+inline int divOfBeats (float beats)
+{
+    for (int i = D4_1; i <= D1_64; ++i)
+        if (syncDivBeats (i) == beats) return i;
+    return D1_4;
+}
+
+// A drawn LFO curve (see dsp::LfoCurve): points of x, y and bend.
+struct Pt { float x, y, bend; };
+inline void drawLfo (RecipeBuilder& b, int lfo, const Pt* pts, int count)
+{
+    b.set (lfoParam (lfo, 0), (float) LfoShape::Drawn);
+    b.set (lfoPointsParam (lfo), (float) count);
+    for (int k = 0; k < count; ++k)
+    {
+        b.set (lfoPointParam (lfo, k, LfoLane::X), pts[k].x);
+        b.set (lfoPointParam (lfo, k, LfoLane::Y), pts[k].y);
+        b.set (lfoPointParam (lfo, k, LfoLane::Bend), pts[k].bend);
+    }
+}
+inline void drawLfo (RecipeBuilder& b, int lfo, std::initializer_list<Pt> pts) { drawLfo (b, lfo, pts.begin(), (int) pts.size()); }
+
 inline void fxDelay (RecipeBuilder& b, float p, std::initializer_list<int> divs, float fbLo, float fbHi, float mixLo, float mixHi,
                      float lowCutLo = 150.f, float lowCutHi = 500.f, float highCutLo = 3500.f, float highCutHi = 9000.f)
 {

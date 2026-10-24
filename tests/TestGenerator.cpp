@@ -1,3 +1,4 @@
+#include "engine/Voice.h"
 #include "generator/Generator.h"
 
 #include <catch2/catch_approx.hpp>
@@ -763,6 +764,58 @@ TEST_CASE ("Jilax shots last a beat or two, cut at the end, high-passed in the b
     CHECK (bassRoot > n * 6 / 10);        // most roots two octaves under the key
     CHECK (highPassed > n * 3 / 4);       // and the fundamental taken out
     CHECK (clippedLast > n * 3 / 4);      // a clipper at the end of the chain
+}
+
+TEST_CASE ("Jilax's beat LFOs never turn back up as a shot lets go", "[generator][jilax][click]")
+{
+    // LFO 3 draws the filter's envelope, LFO 1 the trance gate. Looping,
+    // either one started over on the sample a note of a whole number of its
+    // cycles let go: the filter jumped open under the release, the gate
+    // opened again. Played sample by sample through the note and its
+    // release, each one only holds or falls once the note has ended.
+    Generator g;
+    const double fs = 48000.0, bpm = 142.0;
+    int filters = 0, gates = 0;
+    for (uint32_t seed = 1; seed <= 400; ++seed)
+    {
+        INFO ("seed " << seed);
+        const auto p = g.generate (Category::Jilax, seed, ParamState(), LockSet());
+        for (const int lfo : { 0, 2 })
+        {
+            const ModDst dst = lfo == 0 ? ModDst::Amp : ModDst::F1Cutoff;
+            bool routed = false;
+            for (int s = 0; s < kNumModSlots; ++s)
+                routed = routed || (p.geti (modSrcParam (s)) == (int) ModSrc::Lfo1 + lfo && p.geti (modDstParam (s)) == (int) dst
+                                    && p.get (modAmtParam (s)) > 0.f);
+            if (! routed) continue;
+            INFO ("LFO " << lfo + 1);
+            if (lfo == 2)
+            {
+                CHECK (p.on (P::Lfo3Env));   // an envelope: runs once from the note and holds its end
+                ++filters;
+            }
+            else ++gates;
+            dsp::LfoCurve curve;
+            readLfoCurve (p, lfo, curve);
+            dsp::Lfo l;
+            l.setSampleRate ((float) fs);
+            l.reset (p.get (lfoParam (lfo, 5)));
+            l.snap();
+            const float hz = (float) (bpm / 60.0 / syncDivBeats (p.geti (lfoParam (lfo, 3))));
+            const int end = (int) (energyBarsValue (p.geti (P::EnergyBars)) * 4.0 * 60.0 / bpm * fs);
+            const int last = end - (int) (0.001 * fs), stop = end + (int) ((p.get (P::AenvR) + 10.f) * 0.001f * fs);
+            float atLast = 0.f, highest = -2.f;
+            for (int i = 0; i < stop; ++i)
+            {
+                const float v = l.process (p.geti (lfoParam (lfo, 0)), hz, &curve, p.on (lfoEnvParam (lfo)));
+                if (i == last) atLast = v;
+                if (i > last) highest = std::max (highest, v);
+            }
+            CHECK (highest <= atLast + 0.01f);   // from the note's last millisecond through the release
+        }
+    }
+    CHECK (filters > 40);
+    CHECK (gates > 8);
 }
 
 TEST_CASE ("Jilax shots start where the recipe draws them: tuned air, gentle drive, a clipper that follows a rising and falling filter", "[generator][jilax][macro]")

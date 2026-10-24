@@ -1,7 +1,9 @@
 #pragma once
 
+#include <algorithm>
 #include <cmath>
 #include <complex>
+#include <cstdlib>
 #include <numbers>
 #include <vector>
 
@@ -101,6 +103,69 @@ inline double rms (const std::vector<float>& x, size_t from = 0)
     double s = 0.0;
     for (size_t i = from; i < x.size(); ++i) s += (double) x[i] * x[i];
     return std::sqrt (s / (double) std::max<size_t> (1, x.size() - from));
+}
+
+// The 6 kHz+ band (4th-order Butterworth high-pass, run from the first
+// sample) in 0.25 ms frames of RMS: what a click lights up.
+inline std::vector<double> highBandFrames (const std::vector<float>& x, double fs)
+{
+    const auto frame = (size_t) std::max (1.0, std::round (0.00025 * fs));
+    std::vector<float> hp (x.size());
+    for (size_t i = 0; i < x.size(); ++i) hp[i] = x[i];
+    for (const double q : { 0.5412, 1.3066 })
+    {
+        const double w = 2.0 * std::numbers::pi * 6000.0 / fs, al = std::sin (w) / (2.0 * q), c = std::cos (w), a0 = 1.0 + al;
+        const double b0 = (1.0 + c) / 2.0 / a0, b1 = -(1.0 + c) / a0, a1 = -2.0 * c / a0, a2 = (1.0 - al) / a0;
+        double x1 = 0.0, x2 = 0.0, y1 = 0.0, y2 = 0.0;
+        for (auto& v : hp)
+        {
+            const double y = b0 * v + b1 * x1 + b0 * x2 - a1 * y1 - a2 * y2;
+            x2 = x1; x1 = v; y2 = y1; y1 = y;
+            v = (float) y;
+        }
+    }
+    std::vector<double> out (x.size() / frame);
+    for (size_t k = 0; k < out.size(); ++k)
+    {
+        double s = 0.0;
+        for (size_t i = k * frame; i < (k + 1) * frame; ++i) s += (double) hp[i] * hp[i];
+        out[k] = std::sqrt (s / (double) frame);
+    }
+    return out;
+}
+
+// Clicks in [t0, t1) seconds: a 0.25 ms frame of the 6 kHz+ band that
+// stands p times (in RMS) over the loudest frame within 30 ms either side
+// of it, the 1 ms around it left out (a click is shorter than that). p >= 10
+// is a strong click; frames under `floor` (RMS) never count. Each run of
+// frames over `minP` gives one hit, at its worst frame.
+struct Click { double t = 0.0, p = 0.0, rms = 0.0; };
+inline std::vector<Click> findClicks (const std::vector<float>& x, double fs, double t0, double t1, double floor = 1e-5, double minP = 3.0)
+{
+    const auto band = highBandFrames (x, fs);
+    const double frameSec = std::max (1.0, std::round (0.00025 * fs)) / fs;
+    const long n = (long) band.size(), near = (long) std::lround (0.001 / frameSec), far = (long) std::lround (0.03 / frameSec);
+    std::vector<Click> hits;
+    bool inRun = false;
+    for (long k = std::max (0L, (long) (t0 / frameSec)); k < std::min (n, (long) (t1 / frameSec)); ++k)
+    {
+        double ref = 0.0;
+        for (long j = std::max (0L, k - far); j <= std::min (n - 1, k + far); ++j)
+            if (std::abs (j - k) > near) ref = std::max (ref, band[(size_t) j]);
+        const double p = band[(size_t) k] / (ref + 1e-30);
+        if (band[(size_t) k] < floor || p < minP) { inRun = false; continue; }
+        if (! inRun) hits.push_back ({ (double) k * frameSec, p, band[(size_t) k] });
+        else if (p > hits.back().p) hits.back() = { (double) k * frameSec, p, band[(size_t) k] };
+        inRun = true;
+    }
+    return hits;
+}
+
+inline double worstClick (const std::vector<Click>& hits)
+{
+    double w = 0.0;
+    for (const auto& h : hits) w = std::max (w, h.p);
+    return w;
 }
 
 // Frequency of the strongest spectral bin with parabolic interpolation.

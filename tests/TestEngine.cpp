@@ -1120,6 +1120,46 @@ TEST_CASE ("Jilax shots end at their length with the key held, wide and without 
     CHECK (wide >= n * 3 / 4);   // the side within 10 dB of the mid
 }
 
+TEST_CASE ("Jilax shots let go without a click or a bright second hit", "[engine][jilax][click]")
+{
+    // Shots whose release clicked or flashed, by cause:
+    //  2, 13, 308: the filter's beat LFO started over on the release's first
+    //  sample, and the filter jumped three to six octaves open under it;
+    //  125, 232: the trance gate opened again under the release;
+    //  201, 233, 234, 291: Sweep -> Reverb Mix fell back to its knob in one
+    //  sample as the voice ended, in the middle of the tail.
+    Generator g;
+    const double fs = 48000.0, bpm = 142.0, beat = 60.0 / bpm;
+    for (const uint32_t seed : { 2u, 13u, 125u, 201u, 232u, 233u, 234u, 291u, 308u })
+    {
+        INFO ("seed " << seed);
+        auto p = g.generate (Category::Jilax, seed, ParamState(), LockSet());
+        p.set (P::DelayOn, 0.f);   // its echoes of the hit land on the beat: the sound, not the release
+        const double len = energyBarsValue (p.geti (P::EnergyBars)) * 4.0 * beat;
+        const auto out = hold (p, len + 1.0, 0.05, 52, bpm);   // E3, a tap: One Shot plays it all
+        const double end = len + out.latency / fs;
+        for (const auto* x : { &out.l, &out.r })
+        {
+            // nothing counts 60 dB under the shot's loudest 10 ms
+            double loudest = 0.0;
+            for (size_t i = 0; i + 480 <= x->size(); i += 480)
+                loudest = std::max (loudest, testutil::rms (std::vector<float> (x->begin() + (long) i, x->begin() + (long) i + 480)));
+            const double floor = 1e-3 * loudest;
+            CHECK (testutil::worstClick (testutil::findClicks (*x, fs, end - 0.005, end + 0.5, floor)) < 5.0);
+
+            // and the top doesn't come back as it lets go (it rose 17 to 1300 times)
+            const auto band = testutil::highBandFrames (*x, fs);
+            const auto loudestIn = [&] (double t0, double t1) {
+                double m = 0.0;
+                for (auto k = (size_t) (t0 / 0.00025); k < std::min (band.size(), (size_t) (t1 / 0.00025)); ++k) m = std::max (m, band[k]);
+                return m;
+            };
+            const double before = loudestIn (end - 0.03, end - 0.0005), after = loudestIn (end + 0.0005, end + 0.05);
+            if (after > floor) CHECK (after < 2.0 * before);
+        }
+    }
+}
+
 TEST_CASE ("A One Shot sound plays its whole length from a tap", "[engine][energy]")
 {
     Generator g;

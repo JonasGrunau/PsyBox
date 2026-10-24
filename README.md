@@ -216,7 +216,10 @@ same way). A shot is:
   an envelope or by an LFO synced to the beat (the hit then often starts thin
   and bright, the high-pass coming down with the filter), stays open, opens or
   rises and falls in the rest; one in ten zaps, falls or rises in pitch. Most fade over
-  the last tenth of their length.
+  the last tenth of their length. The beat LFOs never start over as a shot
+  lets go: the filter's runs once from the note (LFO **Env**) and the gate's
+  pulses are drawn over the note and stay shut after it, so the release
+  doesn't click or flash open.
 
 Jilax uses the Length panel (one beat by default, Cut at End) with **One Shot**
 on: a tap plays the whole shot, like a sample. It has no arp. Drag the output

@@ -313,22 +313,6 @@ namespace
         b.uni (P::DimMix, mixLo, mixHi);
     }
 
-    // A drawn LFO curve (see dsp::LfoCurve): points of x, y and bend.
-    struct Pt { float x, y, bend; };
-    void drawLfo (B& b, int lfo, std::initializer_list<Pt> pts)
-    {
-        b.set (lfoParam (lfo, 0), (float) LfoShape::Drawn);
-        b.set (lfoPointsParam (lfo), (float) pts.size());
-        int k = 0;
-        for (const auto& pt : pts)
-        {
-            b.set (lfoPointParam (lfo, k, LfoLane::X), pt.x);
-            b.set (lfoPointParam (lfo, k, LfoLane::Y), pt.y);
-            b.set (lfoPointParam (lfo, k, LfoLane::Bend), pt.bend);
-            ++k;
-        }
-    }
-
     // A step pattern drawn as held points, synced (Retrig off keeps it on the
     // host's bar): `count` steps, each one of `levels`.
     void drawSteps (B& b, int lfo, int count, std::initializer_list<float> levels)

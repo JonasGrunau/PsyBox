@@ -48,6 +48,10 @@
 #include "Generator.h"
 #include "RecipeCommon.h"
 
+#include <algorithm>
+#include <array>
+#include <cmath>
+
 namespace psy
 {
 
@@ -238,6 +242,24 @@ namespace
 
     enum class Amp { Hold, Decay, Swell, Tail, Gate };
 
+    // A gate whose pulses fill the note exactly would open again on the
+    // sample the note lets go, under the release. Its pulses are drawn over
+    // the first half of a cycle twice the note's length instead, shut through
+    // the second: the same gate up to the end, closed after it. Sixteen
+    // points hold eight pulses, so a finer gate on a longer note plays eight.
+    void gateOverNote (B& b)
+    {
+        const float beats = energyBarsValue (b.state().geti (P::EnergyBars)) * 4.f;
+        const float cycles = beats / syncDivBeats (b.state().geti (P::Lfo1Div));
+        if (std::abs (cycles - std::round (cycles)) > 1e-3f) return;   // dotted: it ends part way through a pulse
+        const int k = std::min ((int) std::lround (cycles), kLfoPoints / 2);
+        std::array<Pt, kLfoPoints> pts {};
+        for (int j = 0; j < 2 * k; ++j)
+            pts[(size_t) j] = { (float) j / (float) (4 * k), j % 2 == 0 ? 1.f : -1.f, 1.f };
+        drawLfo (b, 0, pts.data(), 2 * k);
+        b.set (P::Lfo1Div, (float) divOfBeats (2.f * beats));
+    }
+
     Amp amp (B& b)
     {
         // Half the references are a one-beat hit with its tail ringing
@@ -283,6 +305,7 @@ namespace
         {
             // a trance gate: a hard square on the grid, retriggered by the note
             b.lfoSync (0, LfoShape::Square, { D1_16, D1_16, D1_32, D1_8, D1_16D }, true);
+            gateOverNote (b);
             b.route (S::Lfo1, D::Amp, 0.85f, 1.f);
         }
         return shape;
@@ -329,11 +352,43 @@ namespace
 
     // LFO 3, synced to the beat and restarted by the note: Jilax's way of
     // drawing a filter envelope. The LFO swings both ways, so the cutoff
-    // knob sits in the middle of the sweep.
-    void beatLfo (B& b, LfoShape shape, std::initializer_list<int> divisions, float phase)
+    // knob sits in the middle of the sweep. It runs as an envelope, once from
+    // the note, and holds where it ends: looping, it started over on the
+    // very sample a note of a whole number of its cycles let go, and the
+    // filter jumped three to six octaves open as the release began (a tick
+    // on a short release, a bright second hit in a tail). A note that holds
+    // several cycles gets them drawn over its length, so it sounds the same
+    // up to its end. The triangle is drawn from its bottom.
+    void beatLfo (B& b, LfoShape shape, std::initializer_list<int> divisions)
     {
         b.lfoSync (2, shape, divisions, true);
-        b.set (P::Lfo3Phase, phase);
+        b.set (P::Lfo3Phase, 0.f);
+        b.on (P::Lfo3Env, true);
+        const float beats = energyBarsValue (b.state().geti (P::EnergyBars)) * 4.f;
+        const float cycles = beats / syncDivBeats (b.state().geti (P::Lfo3Div));
+        const bool saw = shape == LfoShape::SawDown;
+        if (saw && cycles < 1.5f) return;   // one fall or less over the note: the saw as it is
+        const int k = std::clamp ((int) std::lround (cycles), 1, (kLfoPoints - 1) / 2);
+        std::array<Pt, kLfoPoints> pts {};
+        int n = 0;
+        for (int c = 0; c < k; ++c)
+        {
+            const float x0 = (float) c / (float) k, x1 = (float) (c + 1) / (float) k;
+            if (saw)
+            {
+                // a jump to the top, a straight fall to the bottom
+                pts[(size_t) n++] = { x0, 1.f, 0.f };
+                pts[(size_t) n++] = { x1, -1.f, 0.f };
+            }
+            else
+            {
+                pts[(size_t) n++] = { x0, -1.f, 0.f };
+                pts[(size_t) n++] = { 0.5f * (x0 + x1), 1.f, 0.f };
+            }
+        }
+        if (! saw) pts[(size_t) n++] = { 1.f, -1.f, 0.f };
+        drawLfo (b, 2, pts.data(), n);
+        b.set (P::Lfo3Div, (float) divOfBeats (beats));
     }
 
     // A decaying shot never opens over its length (the two cancel out) and
@@ -396,8 +451,8 @@ namespace
                 {
                     // the beat LFO as the envelope: a jump and a straight fall over
                     // a beat (or an eighth, or half the shot: it hits again on the beat)
-                    if (twoBeats) beatLfo (b, LfoShape::SawDown, { D1_2, D1_2, D1_4 }, 0.f);
-                    else beatLfo (b, LfoShape::SawDown, { D1_4, D1_4, D1_4, D1_8, D1_2 }, 0.f);
+                    if (twoBeats) beatLfo (b, LfoShape::SawDown, { D1_2, D1_2, D1_4 });
+                    else beatLfo (b, LfoShape::SawDown, { D1_4, D1_4, D1_4, D1_8, D1_2 });
                     if (brightEnd) b.uni (P::F1Cutoff, 1800.f, 4500.f);
                     else b.uni (P::F1Cutoff, 300.f, 1400.f);
                     b.set (P::F1Env, 0.f);
@@ -433,7 +488,7 @@ namespace
                     // a triangle over the shot from its bottom (two beats may
                     // wobble twice, a quarter each)
                     beatLfo (b, LfoShape::Triangle, twoBeats ? std::initializer_list<int> { D1_2, D1_4 }
-                                                             : std::initializer_list<int> { D1_4 }, 0.75f);
+                                                             : std::initializer_list<int> { D1_4 });
                     b.uni (P::F1Cutoff, 500.f, 1500.f);
                     b.set (P::F1Env, 0.f);
                     b.route (S::Lfo3, D::F1Cutoff, 0.15f, 0.3f);
