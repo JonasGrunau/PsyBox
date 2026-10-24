@@ -1,0 +1,13 @@
+{
+  "schema": 1,
+  "name": "PsyBox",
+  "category": "Generative synthesizer",
+  "description": "A synthesizer for psytrance sound design. Pick a category, press Generate, and get a new sound of that kind: an acid line, a zap, a rolling bass, a riser or a kick. Every knob stays live, so a generated patch is a starting point you can edit as far as you like.",
+  "image": "docs/screenshot.png",
+  "bundles": ["PsyBox.vst3", "PsyBox.component"],
+  "build": {
+    "cmake_args": ["-DPSYBOX_BUILD_TESTS=OFF", "-DPSYBOX_COPY_PLUGIN=OFF"],
+    "targets": ["PsyBox_VST3", "PsyBox_AU"],
+    "artefacts": "PsyBox_artefacts/Release"
+  }
+}
