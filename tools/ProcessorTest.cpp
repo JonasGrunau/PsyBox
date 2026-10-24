@@ -24,6 +24,10 @@ struct Bench
     juce::AudioBuffer<float> buf { 2, kBlock };
     std::vector<float> out;   // left channel, every block played
 
+    // Like a VST3 host: a latency that moves restarts the plugin (prepareToPlay again).
+    bool restartOnLatency = false;
+    int restarts = 0;
+
     Bench() { proc.prepareToPlay (kRate, kBlock); }
 
     void set (P p, float plain) { proc.param (p)->setValueNotifyingHost (def (p).toNorm (plain)); }
@@ -33,10 +37,16 @@ struct Bench
     {
         for (int b = 0; b < blocks; ++b)
         {
+            const int latency = proc.getLatencySamples();
             if (bypassed) proc.processBlockBypassed (buf, midi);
             else proc.processBlock (buf, midi);
             midi.clear();
             out.insert (out.end(), buf.getReadPointer (0), buf.getReadPointer (0) + kBlock);
+            if (restartOnLatency && proc.getLatencySamples() != latency)
+            {
+                proc.prepareToPlay (kRate, kBlock);
+                ++restarts;
+            }
         }
     }
     void play (int blocks, const juce::MidiMessage& m, bool bypassed = false)
@@ -55,6 +65,23 @@ struct Bench
         return to > from ? (float) std::sqrt (s / (double) (to - from)) : 0.f;
     }
     float tailRms (double seconds) const { return rms (out.size() - (size_t) (seconds * kRate), out.size()); }
+
+    // The pitch of the last `seconds`, from the first to the last rising zero crossing.
+    float pitchHz (double seconds) const
+    {
+        const size_t from = out.size() - (size_t) (seconds * kRate);
+        double first = -1.0, last = -1.0;
+        int crossings = 0;
+        for (size_t i = from + 1; i < out.size(); ++i)
+            if (out[i - 1] < 0.f && out[i] >= 0.f)
+            {
+                const double at = (double) (i - 1) + out[i - 1] / (out[i - 1] - out[i]);
+                if (first < 0.0) first = at;
+                last = at;
+                ++crossings;
+            }
+        return crossings > 1 ? (float) ((crossings - 1) * kRate / (last - first)) : 0.f;
+    }
 
     // A sine on Osc A, nothing else: steps and clicks stand out against it.
     void sinePatch()
@@ -102,6 +129,38 @@ void swapFromHostStateIsClean()
     // a 262 Hz sine moves at most 0.034 x its peak per sample; fades add a little
     check (peak > 0.01f && step < 0.06f * peak, "a host state load while a note plays swaps without a step");
     check (b.tailRms (0.1) > 0.01f, "the held key plays the loaded patch");
+}
+
+// Hold a key and press Generate again and again: every new sound plays, in
+// every kind of category. In a DAW the held note used to go silent whenever
+// one patch had the distortion and the next didn't (the latency moved, the
+// host restarted the plugin), and a held kick never hit again.
+void heldKeyPlaysEveryNewSound()
+{
+    bool allPlay = true, latencyStays = true;
+    for (auto c : { Category::PsyLead, Category::Jilax, Category::KickFullOn, Category::OffbeatBass, Category::Phoscyon })
+    {
+        Bench b;
+        b.restartOnLatency = true;
+        b.proc.setCategory (c);
+        b.play (b.blocksFor (0.2));
+        b.play (b.blocksFor (0.3), juce::MidiMessage::noteOn (1, 52, (juce::uint8) 100));
+        b.restarts = 0;
+        int silent = 0;
+        for (int g = 0; g < 16; ++g)
+        {
+            b.proc.generate();
+            const size_t at = b.out.size();
+            b.play (b.blocksFor (0.3));
+            if (b.rms (at + (size_t) (0.03 * kRate), b.out.size()) < 0.003f) ++silent;
+        }
+        if (silent > 0 || b.restarts > 0)
+            std::printf ("  %s: %d of 16 silent, %d host restarts\n", psy::categoryInfo()[(size_t) c].name, silent, b.restarts);
+        allPlay = allPlay && silent == 0;
+        latencyStays = latencyStays && b.restarts == 0;
+    }
+    check (allPlay, "a key held through Generate plays every new sound (lead, shot, kick, bass, 303)");
+    check (latencyStays, "and Generate never moves the latency (a VST3 host would restart the plugin)");
 }
 
 void allNotesOffForgetsTheKeys()
@@ -281,8 +340,9 @@ void bounceRendersOffTheMessageThread()
         r->readMaxLevels (0, len, ranges, 2);
         peak = std::max (ranges[0].getEnd(), -ranges[0].getStart());
     }
-    check (ok && len > 4800 && std::abs (juce::Decibels::gainToDecibels (peak) + 1.f) < 0.05f && progress.load() == 1.f,
-           "a bounce renders on another thread to a WAV at -1 dBFS");
+    check (ok && len > 4800 && std::abs (juce::Decibels::gainToDecibels (peak) - PsyBoxProcessor::kBouncePeakDb) < 0.05f
+               && progress.load() == 1.f,
+           "a bounce renders on another thread to a WAV peaking at -0.1 dBFS, like the Jilax packs");
 
     b.set (P::F1Cutoff, 900.f);
     check (b.proc.bounceRequest().key != req.key && b.proc.bounceRequest().key == b.proc.bounceRequest().key,
@@ -304,6 +364,130 @@ void bounceRendersOffTheMessageThread()
     const double secs = std::chrono::duration<double> (std::chrono::steady_clock::now() - t0).count();
     check (! longOk && ! longFile.exists() && secs < 1.0, "a cancelled bounce of a minute-long riser stops at once and leaves no file");
     dir.deleteRecursively();
+}
+
+// The playback key: every key plays one note, and both exports render it.
+void playbackKeyPlaysOneNote()
+{
+    Bench b;
+    b.sinePatch();
+    b.set (P::AenvR, 10.f);
+    const auto hz = [] (int note) { return 440.f * std::exp2 ((float) (note - 69) / 12.f); };
+    const auto near = [] (float a, float want) { return std::abs (a - want) < 0.01f * want; };
+
+    b.proc.setPlayKey (1, 3);   // C#3
+    b.play (b.blocksFor (0.1));
+    b.play (b.blocksFor (0.3), juce::MidiMessage::noteOn (1, 60, (juce::uint8) 100));
+    const float first = b.pitchHz (0.2);
+    b.play (b.blocksFor (0.3), juce::MidiMessage::noteOn (1, 72, (juce::uint8) 100));   // a second key: the note again
+    const float second = b.pitchHz (0.2);
+    b.play (b.blocksFor (0.3), juce::MidiMessage::noteOff (1, 60));
+    const float held = b.tailRms (0.1);   // 72 is still down
+    b.play (b.blocksFor (0.3), juce::MidiMessage::noteOff (1, 72));
+    std::printf ("  C#3: %.1f and %.1f Hz (want %.1f)\n", first, second, hz (49));
+    check (near (first, hz (49)) && near (second, hz (49)), "with a playback key every key plays that note (C#3)");
+    check (held > 0.01f && b.tailRms (0.1) < 1e-4f, "and it ends when the last key is let go");
+
+    b.play (b.blocksFor (0.3), juce::MidiMessage::noteOn (1, 64, (juce::uint8) 100));
+    b.proc.setPlayKey (4, 2);   // E2, while the key is held
+    b.play (b.blocksFor (0.3));
+    const float moved = b.pitchHz (0.2);
+    check (near (moved, hz (40)) && b.tailRms (0.1) > 0.01f, "a new playback key moves the held note to it");
+    check (b.proc.bounceRequest().note == 40, "and the WAV export renders it");
+    b.play (b.blocksFor (0.3), juce::MidiMessage::noteOff (1, 64));
+    check (b.tailRms (0.1) < 1e-4f, "and the key lets it go");
+
+    b.proc.setPlayKey (-1, 2);
+    b.play (b.blocksFor (0.1));
+    b.play (b.blocksFor (0.3), juce::MidiMessage::noteOn (1, 60, (juce::uint8) 100));
+    check (near (b.pitchHz (0.2), hz (60)) && b.proc.getPlayOctave() == 2, "off, the keys play themselves again");
+
+    juce::MemoryBlock state;
+    b.proc.setPlayKey (11, 5);
+    b.proc.getStateInformation (state);
+    Bench c;
+    c.proc.setStateInformation (state.getData(), (int) state.getSize());
+    check (c.proc.getPlayKey() == 11 && c.proc.getPlayOctave() == 5 && c.proc.getPlayNote() == 83, "the session keeps the playback key");
+}
+
+// A batch renders every sound off the message thread, in order and named
+// after its seed, and a seed typed back gives the same sound.
+void batchRendersEverySound()
+{
+    Bench b;
+    b.proc.setCategory (Category::Pluck);
+    b.proc.setPlayKey (9, 3);   // A3
+    b.play (b.blocksFor (0.1));
+    const auto seed = b.proc.getSeed();
+    const auto name = b.proc.getPresetName();
+    b.proc.startBatch (4);
+    const auto folder = b.proc.getBatchFolder();
+    const auto t0 = std::chrono::steady_clock::now();
+    while (b.proc.getBatchStatus().running && std::chrono::steady_clock::now() - t0 < std::chrono::seconds (60))
+        std::this_thread::sleep_for (std::chrono::milliseconds (20));
+    const auto st = b.proc.getBatchStatus();
+    const auto files = b.proc.getBatchFiles();
+    std::printf ("  4 plucks in %.2f s\n", std::chrono::duration<double> (std::chrono::steady_clock::now() - t0).count());
+    check (! st.running && st.finished == 4 && st.failed == 0 && files.size() == 4 && st.progress == 1.f,
+           "a batch renders every sound on worker threads");
+
+    juce::AudioFormatManager fm;
+    fm.registerBasicFormats();
+    const auto read = [&fm] (const juce::File& f) {
+        juce::AudioBuffer<float> buf;
+        if (std::unique_ptr<juce::AudioFormatReader> r (fm.createReaderFor (f)); r != nullptr)
+        {
+            buf.setSize ((int) r->numChannels, (int) r->lengthInSamples);
+            r->read (&buf, 0, buf.getNumSamples(), 0, true, true);
+        }
+        return buf;
+    };
+    bool named = true, levelled = true;
+    for (int i = 0; i < files.size(); ++i)
+    {
+        const juce::File f (files[i]);
+        named = named && f.getParentDirectory() == folder && f.getFileName().startsWith ("0" + juce::String (i + 1) + " Pluck ")
+                && f.getFileName().endsWith (" A3.wav");
+        const auto buf = read (f);
+        levelled = levelled && buf.getNumSamples() > 0
+                   && std::abs (juce::Decibels::gainToDecibels (buf.getMagnitude (0, buf.getNumSamples())) - PsyBoxProcessor::kBouncePeakDb) < 0.05f;
+    }
+    check (named && levelled, "in order, named after seed and playback key, each peaking at -0.1 dBFS");
+    check (b.proc.getSeed() == seed && b.proc.getPresetName() == name, "and the sound playing stays");
+
+    // the second file's seed, typed into SEED, plays that file's sound again
+    const auto second = juce::File (files[1]).getFileNameWithoutExtension();
+    const auto words = juce::StringArray::fromTokens (second, " ", "");
+    const auto hex = words[words.size() - 2];   // "02 Pluck 3F2A91 A3"
+    b.proc.generateWithSeed ((uint32_t) hex.getHexValue32());
+    const auto again = folder.getChildFile ("again.wav");
+    PsyBoxProcessor::renderBounce (b.proc.bounceRequest(), again, [] { return false; });
+    // (the plugin's parameters hold the patch through their normalised values,
+    // a few ulps from the generator's, so the two agree to within rounding)
+    const auto x = read (juce::File (files[1])), y = read (again);
+    double diff = 0.0, sig = 0.0;
+    const int len = std::min (x.getNumSamples(), y.getNumSamples());
+    for (int ch = 0; ch < 2; ++ch)
+        for (int i = 0; i < len; ++i)
+        {
+            const double d = (double) x.getSample (ch, i) - y.getSample (ch, i);
+            diff += d * d;
+            sig += (double) x.getSample (ch, i) * x.getSample (ch, i);
+        }
+    const double diffDb = 10.0 * std::log10 ((diff + 1e-30) / (sig + 1e-30));
+    std::printf ("  seed %s: %d vs %d samples, difference %.1f dB\n", hex.toRawUTF8(), x.getNumSamples(), y.getNumSamples(), diffDb);
+    check (len > 0 && std::abs (x.getNumSamples() - y.getNumSamples()) <= 480 && diffDb < -60.0,
+           "a batch file's seed typed into SEED gives that sound back");
+
+    b.proc.startBatch (60);
+    const auto cancelled = b.proc.getBatchFolder();
+    std::this_thread::sleep_for (std::chrono::milliseconds (100));
+    const auto t1 = std::chrono::steady_clock::now();
+    b.proc.cancelBatch();
+    const double secs = std::chrono::duration<double> (std::chrono::steady_clock::now() - t1).count();
+    check (secs < 1.0 && b.proc.getBatchStatus().total == 0, "cancelling a batch of 60 stops at once");
+    folder.deleteRecursively();
+    cancelled.deleteRecursively();
 }
 
 // Two PsyBox windows open at once each draw in their own category's colour,
@@ -356,6 +540,9 @@ void tailCoversTheEffects()
 int runProcessorTests()
 {
     swapFromHostStateIsClean();
+    heldKeyPlaysEveryNewSound();
+    playbackKeyPlaysOneNote();
+    batchRendersEverySound();
     allNotesOffForgetsTheKeys();
     sustainSurvivesASwap();
     bypassFollowsTheKeys();

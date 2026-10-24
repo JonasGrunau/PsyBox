@@ -11,7 +11,7 @@ class PsyBoxProcessor : public juce::AudioProcessor,
 {
 public:
     PsyBoxProcessor();
-    ~PsyBoxProcessor() override = default;
+    ~PsyBoxProcessor() override;   // stops a batch that is still rendering
 
     // ---- AudioProcessor -------------------------------------------------------
     void prepareToPlay (double sampleRate, int samplesPerBlock) override;
@@ -134,11 +134,24 @@ public:
     void setEnergyMode (psy::EnergyMode);
     double energyLengthSeconds() const;
 
+    // ---- Playback key ---------------------------------------------------------
+    // Off, or one note that every key plays instead (the arp starts from it),
+    // and that the WAV export and the batch render. A playback setting, not
+    // part of a sound: Generate, presets and undo leave it, the session keeps
+    // it. A change swaps like a new patch, so held keys move to the new note.
+    // Octaves count from middle C = C4.
+    int getPlayKey() const noexcept { return playKey; }         // -1 off, 0..11 = C..B
+    int getPlayOctave() const noexcept { return playOctave; }   // kept while the key is off
+    int getPlayNote() const noexcept { return playNote.load (std::memory_order_relaxed); }   // MIDI note, -1 off
+    void setPlayKey (int pitchClass, int octave);
+    static constexpr int kMinPlayOctave = 0, kMaxPlayOctave = 7;
+
     // ---- WAV bounce -----------------------------------------------------------
-    // One note of the current patch (the last one played), held, then released
-    // until the tail dies away, as a 24-bit WAV. bounceRequest() takes what to
-    // render (message thread); renderBounce() runs on any thread, so a long
-    // energy sound renders without freezing the UI.
+    // One note of the current patch (the playback key, or else the last one
+    // played), held, then released until the tail dies away, as a 24-bit WAV
+    // with its peak at -0.1 dBFS (like the Jilax sample packs). bounceRequest()
+    // takes what to render (message thread); renderBounce() runs on any
+    // thread, so a long energy sound renders without freezing the UI.
     struct Bounce
     {
         psy::ParamState state;
@@ -147,7 +160,10 @@ public:
         juce::String name;   // file name without extension: the preset and the note
         uint64_t key = 0;    // equal keys render the same WAV
     };
+    static constexpr float kBouncePeakDb = -0.1f;
     Bounce bounceRequest() const;
+    // What to render for a sound of category `c` called `name` (the note is added).
+    static Bounce makeBounce (const psy::ParamState& state, psy::Category c, double bpm, int note, const juce::String& name);
     // Writes `b` to `file`. Gives up (false, no file) once `cancelled` returns
     // true or the write fails; `progress` follows the render from 0 to 1.
     static bool renderBounce (const Bounce& b, const juce::File& file, const std::function<bool()>& cancelled,
@@ -155,6 +171,30 @@ public:
     // A new file for `b` in ~/Music/PsyBox/Bounces, never an earlier one (a
     // DAW may still play it from there); empty if the folder can't be made.
     static juce::File newBounceFile (const Bounce& b);
+    static juce::File bounceFolder();
+
+    // ---- Batch export (message thread) ----------------------------------------
+    // `count` new sounds of the current category, generated like Generate
+    // (the locks, the Arp and Tune toggles, leveled) without touching the
+    // sound that plays, each bounced like the drag-out into one new folder in
+    // Bounces ("<Category> batch <date time>", files "01 <Category> <seed>
+    // <note>.wav": type the seed into SEED to get a sound back). Renders on
+    // worker threads; the editor polls the status. A new batch cancels the
+    // last one, and so does closing the plugin.
+    static constexpr int kMaxBatch = 100;
+    void startBatch (int count);
+    void cancelBatch();
+    struct BatchStatus
+    {
+        int total = 0, finished = 0, failed = 0;   // sounds asked for, written, lost
+        float progress = 0.f;                       // 0..1 over the whole batch
+        bool running = false;
+    };
+    BatchStatus getBatchStatus() const;
+    juce::StringArray getBatchFiles() const;   // the files written, in order
+    juce::File getBatchFolder() const;
+    int getBatchCount() const noexcept { return batchCount; }
+    void setBatchCount (int n) { batchCount = juce::jlimit (1, kMaxBatch, n); }   // the session keeps it
 
     // On-screen / computer keyboard (standalone). Merged into the MIDI input.
     juce::MidiKeyboardState keyboardState;
@@ -213,6 +253,14 @@ private:
     juce::String presetName { "Init" };
     juce::File presetFile;   // the preset the patch came from, for stepping (message thread)
     std::atomic<int> lastPlayedNote { 48 };
+    int playKey = -1, playOctave = 3;   // message thread
+    std::atomic<int> playNote { -1 };   // what the audio thread maps the keys to
+    int mapTo = -1;                     // audio thread: playNote as of the last restart
+    int keyFor (int note) const noexcept { return mapTo >= 0 ? mapTo : note; }
+    bool anyKeyHeld() const noexcept;   // audio thread
+    int batchCount = 20;
+    struct BatchJob;
+    std::unique_ptr<BatchJob> batch;
 
     // Patch swaps (Generate, Mutate, undo, presets, category switch) open a
     // change (`PatchChange`) before touching any parameter and close it once
@@ -234,7 +282,6 @@ private:
     std::array<float, 128> heldVelocity {};   // notes currently down
     std::array<float, 128> pedalHeld {};      // notes let go while the sustain pedal holds them
     bool sustainDown = false;
-    std::array<bool, 128> pressedInFade {};   // note-ons that arrived during the fade-out
     bool wasBypassed = false;
     void trackKeys (const juce::MidiMessage&) noexcept;
     void startFadeOut() noexcept;
@@ -288,6 +335,11 @@ private:
     psy::ParamState currentState() const;
     void normaliseFamily();   // the engine mode and the arp follow the category
     void applyState (const psy::ParamState& s);
+    // `s` as category `c` plays it: its engine, the global settings of
+    // `current` (volume, qualities), no arp where the category has none.
+    static psy::ParamState withGlobals (psy::ParamState s, psy::Category c, const psy::ParamState& current);
+    static double tailSeconds (const psy::ParamState&, double bpm);     // see getTailLengthSeconds
+    static double energySeconds (const psy::ParamState&, double bpm);   // see energyLengthSeconds
     void markEdited();   // the name gets a "*": no longer the preset or seed it names
     void pushHistory();
     void restoreRanges();

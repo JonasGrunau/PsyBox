@@ -120,9 +120,16 @@ void PsyBoxProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
     fadeInLen = std::max (1, (int) std::lround (sampleRate * (128.0 / 48000.0)));
     heldVelocity.fill (0.f);
     pedalHeld.fill (0.f);
-    pressedInFade.fill (false);
     sustainDown = false;
     wasBypassed = false;
+    mapTo = playNote.load();
+}
+
+bool PsyBoxProcessor::anyKeyHeld() const noexcept
+{
+    for (const float v : heldVelocity)
+        if (v > 0.f) return true;
+    return false;
 }
 
 ParamState PsyBoxProcessor::currentState() const
@@ -153,7 +160,6 @@ void PsyBoxProcessor::trackKeys (const juce::MidiMessage& m) noexcept
     {
         heldVelocity.fill (0.f);
         pedalHeld.fill (0.f);
-        pressedInFade.fill (false);
     }
     else if (m.isSustainPedalOn())   // CC 64 >= 64, the engine's threshold
     {
@@ -230,6 +236,19 @@ void PsyBoxProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
     {
         replay = heldVelocity;
         replayPedal = pedalHeld;
+        if (mapTo >= 0)   // the playback key: one note, as loud as the loudest key on it
+        {
+            float held = 0.f, pedal = 0.f;
+            for (size_t k = 0; k < 128; ++k)
+            {
+                held = std::max (held, replay[k]);
+                pedal = std::max (pedal, replayPedal[k]);
+            }
+            replay.fill (0.f);
+            replayPedal.fill (0.f);
+            replay[(size_t) mapTo] = held;
+            replayPedal[(size_t) mapTo] = held > 0.f ? 0.f : pedal;
+        }
     }
 
     midiEvents.clear();
@@ -237,14 +256,19 @@ void PsyBoxProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
     for (const auto meta : midi)
     {
         const auto m = meta.getMessage();
-        if (swap == Swap::FadingOut && m.isNoteOn())
-            pressedInFade[(size_t) m.getNoteNumber()] = true;
         trackKeys (m);
         MidiEvent e;
         e.offset = juce::jlimit (0, n - 1, meta.samplePosition);
-        // CC 120/123 before the other controllers, which they also are
-        if (m.isNoteOn()) { e.type = MidiEvent::NoteOn; e.number = m.getNoteNumber(); e.value = m.getFloatVelocity(); }
-        else if (m.isNoteOff()) { e.type = MidiEvent::NoteOff; e.number = m.getNoteNumber(); }
+        // CC 120/123 before the other controllers, which they also are. With
+        // a playback key every key is that note: each press plays it again,
+        // and it ends when the last key is let go.
+        if (m.isNoteOn()) { e.type = MidiEvent::NoteOn; e.number = keyFor (m.getNoteNumber()); e.value = m.getFloatVelocity(); }
+        else if (m.isNoteOff())
+        {
+            if (mapTo >= 0 && anyKeyHeld()) continue;
+            e.type = MidiEvent::NoteOff;
+            e.number = keyFor (m.getNoteNumber());
+        }
         else if (m.isAllNotesOff() || m.isAllSoundOff()) { e.type = MidiEvent::AllNotesOff; }
         else if (m.isPitchWheel()) { e.type = MidiEvent::PitchBend; e.value = (float) (m.getPitchWheelValue() - 8192) / 8192.f; }
         else if (m.isController()) { e.type = MidiEvent::Controller; e.number = m.getControllerNumber(); e.value = (float) m.getControllerValue() / 127.f; }
@@ -273,9 +297,9 @@ void PsyBoxProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
 
     // The new patch starts clean and what sounded comes back: the pedal, the
     // keys held and the keys the pedal held (let go again, so the engine
-    // sustains them). A kick is a one-shot: only keys pressed during the
-    // fade are played again (unless the arp owns the keys), and it starts
-    // without a fade-in so the transient stays sharp.
+    // sustains them). So holding a key while pressing Generate plays each
+    // new sound. A kick is a one-shot: the keys held hit again (the pedal
+    // doesn't hold a kick), without a fade-in so the transient stays sharp.
     const bool oneShot = audioParams.geti (P::EngineMode) == (int) EngineMode::Kick && ! audioParams.on (P::ArpOn);
     if (restart)
     {
@@ -292,7 +316,7 @@ void PsyBoxProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
         for (int note = 0; note < 128; ++note)
         {
             const float v = oneShot ? replay[(size_t) note] : std::max (replay[(size_t) note], replayPedal[(size_t) note]);
-            if (v > 0.f && (! oneShot || pressedInFade[(size_t) note]))
+            if (v > 0.f)
                 add (MidiEvent::NoteOn, note, v);
         }
         if (! oneShot)
@@ -301,7 +325,6 @@ void PsyBoxProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
                     add (MidiEvent::NoteOff, note, 0.f);
         count = std::min (count, midiEvents.capacity() - midiEvents.size());
         midiEvents.insert (midiEvents.begin(), restartEvents.begin(), restartEvents.begin() + (std::ptrdiff_t) count);
-        pressedInFade.fill (false);
         if (oneShot) swap = Swap::None;
     }
 
@@ -326,6 +349,7 @@ void PsyBoxProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Midi
         if (fadePos >= fadeOutLen && (openChanges.load() == 0 || fadePos >= fadeOutLen + maxHold))
         {
             engine.reset();   // voices, filter states, delay and reverb tails; params jump, no smoothing
+            mapTo = playNote.load();   // a new playback key takes over here, with nothing sounding
             seenEpoch = epoch;
             swap = Swap::Restart;
             fadePos = 0;
@@ -400,21 +424,26 @@ void PsyBoxProcessor::copyScope (float* dest, int num) const noexcept
 // Generator
 // ---------------------------------------------------------------------------
 
-void PsyBoxProcessor::applyState (const ParamState& state)
+ParamState PsyBoxProcessor::withGlobals (ParamState s, Category c, const ParamState& current)
 {
     // Whatever the source (recipe, init, preset, undo), a kick category plays
     // the kick engine, Phoscyon the 303 and every other category the synth,
     // and only synth categories keep an arp (old basses and kicks may have
     // one switched on).
-    auto s = state;
-    s.set (P::EngineMode, (float) categoryEngine());
+    const auto engine = familyOf (c) == Family::Kick ? EngineMode::Kick : isPhoscyon (c) ? EngineMode::Phoscyon : EngineMode::Synth;
+    s.set (P::EngineMode, (float) engine);
     // the volume and the qualities are global settings, not part of a sound
     // (init, undo, presets and category slots keep them too)
-    s.set (P::MasterVol, plain (P::MasterVol));
-    s.set (P::Quality, plain (P::Quality));
-    s.set (P::RenderQuality, plain (P::RenderQuality));
-    if (! hasArp (category))
+    for (const auto p : { P::MasterVol, P::Quality, P::RenderQuality })
+        s.set (p, current.get (p));
+    if (! hasArp (c))
         s.set (P::ArpOn, 0.f);
+    return s;
+}
+
+void PsyBoxProcessor::applyState (const ParamState& state)
+{
+    const auto s = withGlobals (state, category, currentState());
     const auto& defs = paramDefs();
     for (size_t i = 0; i < (size_t) kNumParams; ++i)
     {
@@ -801,9 +830,14 @@ void PsyBoxProcessor::endModAmountChange (int slot)
 
 double PsyBoxProcessor::energyLengthSeconds() const
 {
-    if ((int) std::lround (plain (P::EnergyMode)) == (int) EnergyMode::Time)
-        return plain (P::EnergySec);
-    return energyBarsValue ((int) std::lround (plain (P::EnergyBars))) * 240.0 / juce::jmax (20.0, getBpm());
+    return energySeconds (currentState(), getBpm());
+}
+
+double PsyBoxProcessor::energySeconds (const ParamState& s, double bpm)
+{
+    if (s.geti (P::EnergyMode) == (int) EnergyMode::Time)
+        return s.get (P::EnergySec);
+    return energyBarsValue (s.geti (P::EnergyBars)) * 240.0 / juce::jmax (20.0, bpm);
 }
 
 void PsyBoxProcessor::setEnergyMode (EnergyMode m)
@@ -842,10 +876,16 @@ void PsyBoxProcessor::initPatch()
 
 double PsyBoxProcessor::getTailLengthSeconds() const
 {
+    return tailSeconds (currentState(), getBpm());
+}
+
+double PsyBoxProcessor::tailSeconds (const ParamState& st, double tempo)
+{
     // What sounds on after the last note-off: the release, then the echoes
     // (to -60 dB) and the reverb. Capped, so an infinite feedback stays finite.
-    const auto mode = (EngineMode) std::lround (plain (P::EngineMode));
-    const double bpm = juce::jmax (20.0, getBpm());
+    const auto plain = [&st] (P p) { return st.get (p); };
+    const auto mode = (EngineMode) st.geti (P::EngineMode);
+    const double bpm = juce::jmax (20.0, tempo);
     const auto echoes = [] (double seconds, double feedback) {
         return feedback <= 1.0e-3 ? seconds : seconds * std::log (1.0e-3) / std::log (juce::jmin (feedback, 0.999));
     };
@@ -885,26 +925,32 @@ double PsyBoxProcessor::getTailLengthSeconds() const
 
 PsyBoxProcessor::Bounce PsyBoxProcessor::bounceRequest() const
 {
+    const int note = getPlayNote() >= 0 ? getPlayNote() : lastPlayedNote.load();
+    return makeBounce (currentState(), category, lastBpm.load(), note, presetName.trimCharactersAtEnd ("*"));
+}
+
+PsyBoxProcessor::Bounce PsyBoxProcessor::makeBounce (const ParamState& state, Category c, double bpm, int note, const juce::String& name)
+{
     Bounce b;
-    b.state = currentState();
+    b.state = state;
     if (b.state.geti (P::EngineMode) == (int) EngineMode::Kick)
         b.state.set (P::ArpOn, 0.f);   // one hit: the WAV is a kick sample
-    b.bpm = juce::jmax (20.0, lastBpm.load());
-    b.note = lastPlayedNote.load();
+    b.bpm = juce::jmax (20.0, bpm);
+    b.note = juce::jlimit (0, 127, note);
 
     // Gate: percussive patches (no sustain) only need attack + decay; sustained
     // ones are held for at least a beat so the body of the sound is there.
     // Energy sounds are held for their whole length.
     const double attack = b.state.get (P::AenvA) / 1000.0, decay = b.state.get (P::AenvD) / 1000.0;
     const double beat = 60.0 / b.bpm;
-    b.gateSec = hasLength() ? juce::jlimit (0.1, 60.0, energyLengthSeconds())
+    b.gateSec = psy::hasLength (c) ? juce::jlimit (0.1, 60.0, energySeconds (b.state, b.bpm))
               : b.state.get (P::AenvS) < 0.05f ? juce::jlimit (0.1, 8.0, attack + decay)
                                                : juce::jlimit (beat, 8.0, attack + decay + 0.25);
-    b.expectSec = b.gateSec + juce::jmin (getTailLengthSeconds(), 32.0);
+    b.expectSec = b.gateSec + juce::jmin (tailSeconds (b.state, b.bpm), 32.0);
 
     // Flats: a file name can't hold "#", and C#3 would become C3.
     const auto noteName = juce::MidiMessage::getMidiNoteName (b.note, false, true, 4);
-    b.name = juce::File::createLegalFileName (presetName.trimCharactersAtEnd ("*") + " " + noteName);
+    b.name = juce::File::createLegalFileName (name + " " + noteName);
 
     // FNV-1a over everything the render depends on
     uint64_t h = 1469598103934665603ULL;
@@ -977,9 +1023,9 @@ bool PsyBoxProcessor::renderBounce (const Bounce& b, const juce::File& file, con
     out.copyFrom (1, 0, R.data() + latency, len);
     const int fade = std::min (len, (int) (0.005 * fs));
     out.applyGainRamp (len - fade, fade, 1.f, 0.f);
-    // normalise to -1 dBFS peak so the sample drops in at a usable level
+    // the peak at -0.1 dBFS, like a sample pack, whatever the Volume
     if (const float pk = out.getMagnitude (0, len); pk > 1e-5f)
-        out.applyGain (juce::Decibels::decibelsToGain (-1.f) / pk);
+        out.applyGain (juce::Decibels::decibelsToGain (kBouncePeakDb) / pk);
 
     juce::WavAudioFormat wav;
     if (! file.deleteFile())   // an output stream would append to it
@@ -1001,12 +1047,165 @@ bool PsyBoxProcessor::renderBounce (const Bounce& b, const juce::File& file, con
     return true;
 }
 
+juce::File PsyBoxProcessor::bounceFolder()
+{
+    return juce::File::getSpecialLocation (juce::File::userMusicDirectory).getChildFile ("PsyBox").getChildFile ("Bounces");
+}
+
 juce::File PsyBoxProcessor::newBounceFile (const Bounce& b)
 {
-    auto dir = juce::File::getSpecialLocation (juce::File::userMusicDirectory).getChildFile ("PsyBox").getChildFile ("Bounces");
+    const auto dir = bounceFolder();
     if (! dir.createDirectory())
         return {};
     return dir.getChildFile (b.name + ".wav").getNonexistentSibling();
+}
+
+// ---------------------------------------------------------------------------
+// Batch export
+// ---------------------------------------------------------------------------
+
+// Each sound is one job on a pool of low-priority threads (generate, level,
+// bounce), so a hundred take seconds and the audio thread keeps its core.
+// The jobs work on copies; the message thread only reads the atomics.
+struct PsyBoxProcessor::BatchJob
+{
+    struct Sound
+    {
+        juce::File file;                    // written before `state` turns 1
+        std::atomic<float> progress { 0.f };
+        std::atomic<int> state { 0 };       // 0 rendering or waiting, 1 written, -1 failed
+    };
+    std::vector<std::unique_ptr<Sound>> sounds;
+    juce::File folder;
+    std::atomic<bool> cancelled { false };
+    juce::ThreadPool pool;   // last: it stops before the sounds go
+
+    explicit BatchJob (int threads)
+        : pool (juce::ThreadPoolOptions {}.withThreadName ("PsyBox batch").withNumberOfThreads (threads)
+                    .withDesiredThreadPriority (juce::Thread::Priority::low))
+    {
+    }
+    ~BatchJob()
+    {
+        cancelled = true;   // a render stops within a block
+        pool.removeAllJobs (true, -1);
+    }
+};
+
+PsyBoxProcessor::~PsyBoxProcessor()
+{
+    cancelBatch();
+}
+
+void PsyBoxProcessor::startBatch (int count)
+{
+    cancelBatch();
+    setBatchCount (count);
+    const int n = batchCount;
+    // everything the jobs need, as it is now
+    const auto c = category;
+    const auto current = currentState();
+    const auto lockSet = locks;
+    const bool arp = arpGeneration, kickKey = kickKeyGeneration;
+    const double bpm = lastBpm.load();
+    const int note = getPlayNote() >= 0 ? getPlayNote() : lastPlayedNote.load();
+    const juce::String catName = categoryInfo()[(size_t) c].name;
+
+    auto job = std::make_unique<BatchJob> (juce::jlimit (1, 8, juce::SystemStats::getNumCpus() - 2));
+    const auto stamp = juce::Time::getCurrentTime().formatted ("%Y-%m-%d %H-%M-%S");
+    job->folder = bounceFolder().getChildFile (juce::File::createLegalFileName (catName + " batch " + stamp)).getNonexistentSibling();
+    const bool made = job->folder.createDirectory().wasOk();
+    for (int i = 0; i < n; ++i)
+        job->sounds.push_back (std::make_unique<BatchJob::Sound>());
+    for (int i = 0; i < n; ++i)
+    {
+        auto* snd = job->sounds[(size_t) i].get();
+        if (! made)
+        {
+            snd->state = -1;
+            continue;
+        }
+        const uint32_t s = (uint32_t) random.nextInt() & 0xFFFFFFu;
+        // "07 Jilax 3F2A91": in order in the folder and in the DAW, and the seed brings it back
+        // (a file name can't hold the "#" of "Jilax #3F2A91")
+        const auto name = juce::String (i + 1).paddedLeft ('0', n >= 100 ? 3 : 2) + " " + catName + " "
+                        + juce::String::toHexString ((int) s).toUpperCase().paddedLeft ('0', 6);
+        job->pool.addJob ([j = job.get(), snd, s, c, current, lockSet, arp, kickKey, bpm, note, name] {
+            if (j->cancelled) return;
+            Generator gen;
+            auto patch = gen.generate (c, s, current, lockSet, arp, kickKey);
+            levelPatch (patch, c, lockSet);
+            const auto b = makeBounce (withGlobals (patch, c, current), c, bpm, note, name);
+            const auto file = j->folder.getChildFile (b.name + ".wav");
+            const bool ok = renderBounce (b, file, [j] { return j->cancelled.load(); }, &snd->progress);
+            snd->file = file;
+            snd->state.store (ok ? 1 : -1, std::memory_order_release);
+        });
+    }
+    batch = std::move (job);
+    sendChangeMessage();   // every open window shows it running
+}
+
+void PsyBoxProcessor::cancelBatch()
+{
+    if (batch == nullptr) return;
+    batch.reset();
+    sendChangeMessage();
+}
+
+PsyBoxProcessor::BatchStatus PsyBoxProcessor::getBatchStatus() const
+{
+    BatchStatus st;
+    if (batch == nullptr) return st;
+    st.total = (int) batch->sounds.size();
+    float sum = 0.f;
+    for (const auto& snd : batch->sounds)
+    {
+        const int k = snd->state.load (std::memory_order_acquire);
+        st.finished += k > 0 ? 1 : 0;
+        st.failed += k < 0 ? 1 : 0;
+        sum += k != 0 ? 1.f : snd->progress.load (std::memory_order_relaxed);
+    }
+    st.progress = st.total > 0 ? sum / (float) st.total : 0.f;
+    st.running = st.finished + st.failed < st.total;
+    return st;
+}
+
+juce::StringArray PsyBoxProcessor::getBatchFiles() const
+{
+    juce::StringArray files;
+    if (batch != nullptr)
+        for (const auto& snd : batch->sounds)
+            if (snd->state.load (std::memory_order_acquire) > 0)
+                files.add (snd->file.getFullPathName());
+    return files;
+}
+
+juce::File PsyBoxProcessor::getBatchFolder() const
+{
+    return batch != nullptr ? batch->folder : juce::File();
+}
+
+// ---------------------------------------------------------------------------
+// Playback key
+// ---------------------------------------------------------------------------
+
+void PsyBoxProcessor::setPlayKey (int pitchClass, int octave)
+{
+    pitchClass = juce::jlimit (-1, 11, pitchClass);
+    octave = juce::jlimit (kMinPlayOctave, kMaxPlayOctave, octave);
+    const int note = pitchClass < 0 ? -1 : 12 * (octave + 1) + pitchClass;
+    {
+        const juce::ScopedLock sl (stateLock);
+        playKey = pitchClass;
+        playOctave = octave;
+    }
+    if (note != playNote.load())
+    {
+        const PatchChange change (*this);   // the held keys move to the new note in one clean swap
+        playNote.store (note);
+    }
+    sendChangeMessage();
 }
 
 // ---------------------------------------------------------------------------
@@ -1023,6 +1222,9 @@ void PsyBoxProcessor::getStateInformation (juce::MemoryBlock& destData)
     state.setProperty ("mutate", mutateAmount, nullptr);
     state.setProperty ("arpGen", arpGeneration, nullptr);
     state.setProperty ("kickKeyGen", kickKeyGeneration, nullptr);
+    state.setProperty ("playKey", playKey, nullptr);
+    state.setProperty ("playOctave", playOctave, nullptr);
+    state.setProperty ("batchCount", batchCount, nullptr);
     state.setProperty ("presetName", presetName, nullptr);
     writeMacroNames (state);
     writeSlots (state);
@@ -1060,6 +1262,10 @@ void PsyBoxProcessor::setStateInformation (const void* data, int sizeInBytes)
         setMutateAmount ((float) tree.getProperty ("mutate", 0.25f));
         arpGeneration = (bool) tree.getProperty ("arpGen", false);
         kickKeyGeneration = (bool) tree.getProperty ("kickKeyGen", true);
+        playKey = juce::jlimit (-1, 11, (int) tree.getProperty ("playKey", -1));
+        playOctave = juce::jlimit (kMinPlayOctave, kMaxPlayOctave, (int) tree.getProperty ("playOctave", 3));
+        playNote.store (playKey < 0 ? -1 : 12 * (playOctave + 1) + playKey);   // inside the swap: taken at its restart
+        setBatchCount ((int) tree.getProperty ("batchCount", 20));
         presetName = tree.getProperty ("presetName", "Init").toString();
         presetFile = juce::File();
         readMacroNames (tree);

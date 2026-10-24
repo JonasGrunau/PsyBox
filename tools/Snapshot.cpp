@@ -29,6 +29,9 @@
 // with PSYSNAP_VIEW=1): the rows make room and its landing place stays empty.
 // PSYSNAP_BOUNCE=1 drags the output window before the WAV is rendered (try a
 // long energy sound): it shows the render's progress.
+// PSYSNAP_PLAYKEY="1:3" sets the playback key (pitch class 0-11 : octave).
+// PSYSNAP_BATCH=n renders a batch of n sounds and shows it finished; "n:run"
+// shows it 0.4 s in. The batch folder is deleted afterwards.
 
 #include "plugin/PluginEditor.h"
 #include "plugin/PluginProcessor.h"
@@ -231,6 +234,9 @@ int main (int argc, char** argv)
     editor->addToDesktop (juce::ComponentPeer::windowIsTemporary);
 
     proc.setArpGeneration (std::getenv ("PSYSNAP_ARP") != nullptr);
+    if (auto* pk = std::getenv ("PSYSNAP_PLAYKEY"))
+        proc.setPlayKey (juce::String (pk).upToFirstOccurrenceOf (":", false, false).getIntValue(),
+                         juce::String (pk).fromFirstOccurrenceOf (":", false, false).getIntValue());
     for (int c : cats)
     {
         proc.setCategory ((psy::Category) juce::jlimit (0, psy::kNumCategories - 1, c));
@@ -326,6 +332,19 @@ int main (int argc, char** argv)
                 juce::MessageManager::getInstance()->runDispatchLoopUntil (150);
             }
 
+        juce::File batchFolder;
+        if (auto* bt = std::getenv ("PSYSNAP_BATCH"))
+        {
+            const juce::String spec (bt);
+            proc.startBatch (spec.getIntValue());
+            batchFolder = proc.getBatchFolder();
+            const bool running = spec.contains (":run");
+            const auto t0 = juce::Time::getMillisecondCounter();
+            while (running ? juce::Time::getMillisecondCounter() - t0 < 400 : proc.getBatchStatus().running)
+                juce::MessageManager::getInstance()->runDispatchLoopUntil (20);
+            juce::MessageManager::getInstance()->runDispatchLoopUntil (150);   // the panel's timer paints the state
+        }
+
         const auto* scaleText = std::getenv ("PSYSNAP_SCALE");
         const auto img = editor->createComponentSnapshot (editor->getLocalBounds(), true,
                                                           scaleText != nullptr ? juce::String (scaleText).getFloatValue() : 2.f);
@@ -334,6 +353,11 @@ int main (int argc, char** argv)
         juce::FileOutputStream os (file);
         juce::PNGImageFormat().writeImageToStream (img, os);
         std::printf ("%s\n", file.getFullPathName().toRawUTF8());
+        if (batchFolder != juce::File())
+        {
+            proc.cancelBatch();
+            batchFolder.deleteRecursively();
+        }
     }
     editor.reset();
     return 0;

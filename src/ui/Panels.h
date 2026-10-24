@@ -69,6 +69,84 @@ struct KnobSet
 };
 
 // ---------------------------------------------------------------------------
+// "Playback & export", between the category list and the generator. Key:
+// off, or one note every key plays (the arp starts from it) and both
+// exports render. Batch: Generate renders that many new sounds of the
+// category to WAVs on worker threads (the tile shows the progress), then
+// the tile drags all of them out at once, one clip each.
+// ---------------------------------------------------------------------------
+class ExportPanel : public juce::Component,
+                    public juce::ChangeListener,
+                    private juce::Timer
+{
+public:
+    explicit ExportPanel (PsyBoxProcessor&);
+    ~ExportPanel() override;
+    void paint (juce::Graphics&) override;
+    void resized() override;
+    void changeListenerCallback (juce::ChangeBroadcaster*) override { refresh(); }
+
+    // divider, heading, key row, batch row, tile
+    static constexpr int kTileH = 26;
+    static constexpr int kHeight = theme::sp::md + theme::kLabelH + theme::sp::sm + theme::kCtrlH + theme::sp::sm
+                                 + theme::kCtrlH + theme::sp::sm + kTileH + theme::sp::md;
+
+private:
+    // How many sounds: drag or scroll the number, double-click it to type one.
+    class CountField : public juce::Component, public juce::SettableTooltipClient
+    {
+    public:
+        explicit CountField (PsyBoxProcessor&);
+        void paint (juce::Graphics&) override;
+        void resized() override;
+        void mouseDown (const juce::MouseEvent&) override;
+        void mouseDrag (const juce::MouseEvent&) override;
+        void mouseUp (const juce::MouseEvent&) override { dragging = false; repaint(); }
+        void mouseDoubleClick (const juce::MouseEvent&) override;
+        void mouseWheelMove (const juce::MouseEvent&, const juce::MouseWheelDetails&) override;
+        void mouseEnter (const juce::MouseEvent&) override { repaint(); }
+        void mouseExit (const juce::MouseEvent&) override { wheelAccum = 0.f; repaint(); }
+        void refresh();
+
+    private:
+        PsyBoxProcessor& proc;
+        juce::Label number;   // edited in place on a double-click
+        int dragStart = 0;
+        float wheelAccum = 0.f;
+        bool dragging = false;
+        void set (int n);
+    };
+
+    // The batch: empty, its progress, then the drag handle for every file.
+    class BatchTile : public juce::Component, public juce::SettableTooltipClient
+    {
+    public:
+        explicit BatchTile (PsyBoxProcessor&);
+        void paint (juce::Graphics&) override;
+        void mouseDrag (const juce::MouseEvent&) override;
+        void mouseDoubleClick (const juce::MouseEvent&) override;
+        void mouseEnter (const juce::MouseEvent&) override { repaint(); }
+        void mouseExit (const juce::MouseEvent&) override { repaint(); }
+        void update (const PsyBoxProcessor::BatchStatus&);
+
+    private:
+        PsyBoxProcessor& proc;
+        PsyBoxProcessor::BatchStatus status;
+        bool dragging = false;
+        bool ready() const { return ! status.running && status.finished > 0; }
+    };
+
+    PsyBoxProcessor& proc;
+    juce::ComboBox keyBox, octaveBox;
+    CountField count;
+    juce::TextButton batchButton { "Generate" };
+    BatchTile tile;
+    juce::Rectangle<int> headingArea, keyCaption;
+    void refresh();
+    void timerCallback() override;   // the batch's progress
+};
+
+// ---------------------------------------------------------------------------
 // Left column: the category list, then the generator controls. The list
 // holds every tab as a header; the open tab's sounds sit under its header.
 // ---------------------------------------------------------------------------
@@ -95,7 +173,12 @@ private:
     ToggleDot arpToggle { juce::String() };   // categories with an arp; the caption is painted like SEED
     ToggleDot keyToggle { juce::String() };   // kick categories only: new kicks follow the played key
     ParamCombo arpKey, arpScale;              // the key and scale arps are written and played in
-    std::unique_ptr<juce::ParameterAttachment> keyWatch;   // dims the scale while the key is off
+    ExportPanel exportPanel;                  // between the list and the info block
+    // The key and scale only do something while the patch's arp plays them
+    // or Generate writes arps (the ARP toggle): off otherwise. The scale also
+    // dims while the key is off.
+    std::unique_ptr<juce::ParameterAttachment> keyWatch, arpOnWatch;
+    void updateArpKey();
     juce::Slider mutateAmount;
     juce::Label seedLabel;
     juce::Rectangle<int> seedCaption, arpCaption, keyCaption, arpKeyCaption, scaleCaption;
@@ -144,6 +227,10 @@ public:
     void setSelected (View v) { if (v != selected) { selected = v; repaint(); } }
     View getSelected() const noexcept { return selected; }
     int idealWidth() const;
+    // The widest the tabs ever get (every view, the longest main name): the
+    // top bar keeps that much room, so nothing right of them moves when the
+    // category changes the tabs.
+    static int widestWidth();
     std::function<void (View)> onChange;
 
     void paint (juce::Graphics&) override;

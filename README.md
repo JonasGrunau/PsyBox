@@ -375,6 +375,8 @@ body holds flat to about 160 ms and is down 30 dB by about 220 ms.
   and new lines are written in it, and the arp plays every note in that scale
   whichever key you hold (hold the key itself to hear the riff from its
   root). Off leaves the scale to each pattern and plays notes as they come.
+  Key and scale grey out while neither Arp nor the patch's own arp is on,
+  since they only act on an arp.
 - The same category and seed always give the same sound. Double-click the seed
   in the sidebar to type one in.
 - Each category remembers its patch. Switch from Acid to Zap and back and your
@@ -385,7 +387,10 @@ body holds flat to about 160 ms and is down 30 dB by about 220 ms.
   are yours: Generate, Init, undo, presets and category switches leave them.
 - Switching a patch while notes play (Generate, Mutate, undo, a preset, a
   host preset or A/B compare) fades the old sound out and brings back what
-  sounded, sustain pedal included.
+  sounded, sustain pedal included. So you can hold a key and press Generate
+  again and again to click through sounds: each new one plays (a kick hits
+  again). The latency the host sees never changes with the patch (see FX), so
+  a DAW never restarts the plugin and drops the held key.
 - **Macros**: every Generate gives all four macros a job (cutoff, resonance,
   reverb, drive...) and names them after it: "Cutoff", "Env Amount", "Filter +
   Space". The names follow the matrix, so dragging a macro onto another knob
@@ -401,6 +406,22 @@ body holds flat to about 160 ms and is down 30 dB by about 220 ms.
   meter: RMS bars over peak bars, a held peak tick and its value in dB, red
   when the output clips. Drag it out to drop the current sound into your DAW
   as a WAV.
+- Every WAV PsyBox writes peaks at **-0.1 dBFS**, like the Jilax sample
+  packs, whatever Volume and Level are set to.
+- **Playback & export** (the sidebar, above the category's name):
+  - **Key**: pick a note and its octave and every key you press plays that
+    note (each press plays it again; the arp starts from it). The WAV drag-out
+    and the batch render it too. Off plays the keys you press. Octaves count
+    from middle C = C4 (Ableton, Logic and Cubase call that note C3).
+  - **Batch**: set how many **Sounds** (1 to 100: drag, scroll or
+    double-click to type) and press this section's **Generate**. That many new
+    sounds of the category render in the background (the locks and the Arp and
+    Tune switches apply; the sound playing stays) and the tile under it shows
+    the progress; Cancel stops it. Then drag the tile onto an audio track:
+    every WAV lands as its own clip, one after the other. The files go to
+    `~/Music/PsyBox/Bounces/<Category> batch <date time>/`, named like
+    `07 Jilax 3F2A91 E3.wav`: type the seed (3F2A91) into SEED to get that
+    sound back. Double-click the tile to open the folder.
 - Presets are saved to `~/Music/PsyBox/Presets/<Category>/`.
 
 The standalone app has a keyboard strip at the bottom. Click the keys or play
@@ -436,7 +457,10 @@ Laid out like Serum. The tabs in the top bar switch views:
   in the default order. Distortion first runs at the voices' oversampled
   rate; anywhere later in the chain it oversamples itself (Eco 4x, Standard
   8x, High and every render 16x at 44.1 and 48 kHz), adding about 1-2 ms of
-  latency the host compensates.
+  latency the host compensates. PsyBox always reports the most latency its
+  effects can add (and the 303's limiter its 3.3 ms) and delays the rest, so
+  switching an effect or generating a patch never moves it; only the quality
+  and a switch to or from Phoscyon do.
 - **Matrix**: the 16 modulation routes as rows: source, amount, target.
 - **Arp** (Main, FX, Background): the step editor (play, note, accent and
   slide lanes, a ruler for the loop length), rate, octaves, gate, swing,

@@ -26,10 +26,257 @@ int Section::titleWidth() const
 }
 
 // ---------------------------------------------------------------------------
+// ExportPanel
+// ---------------------------------------------------------------------------
+ExportPanel::ExportPanel (PsyBoxProcessor& p) : proc (p), count (p), tile (p)
+{
+    static constexpr const char* keys[] = { "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" };
+    keyBox.addItem ("Off", 1);
+    for (int k = 0; k < 12; ++k)
+        keyBox.addItem (keys[k], k + 2);
+    keyBox.setTooltip ("Playback key: every key you press plays this one note (the arp starts from it), and the WAV export "
+                       "and the batch render it. Off: the keys you play");
+    keyBox.onChange = [this] { proc.setPlayKey (keyBox.getSelectedId() - 2, proc.getPlayOctave()); };
+    for (int o = PsyBoxProcessor::kMinPlayOctave; o <= PsyBoxProcessor::kMaxPlayOctave; ++o)
+        octaveBox.addItem (juce::String (o), o + 1);
+    octaveBox.setTooltip ("The playback key's octave (middle C is C4)");
+    octaveBox.onChange = [this] { proc.setPlayKey (proc.getPlayKey(), octaveBox.getSelectedId() - 1); };
+    batchButton.setTooltip ("Render that many new sounds of this category as WAVs, then drag them all out below. "
+                            "The sound playing stays");
+    batchButton.onClick = [this] {
+        if (proc.getBatchStatus().running) proc.cancelBatch();
+        else proc.startBatch (proc.getBatchCount());
+        refresh();
+    };
+    for (juce::Component* c : { (juce::Component*) &keyBox, (juce::Component*) &octaveBox, (juce::Component*) &count,
+                                (juce::Component*) &batchButton, (juce::Component*) &tile })
+        addAndMakeVisible (c);
+    proc.addChangeListener (this);
+    refresh();
+}
+
+ExportPanel::~ExportPanel() { proc.removeChangeListener (this); }
+
+void ExportPanel::refresh()
+{
+    keyBox.setSelectedId (proc.getPlayKey() + 2, juce::dontSendNotification);
+    octaveBox.setSelectedId (proc.getPlayOctave() + 1, juce::dontSendNotification);
+    const bool keyed = proc.getPlayKey() >= 0;
+    octaveBox.setEnabled (keyed);
+    octaveBox.setAlpha (keyed ? 1.f : 0.45f);
+    count.refresh();
+    timerCallback();
+}
+
+void ExportPanel::timerCallback()
+{
+    const auto st = proc.getBatchStatus();
+    batchButton.setButtonText (st.running ? "Cancel" : "Generate");
+    tile.update (st);
+    if (st.running && ! isTimerRunning()) startTimerHz (15);
+    else if (! st.running && isTimerRunning()) stopTimer();
+}
+
+void ExportPanel::paint (juce::Graphics& g)
+{
+    g.setColour (col::line);
+    g.fillRect (0, 0, getWidth() - 1, 1);
+    drawHeading (g, "Playback & export", headingArea);
+    g.setColour (col::textFaint);
+    g.setFont (label (10.f));
+    g.drawText ("KEY", keyCaption, juce::Justification::centredLeft, false);
+}
+
+void ExportPanel::resized()
+{
+    auto a = getLocalBounds().reduced (kPad, 0).withTrimmedTop (sp::md);
+    headingArea = a.removeFromTop (kLabelH);
+    a.removeFromTop (sp::sm);
+    // caption left, the note and its octave in the column the arp's key uses
+    auto keyRow = a.removeFromTop (kCtrlH);
+    keyCaption = keyRow;
+    octaveBox.setBounds (keyRow.removeFromRight (44));
+    keyRow.removeFromRight (sp::xs);
+    keyBox.setBounds (keyRow.removeFromRight (64));
+    a.removeFromTop (sp::sm);
+    // two halves, like Mutate and its amount
+    auto batchRow = a.removeFromTop (kCtrlH);
+    batchButton.setBounds (batchRow.removeFromLeft ((batchRow.getWidth() - sp::md) / 2));
+    batchRow.removeFromLeft (sp::md);
+    count.setBounds (batchRow);
+    a.removeFromTop (sp::sm);
+    tile.setBounds (a.removeFromTop (kTileH));
+}
+
+ExportPanel::CountField::CountField (PsyBoxProcessor& p) : proc (p)
+{
+    number.setFont (mono (11.5f));
+    number.setJustificationType (juce::Justification::centredRight);
+    number.setBorderSize ({ 0, 0, 0, 0 });
+    number.setColour (juce::Label::textColourId, col::text);
+    number.setEditable (false, true, false);
+    number.setInterceptsMouseClicks (false, true);   // the field drags; its editor takes clicks
+    number.onEditorShow = [this] {
+        if (auto* ed = number.getCurrentTextEditor())
+        {
+            ed->setInputRestrictions (3, "0123456789");
+            ed->setJustification (juce::Justification::centredRight);
+        }
+    };
+    number.onTextChange = [this] {
+        const auto t = number.getText().trim();
+        set (t.isNotEmpty() ? t.getIntValue() : proc.getBatchCount());
+    };
+    addAndMakeVisible (number);
+    setMouseCursor (juce::MouseCursor::UpDownResizeCursor);
+    setTooltip ("How many sounds the batch renders (1 to " + juce::String (PsyBoxProcessor::kMaxBatch)
+                + "): drag or scroll, double-click to type");
+    refresh();
+}
+
+void ExportPanel::CountField::refresh()
+{
+    number.setText (juce::String (proc.getBatchCount()), juce::dontSendNotification);
+}
+
+void ExportPanel::CountField::set (int n)
+{
+    proc.setBatchCount (n);
+    refresh();
+}
+
+void ExportPanel::CountField::resized()
+{
+    number.setBounds (getLocalBounds().reduced (sp::sm - 2, 0).removeFromRight (36));
+}
+
+void ExportPanel::CountField::paint (juce::Graphics& g)
+{
+    // the inline number field (like SEM and FIN): caption left, value right
+    const auto f = getLocalBounds().toFloat();
+    g.setColour (col::well);
+    g.fillRoundedRectangle (f, 3.f);
+    g.setColour (isMouseOver() || dragging ? col::textFaint : col::lineStrong);
+    g.drawRoundedRectangle (f.reduced (0.5f), 3.f, 1.f);
+    g.setColour (col::textDim);
+    g.setFont (label (10.f));
+    g.drawText ("SOUNDS", getLocalBounds().reduced (sp::sm - 2, 0), juce::Justification::centredLeft, false);
+}
+
+void ExportPanel::CountField::mouseDown (const juce::MouseEvent&)
+{
+    dragging = true;
+    dragStart = proc.getBatchCount();
+    repaint();
+}
+
+void ExportPanel::CountField::mouseDrag (const juce::MouseEvent& e)
+{
+    const float px = e.mods.isShiftDown() ? 12.f : 3.f;   // a step per 3 px, Shift for fine steps
+    set (dragStart + (int) std::trunc ((float) -e.getDistanceFromDragStartY() / px));
+}
+
+void ExportPanel::CountField::mouseDoubleClick (const juce::MouseEvent&)
+{
+    number.showEditor();
+}
+
+void ExportPanel::CountField::mouseWheelMove (const juce::MouseEvent&, const juce::MouseWheelDetails& w)
+{
+    // a trackpad flick sends dozens of tiny events: collect them and step once per notch
+    if (w.isInertial || w.deltaY == 0.f) return;
+    constexpr float notch = 0.12f;
+    if ((wheelAccum > 0.f) != (w.deltaY > 0.f)) wheelAccum = 0.f;
+    wheelAccum += w.deltaY;
+    if (std::abs (wheelAccum) < notch) return;
+    const float dir = wheelAccum > 0.f ? 1.f : -1.f;
+    wheelAccum = juce::jlimit (-notch, notch, wheelAccum - dir * notch);
+    set (proc.getBatchCount() + (int) dir);
+}
+
+ExportPanel::BatchTile::BatchTile (PsyBoxProcessor& p) : proc (p)
+{
+    setTooltip ("The batch. Drag it out to drop every WAV into your DAW, one clip each. Double-click to open its folder");
+}
+
+void ExportPanel::BatchTile::update (const PsyBoxProcessor::BatchStatus& st)
+{
+    const bool same = st.total == status.total && st.finished == status.finished && st.failed == status.failed
+                      && st.running == status.running && std::abs (st.progress - status.progress) < 0.002f;
+    status = st;
+    setMouseCursor (ready() ? juce::MouseCursor::DraggingHandCursor : juce::MouseCursor::NormalCursor);
+    if (! same) repaint();
+}
+
+void ExportPanel::BatchTile::paint (juce::Graphics& g)
+{
+    const auto r = getLocalBounds().toFloat().reduced (0.5f);
+    juce::Path shape;
+    shape.addRoundedRectangle (r, 3.f);
+    g.setColour (col::well);
+    g.fillPath (shape);
+
+    juce::String text;
+    auto textColour = col::textFaint;
+    if (status.running)
+    {
+        // the progress fills the tile from the left
+        g.saveState();
+        g.reduceClipRegion (shape);
+        g.setColour (accent (*this).withAlpha (0.22f));
+        g.fillRect (r.withWidth (r.getWidth() * status.progress));
+        g.restoreState();
+        text = "RENDERING " + juce::String (status.finished + status.failed) + " / " + juce::String (status.total);
+        textColour = col::text;
+    }
+    else if (ready())
+    {
+        text = dragging ? juce::String ("DROP IN YOUR DAW")
+                        : "DRAG " + juce::String (status.finished) + (status.finished == 1 ? " WAV" : " WAVS")
+                              + (status.failed > 0 ? ", " + juce::String (status.failed) + " FAILED" : juce::String());
+        textColour = accent (*this);
+    }
+    else
+    {
+        text = status.total > 0 ? "BATCH FAILED" : "NO BATCH YET";
+    }
+    g.setColour (ready() ? accent (*this).withAlpha (isMouseOver() || dragging ? 1.f : 0.55f) : col::lineStrong);
+    g.strokePath (shape, juce::PathStrokeType (1.f));
+    g.setColour (textColour);
+    g.setFont (heading (9.5f));
+    g.drawText (text, getLocalBounds(), juce::Justification::centred, false);
+}
+
+void ExportPanel::BatchTile::mouseDrag (const juce::MouseEvent& e)
+{
+    if (dragging || ! ready() || e.getDistanceFromDragStart() < 6)
+        return;
+    const auto files = proc.getBatchFiles();
+    if (files.isEmpty())
+        return;
+    dragging = true;
+    repaint();
+    // every file in one drag: a DAW lays them out one after another, a clip each
+    juce::DragAndDropContainer::performExternalDragDropOfFiles (files, false, this,
+                                                                 [safe = juce::Component::SafePointer<BatchTile> (this)] {
+                                                                     if (safe == nullptr) return;
+                                                                     safe->dragging = false;
+                                                                     safe->repaint();
+                                                                 });
+}
+
+void ExportPanel::BatchTile::mouseDoubleClick (const juce::MouseEvent&)
+{
+    if (const auto folder = proc.getBatchFolder(); folder.isDirectory())
+        folder.startAsProcess();
+}
+
+// ---------------------------------------------------------------------------
 // Sidebar
 // ---------------------------------------------------------------------------
-Sidebar::Sidebar (PsyBoxProcessor& p) : proc (p), arpKey (p, psy::P::ArpKey), arpScale (p, psy::P::ArpScale)
+Sidebar::Sidebar (PsyBoxProcessor& p) : proc (p), arpKey (p, psy::P::ArpKey), arpScale (p, psy::P::ArpScale), exportPanel (p)
 {
+    addAndMakeVisible (exportPanel);
     generateButton.getProperties().set ("primary", true);
     generateButton.setTooltip ("New sound in this category (locked knobs are kept)");
     generateButton.onClick = [this] { proc.generate(); };
@@ -44,15 +291,13 @@ Sidebar::Sidebar (PsyBoxProcessor& p) : proc (p), arpKey (p, psy::P::ArpKey), ar
     keyToggle.setStacked (true);
     keyToggle.onToggle = [this] (bool on) { proc.setKickKeyGeneration (on); };
     addChildComponent (keyToggle);
-    arpKey.setTooltip ("The arp's key: generated lines are written in it, and the arp plays every note in its scale. Off: any key");
-    arpScale.setTooltip ("The scale the arp keeps to when a key is set");
+    arpKey.setTooltip ("The arp's key: generated lines are written in it, and the arp plays every note in its scale. Off: any key. "
+                       "Needs an arp: ARP on, or the arp on in the ARP view");
+    arpScale.setTooltip ("The scale the arp keeps to when a key is set. Needs an arp: ARP on, or the arp on in the ARP view");
     addChildComponent (arpKey);
     addChildComponent (arpScale);
-    keyWatch = std::make_unique<juce::ParameterAttachment> (*p.param (psy::P::ArpKey), [this] (float key) {
-        arpScale.setAlpha (key > 0.5f ? 1.f : 0.45f);
-        repaint (scaleCaption);
-    });
-    keyWatch->sendInitialUpdate();
+    keyWatch = std::make_unique<juce::ParameterAttachment> (*p.param (psy::P::ArpKey), [this] (float) { updateArpKey(); });
+    arpOnWatch = std::make_unique<juce::ParameterAttachment> (*p.param (psy::P::ArpOn), [this] (float) { updateArpKey(); });
 
     mutateAmount.setSliderStyle (juce::Slider::LinearHorizontal);
     mutateAmount.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
@@ -86,10 +331,22 @@ Sidebar::~Sidebar() { proc.removeChangeListener (this); }
 
 void Sidebar::changeListenerCallback (juce::ChangeBroadcaster*) { refresh(); }
 
+void Sidebar::updateArpKey()
+{
+    const bool live = proc.getArpGeneration() || proc.plain (psy::P::ArpOn) > 0.5f;
+    arpKey.setEnabled (live);
+    arpScale.setEnabled (live);
+    arpKey.setAlpha (live ? 1.f : 0.45f);
+    arpScale.setAlpha (live && proc.plain (psy::P::ArpKey) > 0.5f ? 1.f : 0.45f);
+    repaint (arpKeyCaption);
+    repaint (scaleCaption);
+}
+
 void Sidebar::refresh()
 {
     seedLabel.setText (hexSeed (proc.getSeed()), juce::dontSendNotification);
     arpToggle.setOn (proc.getArpGeneration());
+    updateArpKey();
     keyToggle.setOn (proc.getKickKeyGeneration());
     // only the generator options that apply to the current category
     const bool arp = proc.categoryHasArp();
@@ -148,10 +405,10 @@ juce::Rectangle<int> Sidebar::listArea() const
     return { 0, kListTop, getWidth() - 1, listH };
 }
 
-// Everything below the list, starting at the divider.
+// Everything below the list and the export panel, starting at the divider.
 juce::Rectangle<int> Sidebar::infoArea() const
 {
-    return getLocalBounds().withTrimmedTop (kListTop + listH);
+    return getLocalBounds().withTrimmedTop (kListTop + listH + ExportPanel::kHeight);
 }
 
 int Sidebar::maxScroll() const
@@ -316,6 +573,7 @@ void Sidebar::paint (juce::Graphics& g)
         g.drawText ("ARP", arpCaption, juce::Justification::centredLeft, false);
     if (arpKey.isVisible())
     {
+        g.setColour (arpKey.getAlpha() < 1.f ? col::textFaint.withAlpha (0.6f) : col::textFaint);
         g.drawText ("KEY", arpKeyCaption, juce::Justification::centredLeft, false);
         g.setColour (arpScale.getAlpha() < 1.f ? col::textFaint.withAlpha (0.6f) : col::textFaint);
         g.drawText ("SCALE", scaleCaption, juce::Justification::centredLeft, false);
@@ -374,8 +632,9 @@ void Sidebar::resized()
         keyToggle.setBounds (keyRow.removeFromRight (26));
     }
 
-    // The list runs down to the divider above the info block; the rest scroll.
-    listH = juce::jmax (kItemH, a.getBottom() - sp::sm - kInfoH - kListTop);
+    // The list runs down to the export panel above the info block; the rest scroll.
+    listH = juce::jmax (kItemH, a.getBottom() - sp::sm - kInfoH - kListTop - ExportPanel::kHeight);
+    exportPanel.setBounds (0, kListTop + listH, getWidth(), ExportPanel::kHeight);
     setScroll (scrollY);
     scrollToShow (proc.getCategory());
 
@@ -472,6 +731,18 @@ int ViewTabs::idealWidth() const
 {
     const auto b = bounds();
     return b.empty() ? 0 : b.back().getRight();
+}
+
+int ViewTabs::widestWidth()
+{
+    ViewTabs all;
+    int widest = 0;
+    for (const char* main : { "Osc", "Kick", "Phoscyon" })
+    {
+        all.setViews ({ View::Main, View::Fx, View::Matrix, View::Arp, View::Global }, main);
+        widest = std::max (widest, all.idealWidth());
+    }
+    return widest;
 }
 
 void ViewTabs::paint (juce::Graphics& g)
@@ -583,9 +854,10 @@ void TopBar::resized()
     // the view tabs start over the panels, right of the sidebar column
     views.setBounds (kSideW + kPad, 0, views.idealWidth(), getHeight());
 
-    // history, then the preset box with its arrows inside and its menu after
+    // history, then the preset box with its arrows inside and its menu after,
+    // at the same place for every category (the tabs it shows differ)
     const int iconY = r.getCentreY() - 12;
-    undoButton.setBounds (views.getRight() + sp::xl + sp::sm, iconY, 24, 24);
+    undoButton.setBounds (views.getX() + ViewTabs::widestWidth() + sp::xl + sp::sm, iconY, 24, 24);
     redoButton.setBounds (undoButton.getRight() + sp::xs, iconY, 24, 24);
     presetArea = { redoButton.getRight() + sp::sm, r.getCentreY() - 16, 304, 32 };
     prev.setBounds (presetArea.getX() + sp::xs, iconY, 24, 24);
