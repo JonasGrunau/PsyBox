@@ -5,6 +5,7 @@
 #include <bit>
 #include <cmath>
 #include <cstdint>
+#include <vector>
 
 namespace psy::dsp
 {
@@ -251,6 +252,76 @@ struct FxSwitch
     {
         return f >= 1.f ? wet : (f <= 0.f ? dry : dry + f * (wet - dry));
     }
+};
+
+// A stereo delay that tops a varying latency up to a fixed one, so a host
+// never sees the latency move (a VST3 host restarts the plugin when it
+// does, and the keys held through that are lost). When the delay changes
+// while a sound plays (an effect switched), it crossfades from the old tap
+// to the new one over 10 ms; after a reset it starts on the new one. At a
+// delay of 0 it passes the signal bit for bit.
+struct LatencyPad
+{
+    void prepare (int maxDelay, float sampleRate)
+    {
+        size_t size = 1;
+        while (size < (size_t) maxDelay + 1) size <<= 1;
+        for (auto& b : buf) b.assign (size, 0.f);
+        mask = size - 1;
+        fadeLen = std::max (1, (int) std::lround (0.01f * sampleRate));
+        reset();
+    }
+    void reset() noexcept
+    {
+        for (auto& b : buf) std::fill (b.begin(), b.end(), 0.f);
+        w = 0;
+        from = cur = 0;
+        fade = 0;
+        snap = true;
+    }
+    int delay() const noexcept { return cur; }
+
+    void process (float* l, float* r, int n, int wanted) noexcept
+    {
+        wanted = std::clamp (wanted, 0, (int) mask);
+        if (snap)
+        {
+            cur = wanted;
+            snap = false;
+        }
+        else if (wanted != cur && fade == 0)   // a change during a fade waits for it to end
+        {
+            from = cur;
+            cur = wanted;
+            fade = fadeLen;
+        }
+        for (int i = 0; i < n; ++i)
+        {
+            buf[0][w] = l[i];
+            buf[1][w] = r[i];
+            if (fade > 0)
+            {
+                const float t = 1.f - (float) --fade / (float) fadeLen;
+                const float g = t * t * (3.f - 2.f * t);   // smoothstep
+                const size_t a = (w - (size_t) from) & mask, b = (w - (size_t) cur) & mask;
+                l[i] = buf[0][a] + g * (buf[0][b] - buf[0][a]);
+                r[i] = buf[1][a] + g * (buf[1][b] - buf[1][a]);
+            }
+            else if (cur > 0)
+            {
+                const size_t b = (w - (size_t) cur) & mask;
+                l[i] = buf[0][b];
+                r[i] = buf[1][b];
+            }
+            w = (w + 1) & mask;
+        }
+    }
+
+private:
+    std::array<std::vector<float>, 2> buf;
+    size_t mask = 0, w = 0;
+    int from = 0, cur = 0, fade = 0, fadeLen = 480;
+    bool snap = true;
 };
 
 } // namespace psy::dsp

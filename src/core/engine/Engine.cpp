@@ -73,6 +73,7 @@ void Engine::prepare (double sampleRate, int maxBlockSize)
     eq.prepare (f);
     dim.prepare (f);
     for (auto& d : outDc) d.prepare (f);
+    pad.prepare ((int) std::ceil (0.02 * fs), f);   // well over any quality's effect latency
 
     osFactor = wantedFactor();
     applyQuality();
@@ -159,6 +160,7 @@ void Engine::reset()
     for (int i = 0; i < kNumLfos; ++i)
         globalLfos[(size_t) i].reset (target.get (lfoParam (i, 5)));
     resetEffects();
+    pad.reset();
     qualityPending = false;
     lastPlaying = false;
     lfoLockIn = 0;
@@ -919,6 +921,16 @@ int Engine::effectLatency() const noexcept
     return distFirst (cur) ? atBase (dist.latencySamples()) : distLate.latencySamples();
 }
 
+// The most effectLatency can be in this engine mode at this quality: every
+// effect that delays switched on, the distortion wherever it delays most.
+int Engine::maxEffectLatency() const noexcept
+{
+    const auto atBase = [this] (int osSamples) { return (int) std::lround ((double) osSamples / osFactor); };
+    if (phosMode())
+        return phosFx.limiterLatency() + std::max (atBase (phosFx.distortionOsLatency()), phosFx.distortionLatency());
+    return std::max (atBase (dist.latencySamples()), distLate.latencySamples());
+}
+
 void Engine::process (float* left, float* right, int numSamples, const MidiEvent* events, int numEvents, const Transport& transport) noexcept
 {
     const double bpm = transport.bpm > 0.0 ? transport.bpm : 120.0;
@@ -1098,6 +1110,7 @@ void Engine::process (float* left, float* right, int numSamples, const MidiEvent
         }
         done += blockN;
     }
+    pad.process (left, right, numSamples, maxEffectLatency() - effectLatency());
     while (ev < numEvents)
         handleEvent (events[ev++]);
     lastPlaying = transport.playing;

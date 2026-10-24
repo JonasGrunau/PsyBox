@@ -23,6 +23,7 @@ namespace
         float peak = 0.f;
         float preClip = 0.f;   // the loudest sample before the output's soft clip (the output itself never passes 0 dBFS)
         double rmsDb = -200.0;
+        int latency = 0;   // samples the output lags the notes (hold only)
     };
 
     // Plays a 16th-note pattern at 145 BPM (psytrance tempo) for `seconds`.
@@ -103,6 +104,7 @@ namespace
         // can't show one: its own count can.
         REQUIRE (e.diagnostics().nonFinite == 0);
         out.preClip = e.diagnostics().preClipPeak;
+        out.latency = e.latencySamples();
         double s = 0.0;
         for (size_t i = 0; i < out.l.size(); ++i)
         {
@@ -848,8 +850,8 @@ TEST_CASE ("Clap bursts play as hits a gap apart before the note's own attack", 
     p.set (P::AenvBursts, 4.f);
     p.set (P::AenvGap, 12.f);
     const auto out = hold (p, 0.3);
-    const auto ms = [&] (double a, double b) {
-        return testutil::rms (std::vector<float> (out.l.begin() + (long) (a * 48.0), out.l.begin() + (long) (b * 48.0)));
+    const auto ms = [&] (double a, double b) {   // from the note on, after the output's latency
+        return testutil::rms (std::vector<float> (out.l.begin() + out.latency + (long) (a * 48.0), out.l.begin() + out.latency + (long) (b * 48.0)));
     };
     for (int k = 0; k < 3; ++k)   // the three hits before the note
     {
@@ -1754,7 +1756,7 @@ TEST_CASE ("A unison stack that stops spreading hands the right channel over smo
     CHECK (maxStepOf (x.r, 12000, 12700) < 2.f * steady);   // the old hand-over jumped 12x
 }
 
-TEST_CASE ("The Phoscyon limiter reports its lookahead and starts empty when it comes back on", "[engine][phoscyon]")
+TEST_CASE ("The Phoscyon limiter keeps the latency and starts empty when it comes back on", "[engine][phoscyon][latency]")
 {
     ParamState p = phosBase();
     p.set (P::AenvR, 5.f);
@@ -1772,10 +1774,12 @@ TEST_CASE ("The Phoscyon limiter reports its lookahead and starts empty when it 
     on.set (P::PhosLimOn, 1.f);
     const auto a = renderBlocks (p, 8000, 128, ev, {}, 48000.0, &offEngine);
     const auto b = renderBlocks (on, 8000, 128, ev, {}, 48000.0, &onEngine);
+    // the lookahead is in the latency on or off (the output is padded up to it)
     const int lookahead = (int) std::lround (dsp::PhosLimiter::lookaheadMs * 0.001 * 48000.0);
     REQUIRE (firstSound (a) > 0);
-    CHECK (onEngine.latencySamples() - offEngine.latencySamples() == lookahead);
-    CHECK (firstSound (b) - firstSound (a) == lookahead);
+    CHECK (onEngine.latencySamples() == offEngine.latencySamples());
+    CHECK (firstSound (b) == firstSound (a));
+    CHECK (firstSound (a) >= lookahead);
 
     // off while a note sounds, back on in silence: no 3.3 ms of the old note
     ParamState lim = p;
@@ -1783,6 +1787,111 @@ TEST_CASE ("The Phoscyon limiter reports its lookahead and starts empty when it 
     const std::vector<MidiEvent> long_ { noteAt (0, 45), offAt (9000, 45) };
     const auto y = renderBlocks (lim, 36000, 128, long_, { { 4800, p }, { 24000, lim } });
     CHECK (powerDb (y.l, 24000, 25000) < -90.0);
+}
+
+TEST_CASE ("The latency a host sees stays put whatever a patch switches on", "[engine][latency]")
+{
+    // A VST3 host restarts the plugin when its latency moves, and the keys
+    // held through that go silent: holding a key and pressing Generate lost
+    // the note whenever one patch had the distortion and the next didn't.
+    const auto firstSound = [] (const Stereo& x) {
+        for (size_t i = 0; i < x.l.size(); ++i)
+            if (std::abs (x.l[i]) > 0.003f) return (int) i;
+        return -1;
+    };
+    const FxChain distLate { (int) Fx::Crush, (int) Fx::Distortion, 2, 3, 4, 5, 6, 7, 8 };
+    for (double fs : { 44100.0, 48000.0, 96000.0 })
+        for (int quality : { 0, 1, 2 })
+        {
+            ParamState off = sinePatch();
+            off.set (P::Quality, (float) quality);
+            off.set (P::DistDrive, 0.f);
+            off.set (P::DistMix, 0.f);   // the distortion passes the sine: only where it lands differs
+            ParamState first = off, late = off;
+            first.set (P::DistOn, 1.f);
+            late.set (P::DistOn, 1.f);
+            late.set (P::FxOrder, (float) fxOrderCode (distLate));
+            const std::vector<MidiEvent> ev { noteAt (1000, 57) };
+            std::array<Engine, 3> e;
+            std::array<Stereo, 3> x;
+            int i = 0;
+            for (const auto* p : { &off, &first, &late })
+            {
+                x[(size_t) i] = renderBlocks (*p, 6000, 256, ev, {}, fs, &e[(size_t) i]);
+                ++i;
+            }
+            INFO ("fs " << fs << " quality " << quality << ": latency " << e[0].latencySamples() << " " << e[1].latencySamples() << " "
+                  << e[2].latencySamples() << ", first sound " << firstSound (x[0]) << " " << firstSound (x[1]) << " " << firstSound (x[2]));
+            CHECK (e[1].latencySamples() == e[0].latencySamples());
+            CHECK (e[2].latencySamples() == e[0].latencySamples());
+            REQUIRE (firstSound (x[0]) > 0);
+            CHECK (std::abs (firstSound (x[1]) - firstSound (x[0])) <= 1);
+            CHECK (std::abs (firstSound (x[2]) - firstSound (x[0])) <= 1);
+        }
+
+    // the 303: limiter and distortion, on or off
+    ParamState p = phosBase();
+    Engine a;
+    renderBlocks (p, 512, 256, {}, {}, 48000.0, &a);
+    for (bool lim : { false, true })
+        for (bool dist : { false, true })
+        {
+            ParamState q = p;
+            q.set (P::PhosLimOn, lim ? 1.f : 0.f);
+            q.set (P::PhosDistOn, dist ? 1.f : 0.f);
+            Engine b;
+            renderBlocks (q, 512, 256, {}, {}, 48000.0, &b);
+            CHECK (b.latencySamples() == a.latencySamples());
+        }
+}
+
+TEST_CASE ("The latency pad moves without a click and passes the signal bit for bit at rest", "[engine][latency][click]")
+{
+    // a sine through a pad that moves by a late distortion's worth and back
+    dsp::LatencyPad pad;
+    pad.prepare (64, 48000.f);
+    std::vector<float> l (24000), r (24000);
+    for (size_t i = 0; i < l.size(); ++i)
+        l[i] = r[i] = 0.5f * std::sin (2.f * dsp::kPi * 220.f * (float) i / 48000.f);
+    for (int pos = 0; pos < 24000; pos += 256)
+        pad.process (l.data() + pos, r.data() + pos, std::min (256, 24000 - pos), pos < 6000 || pos >= 15000 ? 10 : 58);
+    const float steady = maxStepOf (l, 1000, 5000);
+    INFO ("steady " << steady << ", longer " << maxStepOf (l, 5500, 8000) << ", shorter " << maxStepOf (l, 14500, 17000));
+    CHECK (maxStepOf (l, 5500, 8000) < 1.1f * steady);
+    CHECK (maxStepOf (l, 14500, 17000) < 1.1f * steady);
+
+    // in the engine: the distortion switched off under a held sine (its own
+    // fade and the pad's move together). Switching it on steps a little
+    // more, as before the pad: its oversampling filters start clean.
+    ParamState on = sinePatch();
+    on.set (P::DistOn, 1.f);
+    on.set (P::DistDrive, 0.f);
+    on.set (P::DistMix, 0.f);
+    on.set (P::FxOrder, (float) fxOrderCode (FxChain { (int) Fx::Crush, (int) Fx::Distortion, 2, 3, 4, 5, 6, 7, 8 }));
+    ParamState off = on;
+    off.set (P::DistOn, 0.f);
+    const auto x = renderBlocks (on, 24000, 256, { noteAt (0, 57) }, { { 12000, off } });
+    const float held = maxStepOf (x.l, 6000, 11000);
+    REQUIRE (held > 0.f);
+    CHECK (maxStepOf (x.l, 11500, 14000) < 1.5f * held);
+
+    // at a pad of 0 the signal passes untouched; after a reset it starts on the delay
+    std::vector<float> a (300), b (300);
+    for (size_t i = 0; i < a.size(); ++i)
+    {
+        a[i] = std::sin (0.1f * (float) i) + 1e-7f * (float) i;
+        b[i] = -a[i];
+    }
+    const auto a0 = a, b0 = b;
+    pad.reset();
+    pad.process (a.data(), b.data(), (int) a.size(), 0);
+    CHECK (a == a0);
+    CHECK (b == b0);
+    pad.reset();
+    pad.process (a.data(), b.data(), (int) a.size(), 10);
+    CHECK (a[9] == 0.f);
+    CHECK (a[10] == a0[0]);
+    CHECK (a[299] == a0[289]);
 }
 
 // ---------------------------------------------------------------------------

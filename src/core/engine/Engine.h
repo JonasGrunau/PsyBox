@@ -76,8 +76,11 @@ public:
     // Offline (a host render, a bounce) plays at the Render quality instead
     // of the live one.
     void setOffline (bool isOffline) noexcept { offline = isOffline; }
-    // The decimator's, plus what the effects switched on add (effectLatency).
-    int latencySamples() const noexcept { return decimL.latency (osFactor) + effectLatency(); }
+    // The decimator's, plus the most the effects can add in this engine mode
+    // (maxEffectLatency): the output is padded up to it, so switching an
+    // effect, or a new patch, never moves the latency the host sees. Only a
+    // quality change and a switch between the 303 and the other engines do.
+    int latencySamples() const noexcept { return decimL.latency (osFactor) + maxEffectLatency(); }
     int activeVoices() const noexcept;
     int arpStep() const noexcept { return arpActive ? arp.currentStep() : -1; }   // pattern step playing, or -1
 
@@ -164,6 +167,7 @@ private:
     dsp::Eq eq;
     dsp::Dimension dim;
     std::array<dsp::DcBlocker, 2> outDc;
+    dsp::LatencyPad pad;   // tops effectLatency up to maxEffectLatency
 
     // Matrix slots that target an effect, and the patch the effects play
     // (the smoothed patch plus those modulations).
@@ -188,6 +192,7 @@ private:
     bool fxBad = false;
 
     int effectLatency() const noexcept;
+    int maxEffectLatency() const noexcept;
 
     int wantedFactor() const noexcept;   // oversampling for the live or the render quality
     void applyQuality();
